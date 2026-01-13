@@ -25,8 +25,13 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 		return &protocol.CompletionList{Items: []protocol.CompletionItem{}}, nil
 	}
 
-	journal, _ := parser.Parse(doc)
-	result := s.analyzer.Analyze(journal)
+	var result *analyzer.AnalysisResult
+	if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
+		result = s.analyzer.AnalyzeResolved(resolved)
+	} else {
+		journal, _ := parser.Parse(doc)
+		result = s.analyzer.Analyze(journal)
+	}
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	items := generateCompletionItems(completionCtx, result, doc, params.Position)

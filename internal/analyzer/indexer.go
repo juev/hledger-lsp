@@ -30,6 +30,10 @@ func addAccount(idx *AccountIndex, seen map[string]bool, name string) {
 		return
 	}
 	seen[name] = true
+	addAccountToIndex(idx, name)
+}
+
+func addAccountToIndex(idx *AccountIndex, name string) {
 	idx.All = append(idx.All, name)
 
 	parts := strings.Split(name, ":")

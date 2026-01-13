@@ -47,8 +47,18 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		return nil, nil
 	}
 
-	balances := analyzer.CalculateAccountBalances(journal)
-	content := buildHoverContent(element, balances, journal)
+	var balances analyzer.AccountBalances
+	var allTransactions []ast.Transaction
+
+	if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
+		allTransactions = resolved.AllTransactions()
+		balances = analyzer.CalculateAccountBalancesFromTransactions(allTransactions)
+	} else {
+		allTransactions = journal.Transactions
+		balances = analyzer.CalculateAccountBalances(journal)
+	}
+
+	content := buildHoverContentWithTransactions(element, balances, allTransactions)
 	if content == "" {
 		return nil, nil
 	}
@@ -182,14 +192,14 @@ func estimatePayeeRange(tx *ast.Transaction, payee string) ast.Range {
 	}
 }
 
-func buildHoverContent(element *hoverElement, balances analyzer.AccountBalances, journal *ast.Journal) string {
+func buildHoverContentWithTransactions(element *hoverElement, balances analyzer.AccountBalances, transactions []ast.Transaction) string {
 	switch element.context {
 	case HoverAccount:
-		return buildAccountHover(element.account.Name, balances, journal)
+		return buildAccountHoverWithTransactions(element.account.Name, balances, transactions)
 	case HoverAmount:
 		return buildAmountHover(element.amount, element.cost)
 	case HoverPayee:
-		return buildPayeeHover(element.payee, journal)
+		return buildPayeeHoverWithTransactions(element.payee, transactions)
 	case HoverDate:
 		return buildDateHover(element.transaction)
 	default:
@@ -197,7 +207,7 @@ func buildHoverContent(element *hoverElement, balances analyzer.AccountBalances,
 	}
 }
 
-func buildAccountHover(accountName string, balances analyzer.AccountBalances, journal *ast.Journal) string {
+func buildAccountHoverWithTransactions(accountName string, balances analyzer.AccountBalances, transactions []ast.Transaction) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "**Account:** `%s`\n\n", accountName)
@@ -218,7 +228,7 @@ func buildAccountHover(accountName string, balances analyzer.AccountBalances, jo
 		sb.WriteString("\n")
 	}
 
-	postingCount := countPostingsForAccount(accountName, journal)
+	postingCount := countPostingsForAccountInTransactions(accountName, transactions)
 	fmt.Fprintf(&sb, "**Postings:** %d", postingCount)
 
 	return sb.String()
@@ -240,14 +250,14 @@ func buildAmountHover(amount *ast.Amount, cost *ast.Cost) string {
 	return sb.String()
 }
 
-func buildPayeeHover(payee string, journal *ast.Journal) string {
+func buildPayeeHoverWithTransactions(payee string, transactions []ast.Transaction) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "**Payee:** %s\n\n", payee)
 
 	count := 0
-	for i := range journal.Transactions {
-		tx := &journal.Transactions[i]
+	for i := range transactions {
+		tx := &transactions[i]
 		if tx.Payee == payee || tx.Description == payee {
 			count++
 		}
@@ -273,11 +283,11 @@ func buildDateHover(tx *ast.Transaction) string {
 	return sb.String()
 }
 
-func countPostingsForAccount(accountName string, journal *ast.Journal) int {
+func countPostingsForAccountInTransactions(accountName string, transactions []ast.Transaction) int {
 	count := 0
-	for i := range journal.Transactions {
-		for j := range journal.Transactions[i].Postings {
-			if journal.Transactions[i].Postings[j].Account.Name == accountName {
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			if transactions[i].Postings[j].Account.Name == accountName {
 				count++
 			}
 		}

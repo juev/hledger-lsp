@@ -61,10 +61,11 @@
   - ✅ Директивы (account, commodity)
   - ✅ Include файлы
 
-- [ ] **3.3 Include file resolution** — обработка include
-  - Разрешение путей
-  - Обнаружение циклов
-  - Агрегация данных из всех файлов
+- [x] **3.3 Include file resolution** — обработка include
+  - ✅ Разрешение путей (относительные, абсолютные, ~)
+  - ✅ Обнаружение циклов (set-based)
+  - ✅ Агрегация данных из всех файлов
+  - ✅ Интеграция с Completion/Hover
 
 - [ ] **3.4 Parser extensions** — расширение парсера
   - Virtual postings (скобки)

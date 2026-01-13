@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -15,11 +19,14 @@ type Server struct {
 	client    protocol.Client
 	documents sync.Map
 	analyzer  *analyzer.Analyzer
+	loader    *include.Loader
+	resolved  sync.Map
 }
 
 func NewServer() *Server {
 	return &Server{
 		analyzer: analyzer.New(),
+		loader:   include.NewLoader(),
 	}
 }
 
@@ -106,14 +113,41 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	return nil
 }
 
-func (s *Server) publishDiagnostics(ctx context.Context, uri protocol.DocumentURI, content string) {
+func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.DocumentURI, content string) {
 	if s.client == nil {
 		return
 	}
 
+	path := uriToPath(docURI)
+	resolved, loadErrors := s.loader.LoadFromContent(path, content)
+	s.resolved.Store(docURI, resolved)
+
 	diagnostics := s.analyze(content)
+
+	for _, err := range loadErrors {
+		severity := protocol.DiagnosticSeverityError
+		if err.Kind == include.ErrorParseError {
+			continue
+		}
+		diagnostics = append(diagnostics, protocol.Diagnostic{
+			Range: protocol.Range{
+				Start: protocol.Position{
+					Line:      uint32(max(0, err.Range.Start.Line-1)),
+					Character: uint32(max(0, err.Range.Start.Column-1)),
+				},
+				End: protocol.Position{
+					Line:      uint32(max(0, err.Range.End.Line-1)),
+					Character: uint32(max(0, err.Range.End.Column-1)),
+				},
+			},
+			Severity: severity,
+			Source:   "hledger-lsp",
+			Message:  err.Message,
+		})
+	}
+
 	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
-		URI:         uri,
+		URI:         docURI,
 		Diagnostics: diagnostics,
 	})
 }
@@ -243,4 +277,25 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+func uriToPath(docURI protocol.DocumentURI) string {
+	u := uri.URI(docURI) //nolint:unconvert // protocol.DocumentURI and uri.URI are different types
+	path := u.Filename()
+	if path == "" {
+		s := string(docURI)
+		if strings.HasPrefix(s, "file://") {
+			path = s[7:]
+		} else {
+			path = s
+		}
+	}
+	return filepath.Clean(path)
+}
+
+func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJournal {
+	if r, ok := s.resolved.Load(docURI); ok {
+		return r.(*include.ResolvedJournal)
+	}
+	return nil
 }

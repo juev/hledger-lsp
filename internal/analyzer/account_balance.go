@@ -36,3 +36,28 @@ func CalculateAccountBalances(journal *ast.Journal) AccountBalances {
 
 	return balances
 }
+
+func CalculateAccountBalancesFromTransactions(transactions []ast.Transaction) AccountBalances {
+	balances := make(AccountBalances)
+
+	for i := range transactions {
+		tx := &transactions[i]
+		for j := range tx.Postings {
+			p := &tx.Postings[j]
+			if p.Amount == nil {
+				continue
+			}
+
+			accountName := p.Account.Name
+			commodity := p.Amount.Commodity.Symbol
+
+			if balances[accountName] == nil {
+				balances[accountName] = make(map[string]decimal.Decimal)
+			}
+
+			balances[accountName][commodity] = balances[accountName][commodity].Add(p.Amount.Quantity)
+		}
+	}
+
+	return balances
+}
