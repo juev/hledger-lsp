@@ -49,3 +49,6 @@ go.sum
 # Envrc/direnv files
 .envrc
 .env
+
+# Override global ignore for project docs
+!CLAUDE.md
