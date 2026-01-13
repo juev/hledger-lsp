@@ -76,6 +76,14 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 	}
 	tx.Date = *date
 
+	if p.current.Type == TokenEquals {
+		p.advance()
+		date2 := p.parseDate()
+		if date2 != nil {
+			tx.Date2 = date2
+		}
+	}
+
 	p.skipSpaceTokens()
 
 	if p.current.Type == TokenStatus {
@@ -214,6 +222,18 @@ func (p *Parser) parsePosting() *ast.Posting {
 		posting.Status = p.parseStatus()
 	}
 
+	var closingToken TokenType
+	switch p.current.Type {
+	case TokenLBracket:
+		posting.Virtual = ast.VirtualBalanced
+		closingToken = TokenRBracket
+		p.advance()
+	case TokenLParen:
+		posting.Virtual = ast.VirtualUnbalanced
+		closingToken = TokenRParen
+		p.advance()
+	}
+
 	if p.current.Type != TokenAccount {
 		p.error("expected account name")
 		p.skipToNextLine()
@@ -226,6 +246,10 @@ func (p *Parser) parsePosting() *ast.Posting {
 		Range: ast.Range{Start: toASTPosition(p.current.Pos)},
 	}
 	p.advance()
+
+	if closingToken != 0 && p.current.Type == closingToken {
+		p.advance()
+	}
 
 	p.skipSpaceTokens()
 
@@ -252,6 +276,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	if p.current.Type == TokenComment {
 		posting.Comment = p.current.Value
+		posting.Tags = parseTags(p.current.Value)
 		p.advance()
 	}
 
@@ -352,6 +377,8 @@ func (p *Parser) parseDirective() ast.Directive {
 		return p.parseCommodityDirective(pos)
 	case "include":
 		return p.parseIncludeDirective(pos)
+	case "P":
+		return p.parsePriceDirective(pos)
 	default:
 		p.skipToNextLine()
 		return nil
@@ -411,13 +438,97 @@ func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {
 	return inc
 }
 
+func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
+	dir := ast.PriceDirective{
+		Range: ast.Range{Start: toASTPosition(startPos)},
+	}
+
+	date := p.parseDate()
+	if date == nil {
+		p.skipToNextLine()
+		return nil
+	}
+	dir.Date = *date
+
+	p.skipSpaceTokens()
+
+	if p.current.Type == TokenCommodity || p.current.Type == TokenText {
+		dir.Commodity = ast.Commodity{
+			Symbol: p.current.Value,
+			Range:  ast.Range{Start: toASTPosition(p.current.Pos)},
+		}
+		p.advance()
+	} else {
+		p.error("expected commodity")
+		p.skipToNextLine()
+		return nil
+	}
+
+	p.skipSpaceTokens()
+
+	price := p.parseAmount()
+	if price == nil {
+		p.skipToNextLine()
+		return nil
+	}
+	dir.Price = *price
+
+	dir.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return dir
+}
+
 func (p *Parser) parseComment() ast.Comment {
 	comment := ast.Comment{
 		Text:  p.current.Value,
 		Range: ast.Range{Start: toASTPosition(p.current.Pos)},
+		Tags:  parseTags(p.current.Value),
 	}
 	p.advance()
 	return comment
+}
+
+func parseTags(text string) []ast.Tag {
+	var tags []ast.Tag
+	parts := strings.Split(text, ",")
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		colonIdx := strings.Index(part, ":")
+		if colonIdx == -1 {
+			continue
+		}
+
+		name := strings.TrimSpace(part[:colonIdx])
+		if name == "" || !isValidTagName(name) {
+			continue
+		}
+
+		value := ""
+		if colonIdx+1 < len(part) {
+			value = strings.TrimSpace(part[colonIdx+1:])
+		}
+
+		tags = append(tags, ast.Tag{
+			Name:  name,
+			Value: value,
+		})
+	}
+
+	return tags
+}
+
+func isValidTagName(name string) bool {
+	for _, r := range name {
+		isLower := r >= 'a' && r <= 'z'
+		isUpper := r >= 'A' && r <= 'Z'
+		isDigit := r >= '0' && r <= '9'
+		isSpecial := r == '-' || r == '_'
+		if !isLower && !isUpper && !isDigit && !isSpecial {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Parser) advance() {

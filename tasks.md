@@ -67,11 +67,11 @@
   - ✅ Агрегация данных из всех файлов
   - ✅ Интеграция с Completion/Hover
 
-- [ ] **3.4 Parser extensions** — расширение парсера
-  - Virtual postings (скобки)
-  - Теги из комментариев
-  - Date2 (вторичная дата)
-  - Price directive (P)
+- [x] **3.4 Parser extensions** — расширение парсера
+  - ✅ Virtual postings (скобки `[account]` и `(account)`)
+  - ✅ Теги из комментариев (`tag:value`)
+  - ✅ Date2 (вторичная дата `2024-01-15=2024-01-20`)
+  - ✅ Price directive (`P 2024-01-15 EUR $1.08`)
 
 - [ ] **3.5 CLI Integration** — интеграция с hledger
   - Обёртка для вызова hledger

@@ -74,7 +74,20 @@ func (l *Lexer) scanInLine() Token {
 	case ch == ';':
 		return l.scanComment()
 	case ch == '(':
+		if l.looksLikeVirtualAccount() {
+			l.advance()
+			return l.makeToken(TokenLParen, "(")
+		}
 		return l.scanCode()
+	case ch == ')':
+		l.advance()
+		return l.makeToken(TokenRParen, ")")
+	case ch == '[':
+		l.advance()
+		return l.makeToken(TokenLBracket, "[")
+	case ch == ']':
+		l.advance()
+		return l.makeToken(TokenRBracket, "]")
 	case ch == '|':
 		l.advance()
 		return l.makeToken(TokenPipe, "|")
@@ -89,6 +102,9 @@ func (l *Lexer) scanInLine() Token {
 	case ch == '"':
 		return l.scanQuotedCommodity()
 	case ch == '-' || l.isDigit(ch):
+		if l.isDigit(ch) && l.looksLikeDate() {
+			return l.scanDate()
+		}
 		return l.scanNumber()
 	case l.isAccountStart(ch):
 		if l.looksLikeAccount() {
@@ -421,6 +437,38 @@ func (l *Lexer) looksLikeCommodity(value string) bool {
 		}
 	}
 	return true
+}
+
+func (l *Lexer) looksLikeDate() bool {
+	if l.pos+10 > len(l.input) {
+		return false
+	}
+
+	for i := 0; i < 4; i++ {
+		if !l.isDigit(l.input[l.pos+i]) {
+			return false
+		}
+	}
+
+	sep := l.input[l.pos+4]
+	if sep != '-' && sep != '/' && sep != '.' {
+		return false
+	}
+
+	return true
+}
+
+func (l *Lexer) looksLikeVirtualAccount() bool {
+	for i := l.pos + 1; i < len(l.input); i++ {
+		ch := l.input[i]
+		if ch == ')' || ch == '\n' {
+			return false
+		}
+		if ch == ':' {
+			return true
+		}
+	}
+	return false
 }
 
 func isDirective(word string) bool {

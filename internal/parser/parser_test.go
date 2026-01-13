@@ -309,3 +309,235 @@ invalid line without date
 	assert.NotEmpty(t, errs)
 	assert.Len(t, journal.Transactions, 2)
 }
+
+func TestParser_Date2(t *testing.T) {
+	input := `2024-01-15=2024-01-20 transaction with date2
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, 2024, tx.Date.Year)
+	assert.Equal(t, 1, tx.Date.Month)
+	assert.Equal(t, 15, tx.Date.Day)
+
+	require.NotNil(t, tx.Date2)
+	assert.Equal(t, 2024, tx.Date2.Year)
+	assert.Equal(t, 1, tx.Date2.Month)
+	assert.Equal(t, 20, tx.Date2.Day)
+
+	assert.Equal(t, "transaction with date2", tx.Description)
+}
+
+func TestParser_Date2Formats(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		year2  int
+		month2 int
+		day2   int
+	}{
+		{
+			name: "dashes",
+			input: `2024-01-15=2024-01-20 test
+    e:f  $1
+    a:c`,
+			year2: 2024, month2: 1, day2: 20,
+		},
+		{
+			name: "slashes",
+			input: `2024/01/15=2024/01/20 test
+    e:f  $1
+    a:c`,
+			year2: 2024, month2: 1, day2: 20,
+		},
+		{
+			name: "mixed separators",
+			input: `2024-01-15=2024/01/20 test
+    e:f  $1
+    a:c`,
+			year2: 2024, month2: 1, day2: 20,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+			require.NotNil(t, journal.Transactions[0].Date2)
+			assert.Equal(t, tt.year2, journal.Transactions[0].Date2.Year)
+			assert.Equal(t, tt.month2, journal.Transactions[0].Date2.Month)
+			assert.Equal(t, tt.day2, journal.Transactions[0].Date2.Day)
+		})
+	}
+}
+
+func TestParser_PriceDirective(t *testing.T) {
+	input := `P 2024-01-15 EUR $1.08`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.PriceDirective)
+	require.True(t, ok)
+	assert.Equal(t, 2024, dir.Date.Year)
+	assert.Equal(t, 1, dir.Date.Month)
+	assert.Equal(t, 15, dir.Date.Day)
+	assert.Equal(t, "EUR", dir.Commodity.Symbol)
+	assert.Equal(t, "$", dir.Price.Commodity.Symbol)
+	assert.True(t, dir.Price.Quantity.Equal(decimal.NewFromFloat(1.08)))
+}
+
+func TestParser_PriceDirectiveVariants(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		commodity string
+		priceSym  string
+		priceQty  float64
+	}{
+		{
+			name:      "stock price",
+			input:     `P 2024-01-15 AAPL $185.50`,
+			commodity: "AAPL",
+			priceSym:  "$",
+			priceQty:  185.50,
+		},
+		{
+			name:      "crypto price",
+			input:     `P 2024-01-15 BTC $42000.00`,
+			commodity: "BTC",
+			priceSym:  "$",
+			priceQty:  42000.00,
+		},
+		{
+			name:      "currency with right commodity",
+			input:     `P 2024-01-15 USD 0.92 EUR`,
+			commodity: "USD",
+			priceSym:  "EUR",
+			priceQty:  0.92,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Directives, 1)
+
+			dir, ok := journal.Directives[0].(ast.PriceDirective)
+			require.True(t, ok)
+			assert.Equal(t, tt.commodity, dir.Commodity.Symbol)
+			assert.Equal(t, tt.priceSym, dir.Price.Commodity.Symbol)
+			assert.True(t, dir.Price.Quantity.Equal(decimal.NewFromFloat(tt.priceQty)))
+		})
+	}
+}
+
+func TestParser_VirtualPostings(t *testing.T) {
+	input := `2024-01-15 transaction with virtual postings
+    expenses:food           $50
+    assets:cash            $-50
+    [budget:food]          $-50
+    [budget:available]      $50
+    (tracking:note)`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	require.Len(t, tx.Postings, 5)
+
+	assert.Equal(t, ast.VirtualNone, tx.Postings[0].Virtual)
+	assert.Equal(t, "expenses:food", tx.Postings[0].Account.Name)
+
+	assert.Equal(t, ast.VirtualNone, tx.Postings[1].Virtual)
+	assert.Equal(t, "assets:cash", tx.Postings[1].Account.Name)
+
+	assert.Equal(t, ast.VirtualBalanced, tx.Postings[2].Virtual)
+	assert.Equal(t, "budget:food", tx.Postings[2].Account.Name)
+
+	assert.Equal(t, ast.VirtualBalanced, tx.Postings[3].Virtual)
+	assert.Equal(t, "budget:available", tx.Postings[3].Account.Name)
+
+	assert.Equal(t, ast.VirtualUnbalanced, tx.Postings[4].Virtual)
+	assert.Equal(t, "tracking:note", tx.Postings[4].Account.Name)
+}
+
+func TestParser_VirtualPostingWithAmount(t *testing.T) {
+	input := `2024-01-15 test
+    (opening:balance)  $1000
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	assert.Equal(t, ast.VirtualUnbalanced, p.Virtual)
+	assert.Equal(t, "opening:balance", p.Account.Name)
+	require.NotNil(t, p.Amount)
+	assert.True(t, p.Amount.Quantity.Equal(decimal.NewFromInt(1000)))
+}
+
+func TestParser_TagsInTransactionComment(t *testing.T) {
+	input := `2024-01-15 Business dinner  ; client:acme, project:alpha
+    expenses:meals  $50
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	require.Len(t, tx.Comments, 1)
+	require.Len(t, tx.Comments[0].Tags, 2)
+
+	assert.Equal(t, "client", tx.Comments[0].Tags[0].Name)
+	assert.Equal(t, "acme", tx.Comments[0].Tags[0].Value)
+
+	assert.Equal(t, "project", tx.Comments[0].Tags[1].Name)
+	assert.Equal(t, "alpha", tx.Comments[0].Tags[1].Value)
+}
+
+func TestParser_TagWithoutValue(t *testing.T) {
+	input := `2024-01-15 test  ; billable:
+    expenses:meals  $50
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	require.Len(t, tx.Comments, 1)
+	require.Len(t, tx.Comments[0].Tags, 1)
+
+	assert.Equal(t, "billable", tx.Comments[0].Tags[0].Name)
+	assert.Equal(t, "", tx.Comments[0].Tags[0].Value)
+}
+
+func TestParser_TagsInPostingComment(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:meals  $50  ; date:2024-01-16, receipt:123
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	require.Len(t, p.Tags, 2)
+
+	assert.Equal(t, "date", p.Tags[0].Name)
+	assert.Equal(t, "2024-01-16", p.Tags[0].Value)
+
+	assert.Equal(t, "receipt", p.Tags[1].Name)
+	assert.Equal(t, "123", p.Tags[1].Value)
+}

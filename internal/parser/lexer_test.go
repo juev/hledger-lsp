@@ -386,3 +386,42 @@ func assertTokenTypesAndValues(t *testing.T, expected, actual []Token) {
 		}
 	}
 }
+
+func TestLexer_Date2(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Token
+	}{
+		{
+			name:  "date with date2",
+			input: "2024-01-15=2024-01-20 description",
+			want: []Token{
+				{Type: TokenDate, Value: "2024-01-15"},
+				{Type: TokenEquals, Value: "="},
+				{Type: TokenDate, Value: "2024-01-20"},
+				{Type: TokenText, Value: "description"},
+				{Type: TokenEOF, Value: ""},
+			},
+		},
+		{
+			name:  "date2 with slashes",
+			input: "2024/01/15=2024/01/20 test",
+			want: []Token{
+				{Type: TokenDate, Value: "2024/01/15"},
+				{Type: TokenEquals, Value: "="},
+				{Type: TokenDate, Value: "2024/01/20"},
+				{Type: TokenText, Value: "test"},
+				{Type: TokenEOF, Value: ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.want, tokens)
+		})
+	}
+}

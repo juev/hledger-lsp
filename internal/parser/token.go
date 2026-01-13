@@ -22,6 +22,8 @@ const (
 	TokenDoubleEquals
 	TokenLParen
 	TokenRParen
+	TokenLBracket
+	TokenRBracket
 	TokenPipe
 	TokenColon
 	TokenSemicolon
@@ -45,7 +47,7 @@ func (t TokenType) String() string {
 		"EOF", "Newline", "Indent", "Date", "Status", "Code",
 		"Text", "Account", "Number", "Commodity", "Comment",
 		"Directive", "Tag", "At", "AtAt", "Equals", "DoubleEquals",
-		"LParen", "RParen", "Pipe", "Colon", "Semicolon",
+		"LParen", "RParen", "LBracket", "RBracket", "Pipe", "Colon", "Semicolon",
 	}
 	if int(t) < len(names) {
 		return names[t]
