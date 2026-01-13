@@ -3,9 +3,10 @@ package analyzer
 import (
 	"testing"
 
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func TestCollectAccounts_FromPostings(t *testing.T) {

@@ -3,8 +3,9 @@ package server
 import (
 	"context"
 
-	"github.com/juev/hledger-lsp/internal/parser"
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 const (

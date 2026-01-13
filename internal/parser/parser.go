@@ -5,8 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/shopspring/decimal"
+
+	"github.com/juev/hledger-lsp/internal/ast"
 )
 
 type ParseError struct {

@@ -3,8 +3,9 @@ package formatter
 import (
 	"strings"
 
-	"github.com/juev/hledger-lsp/internal/ast"
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/ast"
 )
 
 const defaultIndent = "    "

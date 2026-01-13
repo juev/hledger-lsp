@@ -4,10 +4,11 @@ import (
 	"context"
 	"os"
 
-	"github.com/juev/hledger-lsp/internal/server"
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
 	"go.uber.org/zap"
+
+	"github.com/juev/hledger-lsp/internal/server"
 )
 
 func main() {

@@ -4,9 +4,10 @@ import (
 	"context"
 	"strings"
 
+	"go.lsp.dev/protocol"
+
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/parser"
-	"go.lsp.dev/protocol"
 )
 
 type CompletionContextType int

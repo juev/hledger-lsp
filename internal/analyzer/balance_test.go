@@ -3,10 +3,11 @@ package analyzer
 import (
 	"testing"
 
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func TestCheckBalance_SimpleBalanced(t *testing.T) {

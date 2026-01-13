@@ -4,10 +4,11 @@ import (
 	"context"
 	"sync"
 
+	"go.lsp.dev/protocol"
+
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/parser"
-	"go.lsp.dev/protocol"
 )
 
 type Server struct {
