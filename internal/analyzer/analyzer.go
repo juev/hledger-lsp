@@ -21,6 +21,8 @@ func (a *Analyzer) Analyze(journal *ast.Journal) *AnalysisResult {
 		Diagnostics: make([]Diagnostic, 0),
 	}
 
+	declaredAccounts := collectDeclaredAccounts(journal)
+
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
 		balanceResult := CheckBalance(tx)
@@ -29,9 +31,42 @@ func (a *Analyzer) Analyze(journal *ast.Journal) *AnalysisResult {
 			diag := a.createBalanceDiagnostic(tx, balanceResult)
 			result.Diagnostics = append(result.Diagnostics, diag)
 		}
+
+		if len(declaredAccounts) > 0 {
+			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
+			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
+		}
 	}
 
 	return result
+}
+
+func collectDeclaredAccounts(journal *ast.Journal) map[string]bool {
+	declared := make(map[string]bool)
+	for _, dir := range journal.Directives {
+		switch d := dir.(type) {
+		case *ast.AccountDirective:
+			declared[d.Account.Name] = true
+		case ast.AccountDirective:
+			declared[d.Account.Name] = true
+		}
+	}
+	return declared
+}
+
+func checkUndeclaredAccounts(tx *ast.Transaction, declared map[string]bool) []Diagnostic {
+	var diags []Diagnostic
+	for _, posting := range tx.Postings {
+		if !declared[posting.Account.Name] {
+			diags = append(diags, Diagnostic{
+				Range:    posting.Range,
+				Severity: SeverityWarning,
+				Code:     "UNDECLARED_ACCOUNT",
+				Message:  fmt.Sprintf("account '%s' is not declared", posting.Account.Name),
+			})
+		}
+	}
+	return diags
 }
 
 func (a *Analyzer) createBalanceDiagnostic(tx *ast.Transaction, br *BalanceResult) Diagnostic {

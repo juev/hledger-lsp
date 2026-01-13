@@ -98,7 +98,7 @@ func (d *serverDispatcher) ColorPresentation(ctx context.Context, params *protoc
 }
 
 func (d *serverDispatcher) Completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
-	return nil, nil
+	return d.srv.Completion(ctx, params)
 }
 
 func (d *serverDispatcher) CompletionResolve(ctx context.Context, params *protocol.CompletionItem) (*protocol.CompletionItem, error) {
@@ -170,7 +170,7 @@ func (d *serverDispatcher) FoldingRanges(ctx context.Context, params *protocol.F
 }
 
 func (d *serverDispatcher) Formatting(ctx context.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
-	return nil, nil
+	return d.srv.Format(ctx, params)
 }
 
 func (d *serverDispatcher) Hover(ctx context.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
@@ -250,7 +250,7 @@ func (d *serverDispatcher) DidDeleteFiles(ctx context.Context, params *protocol.
 }
 
 func (d *serverDispatcher) SemanticTokensFull(ctx context.Context, params *protocol.SemanticTokensParams) (*protocol.SemanticTokens, error) {
-	return nil, nil
+	return d.srv.SemanticTokensFull(ctx, params)
 }
 
 func (d *serverDispatcher) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {

@@ -144,3 +144,61 @@ func TestAnalyzer_AccountsByPrefix(t *testing.T) {
 	assert.Contains(t, result.Accounts.ByPrefix["expenses:food:"], "expenses:food:groceries")
 	assert.Contains(t, result.Accounts.ByPrefix["expenses:food:"], "expenses:food:restaurant")
 }
+
+func TestAnalyzer_UndeclaredAccount(t *testing.T) {
+	input := `account expenses:food
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var foundUndeclared bool
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			foundUndeclared = true
+			assert.Contains(t, d.Message, "assets:cash")
+		}
+	}
+	assert.True(t, foundUndeclared, "expected UNDECLARED_ACCOUNT diagnostic")
+}
+
+func TestAnalyzer_DeclaredAccount_NoDiagnostic(t *testing.T) {
+	input := `account expenses:food
+account assets:cash
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		assert.NotEqual(t, "UNDECLARED_ACCOUNT", d.Code)
+	}
+}
+
+func TestAnalyzer_NoAccountDirectives_NoDiagnostic(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		assert.NotEqual(t, "UNDECLARED_ACCOUNT", d.Code)
+	}
+}

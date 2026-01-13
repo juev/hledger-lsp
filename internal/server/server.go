@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/parser"
 	"go.lsp.dev/protocol"
 )
@@ -47,6 +48,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 			RenameProvider: &protocol.RenameOptions{
 				PrepareProvider: true,
 			},
+			SemanticTokensProvider: true,
 		},
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "hledger-lsp",
@@ -180,6 +182,16 @@ func (s *Server) GetDocument(uri protocol.DocumentURI) (string, bool) {
 		return doc.(string), true
 	}
 	return "", false
+}
+
+func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
+	doc, ok := s.GetDocument(params.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+
+	journal, _ := parser.Parse(doc)
+	return formatter.FormatDocument(journal, doc), nil
 }
 
 func applyChange(content string, r protocol.Range, text string) string {
