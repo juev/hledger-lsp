@@ -175,7 +175,7 @@ func (d *serverDispatcher) Formatting(ctx context.Context, params *protocol.Docu
 }
 
 func (d *serverDispatcher) Hover(ctx context.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
-	return nil, nil
+	return d.srv.Hover(ctx, params)
 }
 
 func (d *serverDispatcher) Implementation(ctx context.Context, params *protocol.ImplementationParams) ([]protocol.Location, error) {

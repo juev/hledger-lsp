@@ -1,0 +1,243 @@
+package server
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/ast"
+)
+
+func TestPositionInRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		pos      protocol.Position
+		rng      ast.Range
+		expected bool
+	}{
+		{
+			name: "position inside range",
+			pos:  protocol.Position{Line: 1, Character: 5},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: true,
+		},
+		{
+			name: "position at start",
+			pos:  protocol.Position{Line: 1, Character: 0},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: true,
+		},
+		{
+			name: "position at end",
+			pos:  protocol.Position{Line: 1, Character: 19},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: true,
+		},
+		{
+			name: "position before range",
+			pos:  protocol.Position{Line: 0, Character: 5},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: false,
+		},
+		{
+			name: "position after range",
+			pos:  protocol.Position{Line: 2, Character: 5},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: false,
+		},
+		{
+			name: "position on same line but before column",
+			pos:  protocol.Position{Line: 1, Character: 0},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 5},
+				End:   ast.Position{Line: 2, Column: 20},
+			},
+			expected: false,
+		},
+		{
+			name: "multiline range - position in middle line",
+			pos:  protocol.Position{Line: 2, Character: 5},
+			rng: ast.Range{
+				Start: ast.Position{Line: 2, Column: 1},
+				End:   ast.Position{Line: 4, Column: 10},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := positionInRange(tt.pos, tt.rng)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestHover_Account(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery
+    expenses:food  $50
+    assets:cash  $-50
+
+2024-01-16 restaurant
+    expenses:food  $30
+    assets:cash  $-30`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 1, Character: 10},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "expenses:food")
+	assert.Contains(t, result.Contents.Value, "80")
+}
+
+func TestHover_Amount(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50.00
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 1, Character: 17},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "50")
+}
+
+func TestHover_Payee(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 Grocery Store
+    expenses:food  $50
+    assets:cash  $-50
+
+2024-01-16 Grocery Store
+    expenses:food  $30
+    assets:cash  $-30
+
+2024-01-17 Coffee Shop
+    expenses:food  $5
+    assets:cash  $-5`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 15},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Grocery Store")
+	assert.Contains(t, result.Contents.Value, "2")
+}
+
+func TestHover_EmptyPosition(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 3, Character: 0},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestHover_DocumentNotFound(t *testing.T) {
+	srv := NewServer()
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///nonexistent.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 0},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
+func TestHover_AmountWithCost(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 buy stocks
+    assets:stocks  10 AAPL @ $150
+    assets:cash  $-1500`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 1, Character: 20},
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	content = strings.ToLower(result.Contents.Value)
+	assert.True(t, strings.Contains(content, "10") || strings.Contains(content, "aapl"))
+}
