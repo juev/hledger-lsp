@@ -1,0 +1,11 @@
+; Journal with syntax errors
+
+2024-01-15 * grocery store
+    expenses:food  $50.00
+    assets:cash
+
+invalid line without date
+
+2024-01-20 paycheck
+    assets:cash  $1000
+    income:salary

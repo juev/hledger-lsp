@@ -1,0 +1,51 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+/hledger-lsp
+
+# Test binary, build artifacts
+*.test
+*.out
+
+# Output of the go coverage tool
+*.coverprofile
+*.cov
+*.coverage
+
+# Dependency directories (vendor/)
+vendor/
+
+# Go workspace file (if used)
+go.work
+go.work.sum
+
+# Go build cache
+/build/
+bin/
+dist/
+
+# IDE/editor settings
+*.swp
+*.swo
+*.tmp
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Module sums
+go.sum
+
+# Envrc/direnv files
+.envrc
+.env
