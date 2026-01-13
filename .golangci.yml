@@ -19,7 +19,8 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/juev/hledger-lsp
+      local-prefixes:
+        - github.com/juev/hledger-lsp
 
 issues:
   max-issues-per-linter: 0
