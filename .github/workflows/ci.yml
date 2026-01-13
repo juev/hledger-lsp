@@ -14,9 +14,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.6.1
+          version: v2
 
   test:
     runs-on: ubuntu-latest
