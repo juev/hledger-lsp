@@ -43,8 +43,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Module sums
-go.sum
 
 # Envrc/direnv files
 .envrc
