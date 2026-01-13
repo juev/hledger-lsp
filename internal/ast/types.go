@@ -95,16 +95,16 @@ const (
 )
 
 type Cost struct {
-	Amount   Amount
-	IsTotal  bool
-	Range    Range
+	Amount  Amount
+	IsTotal bool
+	Range   Range
 }
 
 type BalanceAssertion struct {
-	Amount     Amount
-	IsStrict   bool
+	Amount      Amount
+	IsStrict    bool
 	IsInclusive bool
-	Range      Range
+	Range       Range
 }
 
 type Directive interface {
@@ -118,7 +118,7 @@ type AccountDirective struct {
 	Range   Range
 }
 
-func (AccountDirective) directive() {}
+func (AccountDirective) directive()        {}
 func (d AccountDirective) GetRange() Range { return d.Range }
 
 type CommodityDirective struct {
@@ -127,7 +127,7 @@ type CommodityDirective struct {
 	Range     Range
 }
 
-func (CommodityDirective) directive() {}
+func (CommodityDirective) directive()        {}
 func (d CommodityDirective) GetRange() Range { return d.Range }
 
 type Include struct {
@@ -135,7 +135,7 @@ type Include struct {
 	Range Range
 }
 
-func (Include) directive() {}
+func (Include) directive()        {}
 func (i Include) GetRange() Range { return i.Range }
 
 type PriceDirective struct {
@@ -145,7 +145,7 @@ type PriceDirective struct {
 	Range     Range
 }
 
-func (PriceDirective) directive() {}
+func (PriceDirective) directive()        {}
 func (d PriceDirective) GetRange() Range { return d.Range }
 
 type Comment struct {
