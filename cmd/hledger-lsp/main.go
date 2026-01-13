@@ -159,7 +159,7 @@ func (d *serverDispatcher) DocumentLinkResolve(ctx context.Context, params *prot
 }
 
 func (d *serverDispatcher) DocumentSymbol(ctx context.Context, params *protocol.DocumentSymbolParams) ([]any, error) {
-	return nil, nil
+	return d.srv.DocumentSymbol(ctx, params)
 }
 
 func (d *serverDispatcher) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
