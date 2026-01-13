@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/parser"
 	"go.lsp.dev/protocol"
 )
@@ -11,10 +12,13 @@ import (
 type Server struct {
 	client    protocol.Client
 	documents sync.Map
+	analyzer  *analyzer.Analyzer
 }
 
 func NewServer() *Server {
-	return &Server{}
+	return &Server{
+		analyzer: analyzer.New(),
+	}
 }
 
 func (s *Server) SetClient(client protocol.Client) {
@@ -112,10 +116,10 @@ func (s *Server) publishDiagnostics(ctx context.Context, uri protocol.DocumentUR
 }
 
 func (s *Server) analyze(content string) []protocol.Diagnostic {
-	_, errs := parser.Parse(content)
+	journal, parseErrs := parser.Parse(content)
 
-	diagnostics := make([]protocol.Diagnostic, 0, len(errs))
-	for _, err := range errs {
+	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
+	for _, err := range parseErrs {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{
 				Start: protocol.Position{
@@ -133,7 +137,42 @@ func (s *Server) analyze(content string) []protocol.Diagnostic {
 		})
 	}
 
+	result := s.analyzer.Analyze(journal)
+	for _, diag := range result.Diagnostics {
+		diagnostics = append(diagnostics, protocol.Diagnostic{
+			Range: protocol.Range{
+				Start: protocol.Position{
+					Line:      uint32(diag.Range.Start.Line - 1),
+					Character: uint32(diag.Range.Start.Column - 1),
+				},
+				End: protocol.Position{
+					Line:      uint32(diag.Range.End.Line - 1),
+					Character: uint32(diag.Range.End.Column - 1),
+				},
+			},
+			Severity: toProtocolSeverity(diag.Severity),
+			Source:   "hledger-lsp",
+			Message:  diag.Message,
+			Code:     diag.Code,
+		})
+	}
+
 	return diagnostics
+}
+
+func toProtocolSeverity(s analyzer.DiagnosticSeverity) protocol.DiagnosticSeverity {
+	switch s {
+	case analyzer.SeverityError:
+		return protocol.DiagnosticSeverityError
+	case analyzer.SeverityWarning:
+		return protocol.DiagnosticSeverityWarning
+	case analyzer.SeverityInfo:
+		return protocol.DiagnosticSeverityInformation
+	case analyzer.SeverityHint:
+		return protocol.DiagnosticSeverityHint
+	default:
+		return protocol.DiagnosticSeverityError
+	}
 }
 
 func (s *Server) GetDocument(uri protocol.DocumentURI) (string, bool) {
