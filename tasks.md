@@ -91,10 +91,11 @@
   - ✅ Helper functions (applyChange, splitLines, isFullChange)
   - ✅ Покрытие: 82.1%
 
-- [ ] **4.2 Benchmark tests** — производительность
-  - Парсинг больших файлов
-  - Инкрементальные обновления
-  - Время отклика completion
+- [x] **4.2 Benchmark tests** — производительность
+  - ✅ Парсинг больших файлов (Lexer, Parser: small/medium/large)
+  - ✅ Инкрементальные обновления (applyChange)
+  - ✅ Время отклика completion (Account/Payee/Commodity)
+  - ✅ Analyzer benchmarks (Analyze, CheckBalance, Collect*)
 
 - [ ] **4.3 Integration tests** — интеграционные тесты
   - Полные LSP request/response циклы
