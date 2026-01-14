@@ -16,6 +16,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
+	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
 type Server struct {
@@ -25,6 +26,8 @@ type Server struct {
 	loader    *include.Loader
 	resolved  sync.Map
 	cliClient *cli.Client
+	rootURI   string
+	workspace *workspace.Workspace
 }
 
 func NewServer() *Server {
@@ -40,6 +43,19 @@ func (s *Server) SetClient(client protocol.Client) {
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if len(params.WorkspaceFolders) > 0 {
+		s.rootURI = strings.TrimPrefix(params.WorkspaceFolders[0].URI, "file://")
+	} else {
+		rootURI := params.RootURI //nolint:staticcheck // keep for backward compatibility
+		if rootURI != "" {
+			s.rootURI = strings.TrimPrefix(string(rootURI), "file://")
+		}
+	}
+
+	if s.rootURI != "" {
+		s.workspace = workspace.NewWorkspace(s.rootURI, s.loader)
+	}
+
 	return &protocol.InitializeResult{
 		Capabilities: protocol.ServerCapabilities{
 			TextDocumentSync: protocol.TextDocumentSyncOptions{
@@ -79,6 +95,11 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 }
 
 func (s *Server) Initialized(ctx context.Context, params *protocol.InitializedParams) error {
+	if s.workspace != nil {
+		go func() {
+			_ = s.workspace.Initialize()
+		}()
+	}
 	return nil
 }
 
@@ -247,7 +268,13 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 	}
 
 	journal, _ := parser.Parse(doc)
-	return formatter.FormatDocument(journal, doc), nil
+
+	var commodityFormats map[string]formatter.NumberFormat
+	if s.workspace != nil {
+		commodityFormats = s.workspace.GetCommodityFormats()
+	}
+
+	return formatter.FormatDocumentWithFormats(journal, doc, commodityFormats), nil
 }
 
 func applyChange(content string, r protocol.Range, text string) string {
@@ -290,4 +317,12 @@ func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJourn
 		}
 	}
 	return nil
+}
+
+func (s *Server) RootURI() string {
+	return s.rootURI
+}
+
+func (s *Server) Workspace() *workspace.Workspace {
+	return s.workspace
 }

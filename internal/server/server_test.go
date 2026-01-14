@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,6 +112,38 @@ func TestServer_Initialized(t *testing.T) {
 	err := srv.Initialized(context.Background(), &protocol.InitializedParams{})
 
 	assert.NoError(t, err)
+}
+
+func TestServer_Initialize_WithRootURI(t *testing.T) {
+	srv := NewServer()
+
+	rootURI := protocol.DocumentURI("file:///tmp/test-workspace")
+	params := &protocol.InitializeParams{
+		RootURI: rootURI,
+	}
+
+	_, err := srv.Initialize(context.Background(), params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/tmp/test-workspace", srv.RootURI())
+	assert.NotNil(t, srv.Workspace())
+}
+
+func TestServer_Initialize_WithWorkspaceFolders(t *testing.T) {
+	srv := NewServer()
+
+	params := &protocol.InitializeParams{
+		WorkspaceFolders: []protocol.WorkspaceFolder{
+			{URI: "file:///tmp/folder1", Name: "folder1"},
+			{URI: "file:///tmp/folder2", Name: "folder2"},
+		},
+	}
+
+	_, err := srv.Initialize(context.Background(), params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/tmp/folder1", srv.RootURI())
+	assert.NotNil(t, srv.Workspace())
 }
 
 func TestServer_Shutdown(t *testing.T) {
@@ -654,6 +688,59 @@ func TestServer_Format_DocumentNotFound(t *testing.T) {
 	assert.Nil(t, edits)
 }
 
+func TestServer_Format_WithWorkspaceCommodityFormat(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := tmpDir + "/main.journal"
+	mainContent := `commodity RUB
+  format 1.000,00 RUB
+
+include transactions.journal`
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	txPath := tmpDir + "/transactions.journal"
+	txContent := `2024-01-15 test
+    expenses:food  1000 RUB
+    assets:cash`
+	err = os.WriteFile(txPath, []byte(txContent), 0644)
+	require.NoError(t, err)
+
+	srv := NewServer()
+
+	initParams := &protocol.InitializeParams{
+		RootURI: protocol.DocumentURI("file://" + tmpDir),
+	}
+	_, err = srv.Initialize(context.Background(), initParams)
+	require.NoError(t, err)
+
+	err = srv.workspace.Initialize()
+	require.NoError(t, err)
+
+	uri := protocol.DocumentURI("file://" + txPath)
+	srv.documents.Store(uri, txContent)
+
+	formatParams := &protocol.DocumentFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	}
+
+	edits, err := srv.Format(context.Background(), formatParams)
+	require.NoError(t, err)
+	require.NotEmpty(t, edits)
+
+	foundFormatted := false
+	for _, edit := range edits {
+		if strings.Contains(edit.NewText, "1.000,00 RUB") {
+			foundFormatted = true
+			break
+		}
+	}
+	assert.True(t, foundFormatted, "Expected number formatted as 1.000,00 RUB from workspace commodity format, got: %v", edits)
+}
+
 func TestToProtocolSeverity(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -732,4 +819,68 @@ func TestServer_DidOpen_NonFileURI(t *testing.T) {
 
 	require.NoError(t, err)
 	time.Sleep(100 * time.Millisecond)
+}
+
+func TestServer_Format_UsesCommodityFromSiblingInclude(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainContent := `include common.journal
+include 2025.journal`
+	mainPath := tmpDir + "/main.journal"
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	commonContent := `commodity RUB
+  format 1 000,00 RUB`
+	commonPath := tmpDir + "/common.journal"
+	err = os.WriteFile(commonPath, []byte(commonContent), 0644)
+	require.NoError(t, err)
+
+	txContent := `2024-01-15 test
+    expenses:food  1234,56 RUB
+    assets:cash`
+	txPath := tmpDir + "/2025.journal"
+	err = os.WriteFile(txPath, []byte(txContent), 0644)
+	require.NoError(t, err)
+
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	_, err = srv.Initialize(context.Background(), &protocol.InitializeParams{
+		RootURI: protocol.DocumentURI("file://" + tmpDir),
+	})
+	require.NoError(t, err)
+
+	err = srv.Initialized(context.Background(), &protocol.InitializedParams{})
+	require.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	txURI := protocol.DocumentURI("file://" + txPath)
+	err = srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:  txURI,
+			Text: txContent,
+		},
+	})
+	require.NoError(t, err)
+
+	edits, err := srv.Format(context.Background(), &protocol.DocumentFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: txURI},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if strings.Contains(edit.NewText, "1 234,56 RUB") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Expected formatted amount with commodity format from sibling include, got edits: %v", edits)
 }

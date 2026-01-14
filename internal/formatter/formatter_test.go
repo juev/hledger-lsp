@@ -227,3 +227,45 @@ func TestFormatDocument_WithBalanceAssertionCommodityFormat(t *testing.T) {
 	}
 	assert.True(t, found, "Expected formatted balance assertion with commodity format, got edits: %v", edits)
 }
+
+func TestFormatDocument_BalanceAssertionAlignment(t *testing.T) {
+	input := `2024-01-15 opening
+    assets:bank:checking  100 USD = 1000 USD
+    assets:cash  50 USD = 50 USD
+    equity:opening`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	var formattedLines []string
+	for _, edit := range edits {
+		if edit.NewText != "" {
+			formattedLines = append(formattedLines, edit.NewText)
+		}
+	}
+
+	require.Len(t, formattedLines, 3, "Expected 3 formatted postings")
+
+	line1 := formattedLines[0]
+	line2 := formattedLines[1]
+
+	idx1 := findEqualSignIndex(line1)
+	idx2 := findEqualSignIndex(line2)
+
+	require.NotEqual(t, -1, idx1, "First line should have = sign")
+	require.NotEqual(t, -1, idx2, "Second line should have = sign")
+	assert.Equal(t, idx1, idx2, "= signs should be aligned at the same column, got %d and %d", idx1, idx2)
+}
+
+func findEqualSignIndex(s string) int {
+	for i, r := range s {
+		if r == '=' {
+			return i
+		}
+	}
+	return -1
+}
