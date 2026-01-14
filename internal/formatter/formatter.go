@@ -2,10 +2,12 @@ package formatter
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 const defaultIndent = "    "
@@ -16,18 +18,19 @@ func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
 		return nil
 	}
 
+	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		txEdits := formatTransaction(tx, content)
+		txEdits := formatTransaction(tx, mapper)
 		edits = append(edits, txEdits...)
 	}
 
 	return edits
 }
 
-func formatTransaction(tx *ast.Transaction, content string) []protocol.TextEdit {
+func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper) []protocol.TextEdit {
 	if len(tx.Postings) == 0 {
 		return nil
 	}
@@ -38,16 +41,17 @@ func formatTransaction(tx *ast.Transaction, content string) []protocol.TextEdit 
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
 		formatted := FormatPosting(posting, alignCol)
+		line := posting.Range.Start.Line - 1
 
 		edit := protocol.TextEdit{
 			Range: protocol.Range{
 				Start: protocol.Position{
-					Line:      uint32(posting.Range.Start.Line - 1),
+					Line:      uint32(line),
 					Character: 0,
 				},
 				End: protocol.Position{
-					Line:      uint32(posting.Range.Start.Line - 1),
-					Character: uint32(getLineLength(content, posting.Range.Start.Line-1)),
+					Line:      uint32(line),
+					Character: uint32(mapper.LineUTF16Len(line)),
 				},
 			},
 			NewText: formatted,
@@ -61,7 +65,7 @@ func formatTransaction(tx *ast.Transaction, content string) []protocol.TextEdit 
 func CalculateAlignmentColumn(postings []ast.Posting) int {
 	maxLen := 0
 	for _, p := range postings {
-		accountLen := len(p.Account.Name)
+		accountLen := utf8.RuneCountInString(p.Account.Name)
 		switch p.Virtual {
 		case ast.VirtualBalanced, ast.VirtualUnbalanced:
 			accountLen += 2
@@ -70,7 +74,7 @@ func CalculateAlignmentColumn(postings []ast.Posting) int {
 			maxLen = accountLen
 		}
 	}
-	return len(defaultIndent) + maxLen + minSpaces
+	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
 }
 
 func FormatPosting(posting *ast.Posting, alignCol int) string {
@@ -102,7 +106,7 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 	}
 
 	if posting.Amount != nil {
-		currentLen := sb.Len()
+		currentLen := utf8.RuneCountInString(sb.String())
 		spaces := alignCol - currentLen
 		if spaces < minSpaces {
 			spaces = minSpaces
@@ -159,12 +163,4 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 	}
 
 	return sb.String()
-}
-
-func getLineLength(content string, line int) int {
-	lines := strings.Split(content, "\n")
-	if line < 0 || line >= len(lines) {
-		return 0
-	}
-	return len(lines[line])
 }

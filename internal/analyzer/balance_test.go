@@ -211,3 +211,50 @@ func TestCheckBalance_TableDriven(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckBalance_MultiCurrencyInferred(t *testing.T) {
+	input := `2024-01-01 opening balances
+    assets:bank  1000 RUB
+    assets:cash  100 USD
+    equity:opening`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0])
+
+	assert.True(t, result.Balanced, "multi-currency transaction with single inferred posting should be balanced")
+	assert.Equal(t, 2, result.InferredIdx)
+}
+
+func TestCheckBalance_MultiCurrencyWithBalanceAssertion(t *testing.T) {
+	input := `2024-01-01 opening balances
+    assets:bank  1000 RUB = 1000 RUB
+    assets:cash  100 USD = 100 USD
+    equity:opening`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0])
+
+	assert.True(t, result.Balanced, "multi-currency with balance assertions should be balanced")
+}
+
+func TestCheckBalance_MultiCurrencyExplicitlyBalanced(t *testing.T) {
+	input := `2024-01-01 test
+    assets:bank  1000 RUB
+    assets:cash  100 USD
+    equity:rub  -1000 RUB
+    equity:usd  -100 USD`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0])
+
+	assert.True(t, result.Balanced, "explicitly balanced multi-currency should be balanced")
+}

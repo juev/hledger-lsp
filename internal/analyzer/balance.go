@@ -22,11 +22,7 @@ func CheckBalance(tx *ast.Transaction) *BalanceResult {
 	balances := sumByCommodity(realPostings)
 
 	if inferredCount == 1 {
-		if len(balances) <= 1 {
-			result.Balanced = true
-			return result
-		}
-		result.Balanced = false
+		result.Balanced = true
 		return result
 	}
 

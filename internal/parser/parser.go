@@ -231,6 +231,10 @@ func (p *Parser) parsePosting() *ast.Posting {
 		return nil
 	}
 
+	if p.current.Type == TokenNewline || p.current.Type == TokenEOF {
+		return nil
+	}
+
 	posting := &ast.Posting{}
 	posting.Range.Start = toASTPosition(p.current.Pos)
 

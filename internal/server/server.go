@@ -14,6 +14,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/cli"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -250,38 +251,8 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 }
 
 func applyChange(content string, r protocol.Range, text string) string {
-	lines := splitLines(content)
-
-	startLine := int(r.Start.Line)
-	startChar := int(r.Start.Character)
-	endLine := int(r.End.Line)
-	endChar := int(r.End.Character)
-
-	if startLine >= len(lines) {
-		return content + text
-	}
-
-	var result string
-
-	for i := 0; i < startLine; i++ {
-		result += lines[i] + "\n"
-	}
-
-	if startLine < len(lines) {
-		result += lines[startLine][:min(startChar, len(lines[startLine]))]
-	}
-
-	result += text
-
-	if endLine < len(lines) {
-		result += lines[endLine][min(endChar, len(lines[endLine])):]
-	}
-
-	for i := endLine + 1; i < len(lines); i++ {
-		result += "\n" + lines[i]
-	}
-
-	return result
+	mapper := lsputil.NewPositionMapper(content)
+	return mapper.ApplyChange(r, text)
 }
 
 func splitLines(s string) []string {

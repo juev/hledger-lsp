@@ -10,6 +10,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -157,7 +158,7 @@ func computeDateRange(tx *ast.Transaction) ast.Range {
 
 func computeAccountRange(account *ast.Account) ast.Range {
 	start := account.Range.Start
-	nameLen := utf16Len(account.Name)
+	nameLen := lsputil.UTF16Len(account.Name)
 	return ast.Range{
 		Start: start,
 		End: ast.Position{
@@ -181,7 +182,7 @@ func estimatePayeeRange(tx *ast.Transaction, payee string) ast.Range {
 		startCol += 2
 	}
 
-	payeeLen := utf16Len(payee)
+	payeeLen := lsputil.UTF16Len(payee)
 	return ast.Range{
 		Start: ast.Position{
 			Line:   tx.Date.Range.Start.Line,

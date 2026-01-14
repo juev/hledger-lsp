@@ -7,6 +7,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -122,7 +123,7 @@ func extractAccountPrefix(content string, pos protocol.Position) string {
 	}
 
 	line := lines[pos.Line]
-	byteCol := utf16OffsetToByteOffset(line, int(pos.Character))
+	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
 	if byteCol > len(line) {
 		byteCol = len(line)
 	}

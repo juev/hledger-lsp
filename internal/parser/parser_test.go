@@ -834,3 +834,33 @@ func TestParser_HledgerNumberFormats(t *testing.T) {
 		})
 	}
 }
+
+func TestParseTransactionWithTrailingWhitespace(t *testing.T) {
+	input := "2024-01-15 test\n    account:a  100\n    account:b\n    \n"
+
+	journal, errs := Parse(input)
+
+	require.Empty(t, errs, "trailing whitespace should not cause errors")
+	require.Len(t, journal.Transactions, 1)
+	require.Len(t, journal.Transactions[0].Postings, 2)
+}
+
+func TestParseTransactionWithEmptyIndentedLines(t *testing.T) {
+	input := "2024-01-15 test\n    account:a  100\n    \n    account:b\n"
+
+	journal, errs := Parse(input)
+
+	require.Empty(t, errs, "empty indented line between postings should not cause errors")
+	require.Len(t, journal.Transactions, 1)
+	require.Len(t, journal.Transactions[0].Postings, 2)
+}
+
+func TestParseTransactionWithOnlySpacesLine(t *testing.T) {
+	input := "2024-01-15 test\n    account:a  100\n    account:b\n        \n"
+
+	journal, errs := Parse(input)
+
+	require.Empty(t, errs, "line with only spaces should not cause errors")
+	require.Len(t, journal.Transactions, 1)
+	require.Len(t, journal.Transactions[0].Postings, 2)
+}
