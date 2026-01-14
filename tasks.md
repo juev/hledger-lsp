@@ -73,10 +73,11 @@
   - ✅ Date2 (вторичная дата `2024-01-15=2024-01-20`)
   - ✅ Price directive (`P 2024-01-15 EUR $1.08`)
 
-- [ ] **3.5 CLI Integration** — интеграция с hledger
-  - Обёртка для вызова hledger
-  - Получение отчётов
-  - Fallback валидация
+- [x] **3.5 CLI Integration** — интеграция с hledger
+  - ✅ CLI клиент (`internal/cli/client.go`) — обёртка для вызова hledger
+  - ✅ Code Actions для запуска команд (bal, reg, is, bs, cf)
+  - ✅ Результат вставляется как комментарии на позицию курсора
+  - ✅ Graceful degradation — работает без hledger
 
 ---
 

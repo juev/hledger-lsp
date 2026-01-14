@@ -5,11 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/cli"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
@@ -21,12 +23,14 @@ type Server struct {
 	analyzer  *analyzer.Analyzer
 	loader    *include.Loader
 	resolved  sync.Map
+	cliClient *cli.Client
 }
 
 func NewServer() *Server {
 	return &Server{
-		analyzer: analyzer.New(),
-		loader:   include.NewLoader(),
+		analyzer:  analyzer.New(),
+		loader:    include.NewLoader(),
+		cliClient: cli.NewClient("hledger", 30*time.Second),
 	}
 }
 
@@ -57,6 +61,14 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				PrepareProvider: true,
 			},
 			SemanticTokensProvider: true,
+			CodeActionProvider: &protocol.CodeActionOptions{
+				CodeActionKinds: []protocol.CodeActionKind{
+					"source.hledger",
+				},
+			},
+			ExecuteCommandProvider: &protocol.ExecuteCommandOptions{
+				Commands: []string{"hledger.run"},
+			},
 		},
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "hledger-lsp",
