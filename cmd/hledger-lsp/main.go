@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"go.lsp.dev/jsonrpc2"
@@ -11,7 +12,18 @@ import (
 	"github.com/juev/hledger-lsp/internal/server"
 )
 
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("hledger-lsp %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		return
+	}
+
 	ctx := context.Background()
 	logger := zap.NewNop()
 
