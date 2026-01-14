@@ -41,6 +41,19 @@ account assets:cash
 	assert.Len(t, idx.All, 2)
 }
 
+func TestCollectAccounts_FromDirectiveOnly(t *testing.T) {
+	input := `account assets:checking
+account expenses:food`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	idx := CollectAccounts(journal)
+
+	assert.Contains(t, idx.All, "assets:checking")
+	assert.Contains(t, idx.All, "expenses:food")
+}
+
 func TestCollectAccounts_ByPrefix(t *testing.T) {
 	input := `2024-01-15 test
     expenses:food:groceries  $30
