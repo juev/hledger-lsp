@@ -267,7 +267,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 		p.advance()
 	}
 
-	if p.current.Type == TokenCommodity || p.current.Type == TokenNumber {
+	if p.current.Type == TokenCommodity || p.current.Type == TokenNumber || p.current.Type == TokenSign {
 		amount := p.parseAmount()
 		if amount != nil {
 			posting.Amount = amount
@@ -296,6 +296,12 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount := &ast.Amount{}
 	amount.Range.Start = toASTPosition(p.current.Pos)
 
+	sign := ""
+	if p.current.Type == TokenSign {
+		sign = p.current.Value
+		p.advance()
+	}
+
 	if p.current.Type == TokenCommodity {
 		amount.Commodity = ast.Commodity{
 			Symbol:   p.current.Value,
@@ -310,7 +316,15 @@ func (p *Parser) parseAmount() *ast.Amount {
 		return nil
 	}
 
-	qty, err := decimal.NewFromString(p.current.Value)
+	numberStr := p.current.Value
+	if sign == "-" && !strings.HasPrefix(numberStr, "-") {
+		numberStr = "-" + numberStr
+	}
+
+	numberStr = strings.ReplaceAll(numberStr, " ", "")
+	numberStr = normalizeNumber(numberStr)
+
+	qty, err := decimal.NewFromString(numberStr)
 	if err != nil {
 		p.error("invalid number: %s", p.current.Value)
 		return nil
@@ -690,4 +704,49 @@ func toASTPosition(pos Position) ast.Position {
 		Column: pos.Column,
 		Offset: pos.Offset,
 	}
+}
+
+func normalizeNumber(s string) string {
+	dotCount := strings.Count(s, ".")
+	commaCount := strings.Count(s, ",")
+
+	if dotCount == 0 && commaCount == 1 {
+		return strings.Replace(s, ",", ".", 1)
+	}
+
+	if dotCount > 0 && commaCount == 1 {
+		lastDot := strings.LastIndex(s, ".")
+		lastComma := strings.LastIndex(s, ",")
+		if lastComma > lastDot {
+			s = strings.ReplaceAll(s, ".", "")
+			s = strings.Replace(s, ",", ".", 1)
+		} else {
+			s = strings.ReplaceAll(s, ",", "")
+		}
+		return s
+	}
+
+	if commaCount > 0 && dotCount == 1 {
+		lastDot := strings.LastIndex(s, ".")
+		lastComma := strings.LastIndex(s, ",")
+		if lastDot > lastComma {
+			s = strings.ReplaceAll(s, ",", "")
+		} else {
+			s = strings.ReplaceAll(s, ".", "")
+			s = strings.Replace(s, ",", ".", 1)
+		}
+		return s
+	}
+
+	if commaCount > 1 && dotCount == 0 {
+		s = strings.ReplaceAll(s, ",", "")
+		return s
+	}
+
+	if dotCount > 1 && commaCount == 0 {
+		s = strings.ReplaceAll(s, ".", "")
+		return s
+	}
+
+	return s
 }

@@ -573,3 +573,79 @@ func TestLexer_Date2(t *testing.T) {
 		})
 	}
 }
+
+func TestLexer_SignBeforeCommodity(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		tokens []TokenType
+	}{
+		{
+			name:   "negative dollar",
+			input:  "-$100",
+			tokens: []TokenType{TokenSign, TokenCommodity, TokenNumber, TokenEOF},
+		},
+		{
+			name:   "positive dollar",
+			input:  "+$100",
+			tokens: []TokenType{TokenSign, TokenCommodity, TokenNumber, TokenEOF},
+		},
+		{
+			name:   "negative euro",
+			input:  "-€100",
+			tokens: []TokenType{TokenSign, TokenCommodity, TokenNumber, TokenEOF},
+		},
+		{
+			name:   "negative ruble",
+			input:  "-₽100",
+			tokens: []TokenType{TokenSign, TokenCommodity, TokenNumber, TokenEOF},
+		},
+		{
+			name:   "negative in posting",
+			input:  "    assets:cash  -$50.00",
+			tokens: []TokenType{TokenIndent, TokenAccount, TokenSign, TokenCommodity, TokenNumber, TokenEOF},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			require.Len(t, tokens, len(tt.tokens), "token count mismatch")
+			for i, expectedType := range tt.tokens {
+				assert.Equal(t, expectedType, tokens[i].Type, "token %d type mismatch", i)
+			}
+		})
+	}
+}
+
+func TestLexer_NumberFormatsExtended(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantNumber  string
+		numberIndex int
+		wantTokens  int
+	}{
+		{"space grouping", "    a:b  1 000.00", "1 000.00", 2, 4},
+		{"space grouping euro", "    a:b  1 000,50", "1 000,50", 2, 4},
+		{"large space grouped", "    a:b  3 037 850,96", "3 037 850,96", 2, 4},
+		{"scientific lower", "    a:b  1e-6", "1e-6", 2, 4},
+		{"scientific upper", "    a:b  1E3", "1E3", 2, 4},
+		{"scientific with plus", "    a:b  1E+3", "1E+3", 2, 4},
+		{"scientific with minus", "    a:b  1E-10", "1E-10", 2, 4},
+		{"explicit plus", "    a:b  +100", "+100", 2, 4},
+		{"explicit plus decimal", "    a:b  +100.50", "+100.50", 2, 4},
+		{"space grouping with commodity", "    a:b  1 000.00 USD", "1 000.00", 2, 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			require.GreaterOrEqual(t, len(tokens), tt.wantTokens, "not enough tokens")
+			assert.Equal(t, TokenNumber, tokens[tt.numberIndex].Type, "expected Number token")
+			assert.Equal(t, tt.wantNumber, tokens[tt.numberIndex].Value, "number value mismatch")
+		})
+	}
+}

@@ -101,8 +101,13 @@ func (l *Lexer) scanInLine() Token {
 		return l.scanCurrencySymbol()
 	case ch == '"':
 		return l.scanQuotedCommodity()
-	case ch == '-' || l.isDigit(ch):
-		if l.isDigit(ch) && l.looksLikeDate() {
+	case ch == '-' || ch == '+':
+		if l.nextIsCurrencySymbol() {
+			return l.scanSign()
+		}
+		return l.scanNumber()
+	case l.isDigit(ch):
+		if l.looksLikeDate() {
 			return l.scanDate()
 		}
 		return l.scanNumber()
@@ -225,13 +230,32 @@ func (l *Lexer) scanNumber() Token {
 	start := l.pos
 	startPos := l.position()
 
-	if l.peek() == '-' {
+	if l.peek() == '-' || l.peek() == '+' {
 		l.advance()
 	}
 
-	for l.pos < len(l.input) && (l.isDigit(l.peek()) || l.peek() == '.' || l.peek() == ',') {
-		l.advance()
+	hasDigits := false
+
+	for l.pos < len(l.input) {
+		ch := l.peek()
+		switch {
+		case l.isDigit(ch):
+			hasDigits = true
+			l.advance()
+		case ch == '.' || ch == ',':
+			l.advance()
+		case ch == ' ' && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1]):
+			l.advance()
+		case (ch == 'E' || ch == 'e') && hasDigits:
+			l.advance()
+			if l.pos < len(l.input) && (l.peek() == '+' || l.peek() == '-') {
+				l.advance()
+			}
+		default:
+			goto done
+		}
 	}
+done:
 
 	value := l.input[start:l.pos]
 	return Token{Type: TokenNumber, Value: value, Pos: startPos, End: l.position()}
@@ -418,6 +442,21 @@ func (l *Lexer) isAccountStartRune(r rune) bool {
 
 func (l *Lexer) isCurrencySymbol(r rune) bool {
 	return r == '$' || r == '€' || r == '£' || r == '¥' || r == '₽' || r == '₴'
+}
+
+func (l *Lexer) nextIsCurrencySymbol() bool {
+	if l.pos+1 >= len(l.input) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(l.input[l.pos+1:])
+	return l.isCurrencySymbol(r)
+}
+
+func (l *Lexer) scanSign() Token {
+	startPos := l.position()
+	sign := string(l.peek())
+	l.advance()
+	return Token{Type: TokenSign, Value: sign, Pos: startPos, End: l.position()}
 }
 
 func (l *Lexer) looksLikeAccount() bool {

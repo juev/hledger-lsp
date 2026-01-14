@@ -27,6 +27,7 @@ const (
 	TokenPipe
 	TokenColon
 	TokenSemicolon
+	TokenSign // + or - before commodity symbol
 )
 
 type Position struct {
@@ -48,6 +49,7 @@ func (t TokenType) String() string {
 		"Text", "Account", "Number", "Commodity", "Comment",
 		"Directive", "Tag", "At", "AtAt", "Equals", "DoubleEquals",
 		"LParen", "RParen", "LBracket", "RBracket", "Pipe", "Colon", "Semicolon",
+		"Sign",
 	}
 	if int(t) < len(names) {
 		return names[t]

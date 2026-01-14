@@ -157,11 +157,12 @@ func computeDateRange(tx *ast.Transaction) ast.Range {
 
 func computeAccountRange(account *ast.Account) ast.Range {
 	start := account.Range.Start
+	nameLen := utf16Len(account.Name)
 	return ast.Range{
 		Start: start,
 		End: ast.Position{
 			Line:   start.Line,
-			Column: start.Column + len(account.Name),
+			Column: start.Column + nameLen,
 			Offset: start.Offset + len(account.Name),
 		},
 	}
@@ -180,6 +181,7 @@ func estimatePayeeRange(tx *ast.Transaction, payee string) ast.Range {
 		startCol += 2
 	}
 
+	payeeLen := utf16Len(payee)
 	return ast.Range{
 		Start: ast.Position{
 			Line:   tx.Date.Range.Start.Line,
@@ -187,7 +189,7 @@ func estimatePayeeRange(tx *ast.Transaction, payee string) ast.Range {
 		},
 		End: ast.Position{
 			Line:   tx.Date.Range.Start.Line,
-			Column: startCol + len(payee),
+			Column: startCol + payeeLen,
 		},
 	}
 }

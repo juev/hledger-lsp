@@ -694,3 +694,49 @@ func TestParser_AccountDirectiveWithSubdirs(t *testing.T) {
 	assert.Equal(t, "food", dir.Subdirs["alias"])
 	assert.Equal(t, "Food and groceries", dir.Subdirs["note"])
 }
+
+func TestParser_SignBeforeCommodity(t *testing.T) {
+	input := `2024-01-15 test
+    assets:cash  -$100
+    expenses:food`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	require.NotNil(t, p.Amount)
+	assert.True(t, p.Amount.Quantity.Equal(decimal.NewFromInt(-100)))
+	assert.Equal(t, "$", p.Amount.Commodity.Symbol)
+}
+
+func TestParser_SpaceGroupedNumber(t *testing.T) {
+	input := `2024-01-15 test
+    assets:cash  3 037 850,96 RUB
+    expenses:food`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	require.NotNil(t, p.Amount)
+	expected, _ := decimal.NewFromString("3037850.96")
+	assert.True(t, p.Amount.Quantity.Equal(expected), "got %s", p.Amount.Quantity.String())
+	assert.Equal(t, "RUB", p.Amount.Commodity.Symbol)
+}
+
+func TestParser_ScientificNotation(t *testing.T) {
+	input := `2024-01-15 test
+    assets:cash  1E3 USD
+    expenses:food`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	require.NotNil(t, p.Amount)
+	expected := decimal.NewFromInt(1000)
+	assert.True(t, p.Amount.Quantity.Equal(expected), "got %s", p.Amount.Quantity.String())
+}
