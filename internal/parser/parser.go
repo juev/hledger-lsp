@@ -604,7 +604,7 @@ func (p *Parser) parseYearDirective(startPos Position) ast.Directive {
 	}
 
 	year, err := strconv.Atoi(p.current.Value)
-	if err != nil || year < 1900 || year > 2200 {
+	if err != nil || year < 1 || year > 9999 {
 		p.error("invalid year: %s", p.current.Value)
 		p.skipToNextLine()
 		return nil

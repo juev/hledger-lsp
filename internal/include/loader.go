@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -229,6 +230,7 @@ func (l *Loader) expandGlob(basePath, pattern string) ([]string, error) {
 		return nil, fmt.Errorf("no files match pattern: %s", pattern)
 	}
 
+	sort.Strings(matches)
 	return matches, nil
 }
 

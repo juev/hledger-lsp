@@ -424,3 +424,58 @@ func TestLoader_HledgerGlobSyntax(t *testing.T) {
 		t.Errorf("expected 1 directive from subdir, got %d", len(allDirs))
 	}
 }
+
+func TestLoader_GlobPatternSortedOrder(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+	fileZ := filepath.Join(dir, "z.journal")
+	fileA := filepath.Join(dir, "a.journal")
+
+	mainContent := `include *.journal
+`
+	contentZ := `2024-01-02 * transaction Z
+    expenses:z  $20
+    assets:cash
+`
+	contentA := `2024-01-01 * transaction A
+    expenses:a  $10
+    assets:cash
+`
+	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileZ, []byte(contentZ), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileA, []byte(contentA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	result, errs := loader.Load(mainFile)
+
+	for _, e := range errs {
+		if e.Kind == ErrorCycleDetected {
+			continue
+		}
+		t.Errorf("unexpected error: %v", e)
+	}
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	allTx := result.AllTransactions()
+	if len(allTx) != 2 {
+		t.Fatalf("expected 2 transactions, got %d", len(allTx))
+	}
+
+	// Files should be included in alphabetical order: a.journal before z.journal
+	// So transaction A should come before transaction Z
+	if allTx[0].Description != "transaction A" {
+		t.Errorf("expected first transaction to be 'transaction A', got '%s'", allTx[0].Description)
+	}
+	if allTx[1].Description != "transaction Z" {
+		t.Errorf("expected second transaction to be 'transaction Z', got '%s'", allTx[1].Description)
+	}
+}

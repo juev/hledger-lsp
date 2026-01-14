@@ -694,3 +694,53 @@ func TestLexer_InvalidScientificNotation(t *testing.T) {
 		})
 	}
 }
+
+func TestLexer_ScientificNotationConsumesExponent(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantNumber string
+	}{
+		{
+			name:       "1E3 followed by text",
+			input:      "    a:b  1E3x",
+			wantNumber: "1E3",
+		},
+		{
+			name:       "1E+3 followed by text",
+			input:      "    a:b  1E+3x",
+			wantNumber: "1E+3",
+		},
+		{
+			name:       "1E-3 followed by text",
+			input:      "    a:b  1E-3x",
+			wantNumber: "1E-3",
+		},
+		{
+			name:       "1E10 multi-digit exponent",
+			input:      "    a:b  1E10",
+			wantNumber: "1E10",
+		},
+		{
+			name:       "1E+10 multi-digit with sign",
+			input:      "    a:b  1E+10",
+			wantNumber: "1E+10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			var numberToken *Token
+			for i := range tokens {
+				if tokens[i].Type == TokenNumber {
+					numberToken = &tokens[i]
+					break
+				}
+			}
+			require.NotNil(t, numberToken, "expected a Number token")
+			assert.Equal(t, tt.wantNumber, numberToken.Value, "scientific notation should include full exponent")
+		})
+	}
+}

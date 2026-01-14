@@ -798,3 +798,39 @@ func TestParser_EuropeanNumberFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestParser_HledgerNumberFormats(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "dots as grouping 1.2.3 equals 123",
+			input: `2024-01-15 test
+    assets:cash  1.2.3 EUR
+    expenses:food`,
+			expected: "123",
+		},
+		{
+			name: "mixed format 1.2,3 equals 12.3",
+			input: `2024-01-15 test
+    assets:cash  1.2,3 EUR
+    expenses:food`,
+			expected: "12.3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			p := journal.Transactions[0].Postings[0]
+			require.NotNil(t, p.Amount)
+			expected, _ := decimal.NewFromString(tt.expected)
+			assert.True(t, p.Amount.Quantity.Equal(expected), "got %s, want %s", p.Amount.Quantity.String(), tt.expected)
+		})
+	}
+}
