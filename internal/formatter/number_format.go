@@ -3,6 +3,7 @@ package formatter
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 )
@@ -72,7 +73,7 @@ func extractNumberPart(formatStr string) string {
 			if unicode.IsDigit(r) {
 				lastDigitPos = i
 			}
-			end = i + len(string(r))
+			end = i + utf8.RuneLen(r)
 		} else if inNumber {
 			break
 		}

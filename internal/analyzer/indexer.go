@@ -11,7 +11,7 @@ func CollectAccounts(journal *ast.Journal) *AccountIndex {
 	seen := make(map[string]bool)
 
 	for _, dir := range journal.Directives {
-		if accDir, ok := dir.(*ast.AccountDirective); ok {
+		if accDir, ok := dir.(ast.AccountDirective); ok {
 			addAccount(idx, seen, accDir.Account.Name)
 		}
 	}
