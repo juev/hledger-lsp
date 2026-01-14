@@ -425,6 +425,7 @@ func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 	}
 
 	dir.Subdirs = p.parseSubdirectives()
+	dir.Range.End = toASTPosition(p.current.Pos)
 
 	return dir
 }
@@ -458,6 +459,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		dir.Note = note
 	}
 
+	dir.Range.End = toASTPosition(p.current.Pos)
 	return dir
 }
 
@@ -480,6 +482,7 @@ func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {
 		Path:  pathStr,
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
+	inc.Range.End = toASTPosition(p.current.Pos)
 	p.skipToNextLine()
 	return inc
 }
@@ -599,6 +602,7 @@ func (p *Parser) parseYearDirective(startPos Position) ast.Directive {
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
 	p.advance()
+	dir.Range.End = toASTPosition(p.current.Pos)
 	p.skipToNextLine()
 	return dir
 }

@@ -201,3 +201,56 @@ func toDocumentSymbols(t *testing.T, result []any) []protocol.DocumentSymbol {
 	}
 	return symbols
 }
+
+func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "account directive has valid range end",
+			content: `account assets:bank:checking
+`,
+		},
+		{
+			name: "commodity directive has valid range end",
+			content: `commodity $
+`,
+		},
+		{
+			name: "include directive has valid range end",
+			content: `include ./accounts.journal
+`,
+		},
+		{
+			name: "year directive has valid range end",
+			content: `Y 2024
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			srv.documents.Store(protocol.DocumentURI("file:///test.journal"), tt.content)
+
+			params := &protocol.DocumentSymbolParams{
+				TextDocument: protocol.TextDocumentIdentifier{
+					URI: "file:///test.journal",
+				},
+			}
+
+			result, err := srv.DocumentSymbol(context.Background(), params)
+			require.NoError(t, err)
+			require.NotEmpty(t, result, "expected at least one symbol")
+
+			symbols := toDocumentSymbols(t, result)
+			sym := symbols[0]
+
+			assert.Less(t, sym.Range.End.Line, uint32(1000),
+				"Range.End.Line should be a reasonable value (not overflow), got %d", sym.Range.End.Line)
+			assert.Less(t, sym.Range.End.Character, uint32(1000),
+				"Range.End.Character should be a reasonable value (not overflow), got %d", sym.Range.End.Character)
+		})
+	}
+}

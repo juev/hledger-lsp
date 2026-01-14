@@ -82,8 +82,12 @@ func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCom
 	var filePath string
 	s.documents.Range(func(key, _ any) bool {
 		docURI := key.(protocol.DocumentURI)
-		filePath = uriToPath(docURI)
-		return false
+		path := uriToPath(docURI)
+		if path != "" {
+			filePath = path
+			return false
+		}
+		return true
 	})
 
 	if filePath == "" {
