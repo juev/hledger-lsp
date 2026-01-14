@@ -20,6 +20,9 @@ type Workspace struct {
 	includeGraph    map[string][]string
 	reverseGraph    map[string][]string
 	loader          *include.Loader
+	loadErrors      []include.LoadError
+	parseErrors     []string
+	cachedFormats   map[string]formatter.NumberFormat
 }
 
 func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
@@ -42,11 +45,18 @@ func (w *Workspace) Initialize() error {
 	w.rootJournalPath = rootPath
 
 	if rootPath != "" {
-		resolved, _ := w.loader.Load(rootPath)
+		resolved, errs := w.loader.Load(rootPath)
 		w.resolved = resolved
+		w.loadErrors = errs
 	}
 
 	return nil
+}
+
+func (w *Workspace) LoadErrors() []include.LoadError {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.loadErrors
 }
 
 func (w *Workspace) findRootJournal() (string, error) {
@@ -101,6 +111,11 @@ func (w *Workspace) findRootByIncludeGraph() (string, error) {
 	return rootCandidates[0], nil
 }
 
+var excludedDirs = map[string]bool{
+	".git": true, ".hg": true, ".svn": true,
+	"node_modules": true, "vendor": true, ".cache": true,
+}
+
 func (w *Workspace) findJournalFiles() ([]string, error) {
 	var files []string
 	err := filepath.Walk(w.rootURI, func(path string, info os.FileInfo, walkErr error) error {
@@ -108,6 +123,9 @@ func (w *Workspace) findJournalFiles() ([]string, error) {
 			return nil //nolint:nilerr // intentionally skip inaccessible files
 		}
 		if info.IsDir() {
+			if excludedDirs[info.Name()] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		ext := filepath.Ext(path)
@@ -123,10 +141,16 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 	for _, file := range files {
 		content, err := os.ReadFile(file)
 		if err != nil {
+			w.parseErrors = append(w.parseErrors, file+": "+err.Error())
 			continue
 		}
 
-		journal, _ := parser.Parse(string(content))
+		journal, errs := parser.Parse(string(content))
+		if len(errs) > 0 {
+			for _, e := range errs {
+				w.parseErrors = append(w.parseErrors, file+": "+e.Message)
+			}
+		}
 		if journal == nil {
 			continue
 		}
@@ -153,7 +177,18 @@ func (w *Workspace) RootJournalPath() string {
 
 func (w *Workspace) GetCommodityFormats() map[string]formatter.NumberFormat {
 	w.mu.RLock()
-	defer w.mu.RUnlock()
+	if w.cachedFormats != nil {
+		defer w.mu.RUnlock()
+		return w.cachedFormats
+	}
+	w.mu.RUnlock()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.cachedFormats != nil {
+		return w.cachedFormats
+	}
 
 	if w.resolved == nil {
 		return nil
@@ -168,5 +203,6 @@ func (w *Workspace) GetCommodityFormats() map[string]formatter.NumberFormat {
 		}
 	}
 
+	w.cachedFormats = formats
 	return formats
 }

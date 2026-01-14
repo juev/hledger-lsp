@@ -219,7 +219,7 @@ func TestFormatDocument_WithBalanceAssertionCommodityFormat(t *testing.T) {
 	found := false
 	for _, edit := range edits {
 		if edit.NewText != "" && len(edit.NewText) > 0 {
-			if edit.NewText == "    assets:bank    EUR100,00 = 1 000,00 EUR" {
+			if edit.NewText == "    assets:bank    EUR100,00  = 1 000,00 EUR" {
 				found = true
 				break
 			}

@@ -107,10 +107,15 @@ func CalculateAlignment(postings []ast.Posting, commodityFormats map[string]Numb
 	accountCol := CalculateAlignmentColumn(postings)
 
 	hasBalanceAssertion := false
-	for _, p := range postings {
+	maxAmountCostLen := 0
+	for i := range postings {
+		p := &postings[i]
 		if p.BalanceAssertion != nil {
 			hasBalanceAssertion = true
-			break
+		}
+		if p.Amount != nil {
+			amountCostLen := calculateAmountCostLen(p, commodityFormats)
+			maxAmountCostLen = max(maxAmountCostLen, amountCostLen)
 		}
 	}
 
@@ -118,20 +123,9 @@ func CalculateAlignment(postings []ast.Posting, commodityFormats map[string]Numb
 		return AlignmentInfo{AccountCol: accountCol, BalanceAssertionCol: 0}
 	}
 
-	maxAmountCostLen := 0
-	for _, p := range postings {
-		if p.Amount == nil {
-			continue
-		}
-		amountCostLen := calculateAmountCostLen(&p, commodityFormats)
-		if amountCostLen > maxAmountCostLen {
-			maxAmountCostLen = amountCostLen
-		}
-	}
-
 	return AlignmentInfo{
 		AccountCol:          accountCol,
-		BalanceAssertionCol: accountCol + maxAmountCostLen + 1,
+		BalanceAssertionCol: accountCol + maxAmountCostLen + minSpaces,
 	}
 }
 
@@ -234,7 +228,7 @@ func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, c
 	if posting.BalanceAssertion != nil {
 		if alignment.BalanceAssertionCol > 0 {
 			currentLen := utf8.RuneCountInString(sb.String())
-			spaces := max(alignment.BalanceAssertionCol-currentLen, 1)
+			spaces := max(alignment.BalanceAssertionCol-currentLen, minSpaces)
 			sb.WriteString(strings.Repeat(" ", spaces))
 		}
 
@@ -262,92 +256,7 @@ func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, c
 }
 
 func FormatPosting(posting *ast.Posting, alignCol int) string {
-	return FormatPostingWithFormats(posting, alignCol, nil)
-}
-
-func FormatPostingWithFormats(posting *ast.Posting, alignCol int, commodityFormats map[string]NumberFormat) string {
-	var sb strings.Builder
-
-	sb.WriteString(defaultIndent)
-
-	switch posting.Status {
-	case ast.StatusCleared:
-		sb.WriteString("* ")
-	case ast.StatusPending:
-		sb.WriteString("! ")
-	}
-
-	switch posting.Virtual {
-	case ast.VirtualUnbalanced:
-		sb.WriteString("(")
-	case ast.VirtualBalanced:
-		sb.WriteString("[")
-	}
-
-	sb.WriteString(posting.Account.Name)
-
-	switch posting.Virtual {
-	case ast.VirtualUnbalanced:
-		sb.WriteString(")")
-	case ast.VirtualBalanced:
-		sb.WriteString("]")
-	}
-
-	if posting.Amount != nil {
-		currentLen := utf8.RuneCountInString(sb.String())
-		spaces := max(alignCol-currentLen, minSpaces)
-		sb.WriteString(strings.Repeat(" ", spaces))
-
-		if posting.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.Amount.Commodity.Symbol)
-		}
-
-		sb.WriteString(formatAmountQuantity(posting.Amount, commodityFormats))
-
-		if posting.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.Amount.Commodity.Symbol)
-		}
-	}
-
-	if posting.Cost != nil {
-		if posting.Cost.IsTotal {
-			sb.WriteString(" @@ ")
-		} else {
-			sb.WriteString(" @ ")
-		}
-		if posting.Cost.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
-		}
-		sb.WriteString(formatAmountQuantity(&posting.Cost.Amount, commodityFormats))
-		if posting.Cost.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
-		}
-	}
-
-	if posting.BalanceAssertion != nil {
-		if posting.BalanceAssertion.IsStrict {
-			sb.WriteString(" == ")
-		} else {
-			sb.WriteString(" = ")
-		}
-		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
-		}
-		sb.WriteString(formatAmountQuantity(&posting.BalanceAssertion.Amount, commodityFormats))
-		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
-		}
-	}
-
-	if posting.Comment != "" {
-		sb.WriteString("  ; ")
-		sb.WriteString(posting.Comment)
-	}
-
-	return sb.String()
+	return FormatPostingWithAlignment(posting, AlignmentInfo{AccountCol: alignCol}, nil)
 }
 
 // formatAmountQuantity returns formatted quantity string.
