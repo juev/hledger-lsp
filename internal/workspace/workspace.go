@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +39,10 @@ func (w *Workspace) Initialize() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	w.loadErrors = nil
+	w.parseErrors = nil
+	w.cachedFormats = nil
+
 	rootPath, err := w.findRootJournal()
 	if err != nil {
 		return err
@@ -57,6 +62,12 @@ func (w *Workspace) LoadErrors() []include.LoadError {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.loadErrors
+}
+
+func (w *Workspace) ParseErrors() []string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.parseErrors
 }
 
 func (w *Workspace) findRootJournal() (string, error) {
@@ -141,14 +152,14 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 	for _, file := range files {
 		content, err := os.ReadFile(file)
 		if err != nil {
-			w.parseErrors = append(w.parseErrors, file+": "+err.Error())
+			w.parseErrors = append(w.parseErrors, fmt.Sprintf("%s: %v", file, err))
 			continue
 		}
 
 		journal, errs := parser.Parse(string(content))
 		if len(errs) > 0 {
 			for _, e := range errs {
-				w.parseErrors = append(w.parseErrors, file+": "+e.Message)
+				w.parseErrors = append(w.parseErrors, fmt.Sprintf("%s: %s", file, e.Message))
 			}
 		}
 		if journal == nil {
