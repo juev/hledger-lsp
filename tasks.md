@@ -120,7 +120,12 @@
   - ✅ Release workflow (goreleaser, cross-platform)
   - ✅ Version info в binary (--version flag)
   - ✅ Coverage reporting (codecov)
-- [ ] **5.3 Документация для редакторов** — VS Code, Neovim, Emacs
+- [x] **5.3 Документация для редакторов** — VS Code, Neovim, Emacs
+  - ✅ LICENSE (MIT)
+  - ✅ README.md (badges, features, installation, editor links)
+  - ✅ docs/vscode.md — setup guide
+  - ✅ docs/neovim.md — nvim-lspconfig, lazy.nvim
+  - ✅ docs/emacs.md — eglot, lsp-mode, use-package
 
 ---
 
