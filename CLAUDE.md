@@ -10,8 +10,7 @@ hledger-lsp is a Language Server Protocol (LSP) server for hledger journal files
 
 ```bash
 # Build
-go build ./...
-go build -o hledger-lsp ./cmd/hledger-lsp
+go build -o ./bin/hledger-lsp ./cmd/hledger-lsp
 
 # Test
 go test ./...
@@ -20,7 +19,7 @@ go test -v ./internal/parser -run TestLexer   # specific test
 go test -cover ./...                          # with coverage
 
 # Lint
-golangci-lint run ./...
+golangci-lint run --fix ./...
 ```
 
 ## Architecture

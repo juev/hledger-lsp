@@ -674,3 +674,62 @@ func TestToProtocolSeverity(t *testing.T) {
 		})
 	}
 }
+
+func TestUriToPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		uri      protocol.DocumentURI
+		expected string
+	}{
+		{
+			name:     "file URI",
+			uri:      protocol.DocumentURI("file:///test.journal"),
+			expected: "/test.journal",
+		},
+		{
+			name:     "git URI returns empty",
+			uri:      protocol.DocumentURI("git://github.com/user/repo/main/file.journal"),
+			expected: "",
+		},
+		{
+			name:     "untitled URI returns empty",
+			uri:      protocol.DocumentURI("untitled:Untitled-1"),
+			expected: "",
+		},
+		{
+			name:     "vscode-notebook URI returns empty",
+			uri:      protocol.DocumentURI("vscode-notebook-cell://something"),
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := uriToPath(tt.uri)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestServer_DidOpen_NonFileURI(t *testing.T) {
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	uri := protocol.DocumentURI("git://github.com/user/repo/main/file.journal")
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash`
+
+	params := &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:  uri,
+			Text: content,
+		},
+	}
+
+	err := srv.DidOpen(context.Background(), params)
+
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+}

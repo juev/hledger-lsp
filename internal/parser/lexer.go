@@ -101,12 +101,17 @@ func (l *Lexer) scanInLine() Token {
 		return l.scanCurrencySymbol()
 	case ch == '"':
 		return l.scanQuotedCommodity()
-	case ch == '-' || l.isDigit(ch):
-		if l.isDigit(ch) && l.looksLikeDate() {
+	case ch == '-' || ch == '+':
+		if l.nextIsCurrencySymbol() {
+			return l.scanSign()
+		}
+		return l.scanNumber()
+	case l.isDigit(ch):
+		if l.looksLikeDate() {
 			return l.scanDate()
 		}
 		return l.scanNumber()
-	case l.isAccountStart(ch):
+	case l.isAccountStart(ch) || l.isAccountStartRune(r):
 		if l.looksLikeAccount() {
 			return l.scanAccount()
 		}
@@ -197,21 +202,23 @@ func (l *Lexer) scanAccount() Token {
 	lastNonSpace := start
 
 	for l.pos < len(l.input) {
-		ch := l.peek()
+		r, size := utf8.DecodeRuneInString(l.input[l.pos:])
 
-		if ch == ' ' {
+		if r == ' ' {
 			if l.pos+1 < len(l.input) && l.input[l.pos+1] == ' ' {
 				break
 			}
-			l.advance()
+			l.pos += size
+			l.column++
 			continue
 		}
 
-		if !l.isLetter(ch) && !l.isDigit(ch) && ch != ':' && ch != '-' && ch != '_' {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ':' && r != '-' && r != '_' {
 			break
 		}
 
-		l.advance()
+		l.pos += size
+		l.column++
 		lastNonSpace = l.pos
 	}
 
@@ -223,13 +230,39 @@ func (l *Lexer) scanNumber() Token {
 	start := l.pos
 	startPos := l.position()
 
-	if l.peek() == '-' {
+	if l.peek() == '-' || l.peek() == '+' {
 		l.advance()
 	}
 
-	for l.pos < len(l.input) && (l.isDigit(l.peek()) || l.peek() == '.' || l.peek() == ',') {
-		l.advance()
+	hasDigits := false
+
+	for l.pos < len(l.input) {
+		ch := l.peek()
+		switch {
+		case l.isDigit(ch):
+			hasDigits = true
+			l.advance()
+		case ch == '.' || ch == ',':
+			l.advance()
+		case ch == ' ' && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1]):
+			l.advance()
+		case (ch == 'E' || ch == 'e') && hasDigits:
+			nextPos := l.pos + 1
+			if nextPos < len(l.input) && (l.input[nextPos] == '+' || l.input[nextPos] == '-') {
+				nextPos++
+			}
+			if nextPos >= len(l.input) || !l.isDigit(l.input[nextPos]) {
+				goto done
+			}
+			l.advance()
+			if l.pos < len(l.input) && (l.peek() == '+' || l.peek() == '-') {
+				l.advance()
+			}
+		default:
+			goto done
+		}
 	}
+done:
 
 	value := l.input[start:l.pos]
 	return Token{Type: TokenNumber, Value: value, Pos: startPos, End: l.position()}
@@ -288,16 +321,24 @@ func (l *Lexer) scanDirectiveOrAccount() Token {
 	start := l.pos
 	startPos := l.position()
 
-	for l.pos < len(l.input) && (l.isLetter(l.peek()) || l.isDigit(l.peek())) {
+	// First, scan only letters (for directives like Y, P, D)
+	for l.pos < len(l.input) && l.isLetter(l.peek()) {
 		l.advance()
 	}
 
 	word := l.input[start:l.pos]
 
+	// Check for single-letter directives first (Y, P, D)
 	if isDirective(word) {
 		return Token{Type: TokenDirective, Value: word, Pos: startPos, End: l.position()}
 	}
 
+	// If not a directive, continue scanning with digits for potential account
+	for l.pos < len(l.input) && l.isDigit(l.peek()) {
+		l.advance()
+	}
+
+	// Reset and check if it looks like account
 	l.pos = start
 	l.column = startPos.Column
 
@@ -402,29 +443,49 @@ func (l *Lexer) isAccountStart(ch byte) bool {
 	return l.isLetter(ch)
 }
 
+func (l *Lexer) isAccountStartRune(r rune) bool {
+	return unicode.IsLetter(r)
+}
+
 func (l *Lexer) isCurrencySymbol(r rune) bool {
 	return r == '$' || r == '€' || r == '£' || r == '¥' || r == '₽' || r == '₴'
 }
 
+func (l *Lexer) nextIsCurrencySymbol() bool {
+	if l.pos+1 >= len(l.input) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(l.input[l.pos+1:])
+	return l.isCurrencySymbol(r)
+}
+
+func (l *Lexer) scanSign() Token {
+	startPos := l.position()
+	sign := string(l.peek())
+	l.advance()
+	return Token{Type: TokenSign, Value: sign, Pos: startPos, End: l.position()}
+}
+
 func (l *Lexer) looksLikeAccount() bool {
-	savedPos := l.pos
 	hasColon := false
 
-	for i := l.pos; i < len(l.input); i++ {
-		ch := l.input[i]
-		if ch == ':' {
+	for i := l.pos; i < len(l.input); {
+		r, size := utf8.DecodeRuneInString(l.input[i:])
+		if r == ':' {
 			hasColon = true
-		} else if ch == ' ' {
+			i += size
+		} else if r == ' ' {
 			if i+1 < len(l.input) && l.input[i+1] == ' ' {
 				break
 			}
-			continue
-		} else if !l.isLetter(ch) && !l.isDigit(ch) && ch != '-' && ch != '_' {
+			i += size
+		} else if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
 			break
+		} else {
+			i += size
 		}
 	}
 
-	l.pos = savedPos
 	return hasColon
 }
 

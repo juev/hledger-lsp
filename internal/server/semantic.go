@@ -109,7 +109,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 		tokens = append(tokens, semanticToken{
 			line:      uint32(tok.Pos.Line - 1),
 			col:       uint32(tok.Pos.Column - 1),
-			length:    uint32(len(tok.Value)),
+			length:    uint32(utf16Len(tok.Value)),
 			tokenType: semType,
 			modifiers: 0,
 		})

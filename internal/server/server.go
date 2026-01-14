@@ -134,6 +134,9 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	}
 
 	path := uriToPath(docURI)
+	if path == "" {
+		return
+	}
 	resolved, loadErrors := s.loader.LoadFromContent(path, content)
 	s.resolved.Store(docURI, resolved)
 
@@ -297,15 +300,14 @@ func splitLines(s string) []string {
 }
 
 func uriToPath(docURI protocol.DocumentURI) string {
+	s := string(docURI)
+	if !strings.HasPrefix(s, "file://") {
+		return ""
+	}
 	u := uri.URI(docURI) //nolint:unconvert // protocol.DocumentURI and uri.URI are different types
 	path := u.Filename()
 	if path == "" {
-		s := string(docURI)
-		if strings.HasPrefix(s, "file://") {
-			path = s[7:]
-		} else {
-			path = s
-		}
+		path = s[7:]
 	}
 	return filepath.Clean(path)
 }

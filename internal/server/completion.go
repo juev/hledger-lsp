@@ -122,12 +122,12 @@ func extractAccountPrefix(content string, pos protocol.Position) string {
 	}
 
 	line := lines[pos.Line]
-	col := int(pos.Character)
-	if col > len(line) {
-		col = len(line)
+	byteCol := utf16OffsetToByteOffset(line, int(pos.Character))
+	if byteCol > len(line) {
+		byteCol = len(line)
 	}
 
-	beforeCursor := strings.TrimSpace(line[:col])
+	beforeCursor := strings.TrimSpace(line[:byteCol])
 
 	lastColon := strings.LastIndex(beforeCursor, ":")
 	if lastColon == -1 {
