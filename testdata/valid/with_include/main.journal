@@ -1,0 +1,9 @@
+include accounts.journal
+
+2024-01-15 grocery store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-16 rent payment
+    expenses:rent  $1000.00
+    assets:bank

@@ -1,0 +1,15 @@
+2024-01-15 grocery store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-16 salary
+    assets:bank  EUR 3000.00
+    income:salary
+
+2024-01-17 currency exchange
+    assets:cash  $100.00 @ EUR 0.92
+    assets:bank  EUR -92.00
+
+2024-01-18 rent payment
+    expenses:rent  EUR 800.00
+    assets:bank

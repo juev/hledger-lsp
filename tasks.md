@@ -89,7 +89,7 @@
   - ✅ Completion requests (были ранее)
   - ✅ Diagnostics publishing (с mock client)
   - ✅ Helper functions (applyChange, splitLines, isFullChange)
-  - ✅ Покрытие: 82.1%
+  - ✅ Покрытие: 83.1%
 
 - [x] **4.2 Benchmark tests** — производительность
   - ✅ Парсинг больших файлов (Lexer, Parser: small/medium/large)
@@ -97,9 +97,14 @@
   - ✅ Время отклика completion (Account/Payee/Commodity)
   - ✅ Analyzer benchmarks (Analyze, CheckBalance, Collect*)
 
-- [ ] **4.3 Integration tests** — интеграционные тесты
-  - Полные LSP request/response циклы
-  - Тесты с реальными редакторами (опционально)
+- [x] **4.3 Integration tests** — интеграционные тесты
+  - ✅ 17 тестов покрывающих полные user flows
+  - ✅ Open → Edit → Diagnostics workflow
+  - ✅ Completion в разных контекстах
+  - ✅ Hover с обновлением баланса
+  - ✅ Include файлы (вложенные, циклы, относительные пути)
+  - ✅ Error recovery (completion работает при ошибках парсинга)
+  - ✅ Channel-based синхронизация (без time.Sleep)
 
 ---
 

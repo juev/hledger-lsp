@@ -1,0 +1,5 @@
+account assets:cash
+account assets:bank
+account expenses:food
+account expenses:rent
+account income:salary
