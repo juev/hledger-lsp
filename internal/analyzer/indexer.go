@@ -67,16 +67,11 @@ func CollectCommodities(journal *ast.Journal) []string {
 	var commodities []string
 
 	for _, dir := range journal.Directives {
-		var symbol string
-		switch d := dir.(type) {
-		case *ast.CommodityDirective:
-			symbol = d.Commodity.Symbol
-		case ast.CommodityDirective:
-			symbol = d.Commodity.Symbol
-		}
-		if symbol != "" && !seen[symbol] {
-			seen[symbol] = true
-			commodities = append(commodities, symbol)
+		if cd, ok := dir.(ast.CommodityDirective); ok {
+			if cd.Commodity.Symbol != "" && !seen[cd.Commodity.Symbol] {
+				seen[cd.Commodity.Symbol] = true
+				commodities = append(commodities, cd.Commodity.Symbol)
+			}
 		}
 	}
 

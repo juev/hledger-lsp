@@ -171,3 +171,59 @@ func TestFormatDocument_PreservesRawQuantityWithoutCommodityDirective(t *testing
 	}
 	assert.True(t, found, "Expected preserved raw quantity format")
 }
+
+func TestFormatDocument_WithCostCommodityFormat(t *testing.T) {
+	input := `commodity EUR
+  format 1 000,00 EUR
+
+2024-01-15 buy bitcoin
+    assets:crypto  1 BTC @ 45000,00 EUR
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	require.NotEmpty(t, journal.Transactions[0].Postings)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && len(edit.NewText) > 0 {
+			if edit.NewText == "    assets:crypto  1 BTC @ 45 000,00 EUR" {
+				found = true
+				break
+			}
+		}
+	}
+	assert.True(t, found, "Expected formatted cost amount with commodity format, got edits: %v", edits)
+}
+
+func TestFormatDocument_WithBalanceAssertionCommodityFormat(t *testing.T) {
+	input := `commodity EUR
+  format 1 000,00 EUR
+
+2024-01-15 test
+    assets:bank  EUR 100 = 1000,00 EUR
+    expenses:food`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	require.NotEmpty(t, journal.Transactions[0].Postings)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && len(edit.NewText) > 0 {
+			if edit.NewText == "    assets:bank    EUR100,00 = 1 000,00 EUR" {
+				found = true
+				break
+			}
+		}
+	}
+	assert.True(t, found, "Expected formatted balance assertion with commodity format, got edits: %v", edits)
+}

@@ -183,6 +183,9 @@ func FormatPostingWithFormats(posting *ast.Posting, alignCol int, commodityForma
 }
 
 func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]NumberFormat) string {
+	if amount == nil {
+		return ""
+	}
 	if commodityFormats != nil {
 		if format, ok := commodityFormats[amount.Commodity.Symbol]; ok {
 			return FormatNumber(amount.Quantity, format)

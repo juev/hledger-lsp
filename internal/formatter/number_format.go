@@ -11,13 +11,15 @@ type NumberFormat struct {
 	DecimalMark   rune
 	ThousandsSep  string
 	DecimalPlaces int
+	HasDecimal    bool
 }
 
 func ParseNumberFormat(formatStr string) NumberFormat {
 	nf := NumberFormat{
 		DecimalMark:   '.',
 		ThousandsSep:  "",
-		DecimalPlaces: 2,
+		DecimalPlaces: 0,
+		HasDecimal:    false,
 	}
 
 	numberPart := extractNumberPart(formatStr)
@@ -30,6 +32,7 @@ func ParseNumberFormat(formatStr string) NumberFormat {
 
 	if lastDot > lastComma {
 		nf.DecimalMark = '.'
+		nf.HasDecimal = true
 		if lastComma >= 0 {
 			nf.ThousandsSep = ","
 		} else if strings.Contains(numberPart[:lastDot], " ") {
@@ -38,6 +41,7 @@ func ParseNumberFormat(formatStr string) NumberFormat {
 		nf.DecimalPlaces = len(numberPart) - lastDot - 1
 	} else if lastComma > lastDot {
 		nf.DecimalMark = ','
+		nf.HasDecimal = true
 		if lastDot >= 0 {
 			nf.ThousandsSep = "."
 		} else if strings.Contains(numberPart[:lastComma], " ") {
@@ -56,28 +60,39 @@ func ParseNumberFormat(formatStr string) NumberFormat {
 func extractNumberPart(formatStr string) string {
 	var start, end int
 	inNumber := false
+	lastDigitPos := -1
 
 	for i, r := range formatStr {
-		if unicode.IsDigit(r) || r == '.' || r == ',' || r == ' ' {
+		isNumberChar := unicode.IsDigit(r) || r == '.' || r == ',' || r == ' '
+		if isNumberChar {
 			if !inNumber {
 				start = i
 				inNumber = true
 			}
-			end = i + 1
-		} else if inNumber && !unicode.IsDigit(r) && r != '.' && r != ',' && r != ' ' {
+			if unicode.IsDigit(r) {
+				lastDigitPos = i
+			}
+			end = i + len(string(r))
+		} else if inNumber {
 			break
 		}
 	}
 
-	if !inNumber {
+	if !inNumber || lastDigitPos < 0 {
 		return ""
 	}
 
-	return strings.TrimSpace(formatStr[start:end])
+	result := formatStr[start:end]
+	return strings.TrimSpace(result)
 }
 
 func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
-	str := qty.StringFixed(int32(format.DecimalPlaces))
+	var str string
+	if format.HasDecimal {
+		str = qty.StringFixed(int32(format.DecimalPlaces))
+	} else {
+		str = qty.Round(0).String()
+	}
 
 	parts := strings.Split(str, ".")
 	intPart := parts[0]
@@ -110,7 +125,7 @@ func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 	}
 	result.WriteString(intPart)
 
-	if format.DecimalPlaces > 0 {
+	if format.HasDecimal && format.DecimalPlaces > 0 {
 		result.WriteRune(format.DecimalMark)
 		result.WriteString(decPart)
 	}

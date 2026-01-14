@@ -20,6 +20,7 @@ func TestParseNumberFormat(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  " ",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 		},
 		{
@@ -29,6 +30,7 @@ func TestParseNumberFormat(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  ".",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 		},
 		{
@@ -38,6 +40,7 @@ func TestParseNumberFormat(t *testing.T) {
 				DecimalMark:   '.',
 				ThousandsSep:  ",",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 		},
 		{
@@ -47,6 +50,7 @@ func TestParseNumberFormat(t *testing.T) {
 				DecimalMark:   '.',
 				ThousandsSep:  "",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 		},
 		{
@@ -56,15 +60,17 @@ func TestParseNumberFormat(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  ".",
 				DecimalPlaces: 3,
+				HasDecimal:    true,
 			},
 		},
 		{
-			name:   "Integer format",
+			name:   "Integer format no decimal",
 			format: "1000 USD",
 			expected: NumberFormat{
 				DecimalMark:   '.',
 				ThousandsSep:  "",
-				DecimalPlaces: 2,
+				DecimalPlaces: 0,
+				HasDecimal:    false,
 			},
 		},
 		{
@@ -73,7 +79,8 @@ func TestParseNumberFormat(t *testing.T) {
 			expected: NumberFormat{
 				DecimalMark:   '.',
 				ThousandsSep:  " ",
-				DecimalPlaces: 2,
+				DecimalPlaces: 0,
+				HasDecimal:    false,
 			},
 		},
 	}
@@ -84,6 +91,7 @@ func TestParseNumberFormat(t *testing.T) {
 			assert.Equal(t, tt.expected.DecimalMark, result.DecimalMark, "DecimalMark")
 			assert.Equal(t, tt.expected.ThousandsSep, result.ThousandsSep, "ThousandsSep")
 			assert.Equal(t, tt.expected.DecimalPlaces, result.DecimalPlaces, "DecimalPlaces")
+			assert.Equal(t, tt.expected.HasDecimal, result.HasDecimal, "HasDecimal")
 		})
 	}
 }
@@ -102,6 +110,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  " ",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "846 661,89",
 		},
@@ -112,6 +121,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  ".",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "1.000,50",
 		},
@@ -122,6 +132,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   '.',
 				ThousandsSep:  ",",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "1,234,567.89",
 		},
@@ -132,6 +143,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   '.',
 				ThousandsSep:  "",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "1000.00",
 		},
@@ -142,6 +154,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  " ",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "-5 000,25",
 		},
@@ -152,6 +165,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   '.',
 				ThousandsSep:  ",",
 				DecimalPlaces: 3,
+				HasDecimal:    true,
 			},
 			expected: "123.456",
 		},
@@ -162,8 +176,20 @@ func TestFormatNumber(t *testing.T) {
 				DecimalMark:   ',',
 				ThousandsSep:  " ",
 				DecimalPlaces: 2,
+				HasDecimal:    true,
 			},
 			expected: "100,00",
+		},
+		{
+			name: "Integer format no decimals",
+			qty:  decimal.NewFromFloat(1000.50),
+			format: NumberFormat{
+				DecimalMark:   '.',
+				ThousandsSep:  " ",
+				DecimalPlaces: 0,
+				HasDecimal:    false,
+			},
+			expected: "1 001",
 		},
 	}
 

@@ -211,11 +211,8 @@ func collectDeclaredAccountsFromResolved(resolved *include.ResolvedJournal) map[
 func collectDeclaredAccounts(journal *ast.Journal) map[string]bool {
 	declared := make(map[string]bool)
 	for _, dir := range journal.Directives {
-		switch d := dir.(type) {
-		case *ast.AccountDirective:
-			declared[d.Account.Name] = true
-		case ast.AccountDirective:
-			declared[d.Account.Name] = true
+		if ad, ok := dir.(ast.AccountDirective); ok {
+			declared[ad.Account.Name] = true
 		}
 	}
 	return declared
@@ -265,11 +262,8 @@ func (a *Analyzer) createBalanceDiagnostic(tx *ast.Transaction, br *BalanceResul
 func collectDeclaredCommodities(journal *ast.Journal) map[string]bool {
 	declared := make(map[string]bool)
 	for _, dir := range journal.Directives {
-		switch d := dir.(type) {
-		case *ast.CommodityDirective:
-			declared[d.Commodity.Symbol] = true
-		case ast.CommodityDirective:
-			declared[d.Commodity.Symbol] = true
+		if cd, ok := dir.(ast.CommodityDirective); ok {
+			declared[cd.Commodity.Symbol] = true
 		}
 	}
 	return declared
@@ -294,18 +288,27 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 	var diags []Diagnostic
 	seen := make(map[string]bool)
 
+	checkCommodity := func(symbol string, r ast.Range) {
+		if symbol != "" && !declared[symbol] && !seen[symbol] {
+			seen[symbol] = true
+			diags = append(diags, Diagnostic{
+				Range:    r,
+				Severity: SeverityHint,
+				Code:     "UNDECLARED_COMMODITY",
+				Message:  fmt.Sprintf("commodity '%s' has no directive", symbol),
+			})
+		}
+	}
+
 	for _, posting := range tx.Postings {
-		if posting.Amount != nil && posting.Amount.Commodity.Symbol != "" {
-			symbol := posting.Amount.Commodity.Symbol
-			if !declared[symbol] && !seen[symbol] {
-				seen[symbol] = true
-				diags = append(diags, Diagnostic{
-					Range:    posting.Amount.Commodity.Range,
-					Severity: SeverityHint,
-					Code:     "UNDECLARED_COMMODITY",
-					Message:  fmt.Sprintf("commodity '%s' has no directive", symbol),
-				})
-			}
+		if posting.Amount != nil {
+			checkCommodity(posting.Amount.Commodity.Symbol, posting.Amount.Commodity.Range)
+		}
+		if posting.Cost != nil {
+			checkCommodity(posting.Cost.Amount.Commodity.Symbol, posting.Cost.Amount.Commodity.Range)
+		}
+		if posting.BalanceAssertion != nil {
+			checkCommodity(posting.BalanceAssertion.Amount.Commodity.Symbol, posting.BalanceAssertion.Amount.Commodity.Range)
 		}
 	}
 	return diags

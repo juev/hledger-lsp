@@ -226,6 +226,14 @@ func (l *Lexer) scanAccount() Token {
 	return Token{Type: TokenAccount, Value: value, Pos: startPos, End: l.position()}
 }
 
+// isAccountTerminator returns true for characters that end account names in hledger format.
+// Per hledger manual: account names may contain any characters except:
+// - tab/newline: line terminators
+// - semicolon: starts a comment
+// - @ : starts cost annotation
+// - = : starts balance assertion
+// - () : virtual posting markers (unbalanced)
+// - [] : virtual posting markers (balanced)
 func isAccountTerminator(r rune) bool {
 	switch r {
 	case '\t', '\n', '\r', ';', '@', '=', '(', ')', '[', ']':
