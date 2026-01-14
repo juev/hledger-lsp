@@ -115,7 +115,11 @@
   - ✅ Исправлены critical issues: path traversal, cache race condition, UTF-8 column tracking
   - ✅ Исправлены high issues: type assertions, bounds checking, empty function removal
   - ✅ Добавлены: file size limits, include depth limits, mutex protection
-- [ ] **5.2 CI/CD pipeline** — автоматизация сборки и релизов
+- [x] **5.2 CI/CD pipeline** — автоматизация сборки и релизов
+  - ✅ CI workflow (lint, test, build)
+  - ✅ Release workflow (goreleaser, cross-platform)
+  - ✅ Version info в binary (--version flag)
+  - ✅ Coverage reporting (codecov)
 - [ ] **5.3 Документация для редакторов** — VS Code, Neovim, Emacs
 
 ---
