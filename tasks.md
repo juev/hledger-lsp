@@ -83,11 +83,13 @@
 
 ## Фаза 4: Тестирование
 
-- [ ] **4.1 Server tests** — тесты LSP хендлеров
-  - Initialize/Shutdown
-  - TextDocumentSync
-  - Completion requests
-  - Diagnostics publishing
+- [x] **4.1 Server tests** — тесты LSP хендлеров
+  - ✅ Initialize/Shutdown/Exit
+  - ✅ TextDocumentSync (DidOpen, DidChange, DidClose, DidSave)
+  - ✅ Completion requests (были ранее)
+  - ✅ Diagnostics publishing (с mock client)
+  - ✅ Helper functions (applyChange, splitLines, isFullChange)
+  - ✅ Покрытие: 82.1%
 
 - [ ] **4.2 Benchmark tests** — производительность
   - Парсинг больших файлов
