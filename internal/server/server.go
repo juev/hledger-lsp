@@ -97,7 +97,10 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 
 func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
 	if doc, ok := s.documents.Load(params.TextDocument.URI); ok {
-		content := doc.(string)
+		content, ok := doc.(string)
+		if !ok {
+			return nil
+		}
 		for _, change := range params.ContentChanges {
 			if isFullChange(change.Range) {
 				content = change.Text
@@ -226,7 +229,9 @@ func toProtocolSeverity(s analyzer.DiagnosticSeverity) protocol.DiagnosticSeveri
 
 func (s *Server) GetDocument(uri protocol.DocumentURI) (string, bool) {
 	if doc, ok := s.documents.Load(uri); ok {
-		return doc.(string), true
+		if content, ok := doc.(string); ok {
+			return content, true
+		}
 	}
 	return "", false
 }
@@ -307,7 +312,9 @@ func uriToPath(docURI protocol.DocumentURI) string {
 
 func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJournal {
 	if r, ok := s.resolved.Load(docURI); ok {
-		return r.(*include.ResolvedJournal)
+		if resolved, ok := r.(*include.ResolvedJournal); ok {
+			return resolved
+		}
 	}
 	return nil
 }

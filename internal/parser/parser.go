@@ -84,17 +84,13 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 		}
 	}
 
-	p.skipSpaceTokens()
-
 	if p.current.Type == TokenStatus {
 		tx.Status = p.parseStatus()
-		p.skipSpaceTokens()
 	}
 
 	if p.current.Type == TokenCode {
 		tx.Code = p.current.Value
 		p.advance()
-		p.skipSpaceTokens()
 	}
 
 	if p.current.Type == TokenText {
@@ -104,7 +100,6 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 		if p.current.Type == TokenPipe {
 			tx.Payee = strings.TrimSpace(desc)
 			p.advance()
-			p.skipSpaceTokens()
 			if p.current.Type == TokenText {
 				tx.Note = strings.TrimSpace(p.current.Value)
 				p.advance()
@@ -251,8 +246,6 @@ func (p *Parser) parsePosting() *ast.Posting {
 		p.advance()
 	}
 
-	p.skipSpaceTokens()
-
 	if p.current.Type == TokenCommodity || p.current.Type == TokenNumber {
 		amount := p.parseAmount()
 		if amount != nil {
@@ -260,19 +253,13 @@ func (p *Parser) parsePosting() *ast.Posting {
 		}
 	}
 
-	p.skipSpaceTokens()
-
 	if p.current.Type == TokenAt || p.current.Type == TokenAtAt {
 		posting.Cost = p.parseCost()
 	}
 
-	p.skipSpaceTokens()
-
 	if p.current.Type == TokenEquals || p.current.Type == TokenDoubleEquals {
 		posting.BalanceAssertion = p.parseBalanceAssertion()
 	}
-
-	p.skipSpaceTokens()
 
 	if p.current.Type == TokenComment {
 		posting.Comment = p.current.Value
@@ -295,7 +282,6 @@ func (p *Parser) parseAmount() *ast.Amount {
 			Range:    ast.Range{Start: toASTPosition(p.current.Pos)},
 		}
 		p.advance()
-		p.skipSpaceTokens()
 	}
 
 	if p.current.Type != TokenNumber {
@@ -310,8 +296,6 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 	amount.Quantity = qty
 	p.advance()
-
-	p.skipSpaceTokens()
 
 	if p.current.Type == TokenCommodity && amount.Commodity.Symbol == "" {
 		amount.Commodity = ast.Commodity{
@@ -334,7 +318,6 @@ func (p *Parser) parseCost() *ast.Cost {
 		cost.IsTotal = true
 	}
 	p.advance()
-	p.skipSpaceTokens()
 
 	amount := p.parseAmount()
 	if amount == nil {
@@ -353,7 +336,6 @@ func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
 		ba.IsStrict = true
 	}
 	p.advance()
-	p.skipSpaceTokens()
 
 	amount := p.parseAmount()
 	if amount == nil {
@@ -368,7 +350,6 @@ func (p *Parser) parseDirective() ast.Directive {
 	directive := p.current.Value
 	pos := p.current.Pos
 	p.advance()
-	p.skipSpaceTokens()
 
 	switch directive {
 	case "account":
@@ -450,8 +431,6 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	}
 	dir.Date = *date
 
-	p.skipSpaceTokens()
-
 	if p.current.Type == TokenCommodity || p.current.Type == TokenText {
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
@@ -463,8 +442,6 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 		p.skipToNextLine()
 		return nil
 	}
-
-	p.skipSpaceTokens()
 
 	price := p.parseAmount()
 	if price == nil {
@@ -533,9 +510,6 @@ func isValidTagName(name string) bool {
 
 func (p *Parser) advance() {
 	p.current = p.lexer.Next()
-}
-
-func (p *Parser) skipSpaceTokens() {
 }
 
 func (p *Parser) skipToNextLine() {

@@ -9,6 +9,8 @@ const (
 	ErrorCycleDetected
 	ErrorParseError
 	ErrorReadError
+	ErrorFileTooLarge
+	ErrorPathTraversal
 )
 
 type LoadError struct {

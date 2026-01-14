@@ -365,7 +365,8 @@ func (l *Lexer) peekRune() rune {
 
 func (l *Lexer) advance() {
 	if l.pos < len(l.input) {
-		l.pos++
+		_, size := utf8.DecodeRuneInString(l.input[l.pos:])
+		l.pos += size
 		l.column++
 	}
 }
@@ -440,7 +441,7 @@ func (l *Lexer) looksLikeCommodity(value string) bool {
 }
 
 func (l *Lexer) looksLikeDate() bool {
-	if l.pos+10 > len(l.input) {
+	if l.pos+8 > len(l.input) {
 		return false
 	}
 
@@ -452,6 +453,10 @@ func (l *Lexer) looksLikeDate() bool {
 
 	sep := l.input[l.pos+4]
 	if sep != '-' && sep != '/' && sep != '.' {
+		return false
+	}
+
+	if !l.isDigit(l.input[l.pos+5]) {
 		return false
 	}
 
