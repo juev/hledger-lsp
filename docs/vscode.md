@@ -4,7 +4,7 @@
 
 1. Install hledger-lsp binary (see [main README](../README.md#-installation))
 
-2. Install a generic LSP client extension, for example [vscode-lsp-client](https://marketplace.visualstudio.com/items?itemName=APerezSilva.vscode-lsp-client) or configure manually.
+2. Install [vscode-lspconfig](https://marketplace.visualstudio.com/items?itemName=whtsht.vscode-lspconfig) extension for generic LSP support.
 
 ## Configuration
 
@@ -12,15 +12,18 @@ Add to your `settings.json`:
 
 ```json
 {
-  "lsp-client.serverPath": "hledger-lsp",
-  "lsp-client.languageId": "hledger",
-  "lsp-client.fileExtensions": [".journal", ".hledger"]
+  "vscode-lspconfig.serverConfigurations": [
+    {
+      "name": "hledger-lsp",
+      "document_selector": [
+        {"pattern": "**/*.journal"},
+        {"pattern": "**/*.hledger"}
+      ],
+      "command": ["hledger-lsp"]
+    }
+  ]
 }
 ```
-
-Or if using a different LSP client, configure it to:
-- Run `hledger-lsp` as the language server
-- Associate with `.journal` and `.hledger` file extensions
 
 ## Alternative: hledger-vscode Extension
 
