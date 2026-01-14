@@ -182,6 +182,8 @@ func FormatPostingWithFormats(posting *ast.Posting, alignCol int, commodityForma
 	return sb.String()
 }
 
+// formatAmountQuantity returns formatted quantity string.
+// Priority: commodity directive format > original raw format > decimal string.
 func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]NumberFormat) string {
 	if amount == nil {
 		return ""

@@ -321,11 +321,10 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 
 	rawNumberStr := p.current.Value
-	numberStr := rawNumberStr
-	if sign == "-" && !strings.HasPrefix(numberStr, "-") {
-		numberStr = "-" + numberStr
+	if sign == "-" && !strings.HasPrefix(rawNumberStr, "-") {
 		rawNumberStr = "-" + rawNumberStr
 	}
+	numberStr := rawNumberStr
 
 	numberStr = strings.ReplaceAll(numberStr, " ", "")
 	numberStr = normalizeNumber(numberStr)
