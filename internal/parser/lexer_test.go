@@ -387,6 +387,154 @@ func assertTokenTypesAndValues(t *testing.T, expected, actual []Token) {
 	}
 }
 
+func TestLexer_UnicodeAccountNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Token
+	}{
+		{
+			name:  "cyrillic account in posting",
+			input: "    Активы:Банк  100 RUB",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "Активы:Банк"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "RUB"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "cyrillic account directive",
+			input: "account Активы:Банк",
+			want: []Token{
+				{Type: TokenDirective, Value: "account"},
+				{Type: TokenAccount, Value: "Активы:Банк"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "chinese account name",
+			input: "    资产:银行  100 CNY",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "资产:银行"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "CNY"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "mixed unicode and latin",
+			input: "    Расходы:Food  50 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "Расходы:Food"},
+				{Type: TokenNumber, Value: "50"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.want, tokens)
+		})
+	}
+}
+
+func TestLexer_YearDirective(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Token
+	}{
+		{
+			name:  "Y directive with year",
+			input: "Y2026",
+			want: []Token{
+				{Type: TokenDirective, Value: "Y"},
+				{Type: TokenNumber, Value: "2026"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "Y directive with space",
+			input: "Y 2026",
+			want: []Token{
+				{Type: TokenDirective, Value: "Y"},
+				{Type: TokenNumber, Value: "2026"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "year directive full",
+			input: "year 2025",
+			want: []Token{
+				{Type: TokenDirective, Value: "year"},
+				{Type: TokenNumber, Value: "2025"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.want, tokens)
+		})
+	}
+}
+
+func TestLexer_PartialDate(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Token
+	}{
+		{
+			name:  "partial date MM-DD",
+			input: "01-02 description",
+			want: []Token{
+				{Type: TokenDate, Value: "01-02"},
+				{Type: TokenText, Value: "description"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "partial date MM/DD",
+			input: "01/02 description",
+			want: []Token{
+				{Type: TokenDate, Value: "01/02"},
+				{Type: TokenText, Value: "description"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "partial date with status",
+			input: "01-02 * cleared tx",
+			want: []Token{
+				{Type: TokenDate, Value: "01-02"},
+				{Type: TokenStatus, Value: "*"},
+				{Type: TokenText, Value: "cleared tx"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.want, tokens)
+		})
+	}
+}
+
 func TestLexer_Date2(t *testing.T) {
 	tests := []struct {
 		name  string

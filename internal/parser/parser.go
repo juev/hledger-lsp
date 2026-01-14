@@ -20,9 +20,10 @@ func (e ParseError) Error() string {
 }
 
 type Parser struct {
-	lexer   *Lexer
-	current Token
-	errors  []ParseError
+	lexer       *Lexer
+	current     Token
+	errors      []ParseError
+	defaultYear int
 }
 
 func Parse(input string) (*ast.Journal, []ParseError) {
@@ -154,34 +155,54 @@ func (p *Parser) parseDate() *ast.Date {
 	}
 
 	parts := strings.Split(value, string(sep))
-	if len(parts) != 3 {
+
+	switch len(parts) {
+	case 2:
+		if p.defaultYear == 0 {
+			p.errorAt(pos, "partial date requires Y directive: %s", value)
+			return nil
+		}
+		month, err := strconv.Atoi(parts[0])
+		if err != nil {
+			p.errorAt(pos, "invalid month: %s", parts[0])
+			return nil
+		}
+		day, err := strconv.Atoi(parts[1])
+		if err != nil {
+			p.errorAt(pos, "invalid day: %s", parts[1])
+			return nil
+		}
+		return &ast.Date{
+			Year:  p.defaultYear,
+			Month: month,
+			Day:   day,
+			Range: ast.Range{Start: toASTPosition(pos)},
+		}
+	case 3:
+		year, err := strconv.Atoi(parts[0])
+		if err != nil {
+			p.errorAt(pos, "invalid year: %s", parts[0])
+			return nil
+		}
+		month, err := strconv.Atoi(parts[1])
+		if err != nil {
+			p.errorAt(pos, "invalid month: %s", parts[1])
+			return nil
+		}
+		day, err := strconv.Atoi(parts[2])
+		if err != nil {
+			p.errorAt(pos, "invalid day: %s", parts[2])
+			return nil
+		}
+		return &ast.Date{
+			Year:  year,
+			Month: month,
+			Day:   day,
+			Range: ast.Range{Start: toASTPosition(pos)},
+		}
+	default:
 		p.errorAt(pos, "invalid date format: %s", value)
 		return nil
-	}
-
-	year, err := strconv.Atoi(parts[0])
-	if err != nil {
-		p.errorAt(pos, "invalid year: %s", parts[0])
-		return nil
-	}
-
-	month, err := strconv.Atoi(parts[1])
-	if err != nil {
-		p.errorAt(pos, "invalid month: %s", parts[1])
-		return nil
-	}
-
-	day, err := strconv.Atoi(parts[2])
-	if err != nil {
-		p.errorAt(pos, "invalid day: %s", parts[2])
-		return nil
-	}
-
-	return &ast.Date{
-		Year:  year,
-		Month: month,
-		Day:   day,
-		Range: ast.Range{Start: toASTPosition(pos)},
 	}
 }
 
@@ -360,6 +381,8 @@ func (p *Parser) parseDirective() ast.Directive {
 		return p.parseIncludeDirective(pos)
 	case "P":
 		return p.parsePriceDirective(pos)
+	case "Y", "year":
+		return p.parseYearDirective(pos)
 	default:
 		p.skipToNextLine()
 		return nil
@@ -367,22 +390,42 @@ func (p *Parser) parseDirective() ast.Directive {
 }
 
 func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
-	if p.current.Type != TokenAccount {
+	if p.current.Type != TokenAccount && p.current.Type != TokenText {
 		p.error("expected account name")
 		p.skipToNextLine()
 		return nil
 	}
 
+	accountName := p.current.Value
+	accountPos := p.current.Pos
+	p.advance()
+
+	if p.current.Type == TokenText {
+		accountName += " " + p.current.Value
+		p.advance()
+	}
+
 	dir := ast.AccountDirective{
 		Account: ast.Account{
-			Name:  p.current.Value,
-			Parts: strings.Split(p.current.Value, ":"),
-			Range: ast.Range{Start: toASTPosition(p.current.Pos)},
+			Name:  accountName,
+			Parts: strings.Split(accountName, ":"),
+			Range: ast.Range{Start: toASTPosition(accountPos)},
 		},
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
-	p.advance()
-	p.skipToNextLine()
+
+	if p.current.Type == TokenComment {
+		dir.Comment = p.current.Value
+		dir.Tags = parseTags(p.current.Value)
+		p.advance()
+	}
+
+	for p.current.Type != TokenNewline && p.current.Type != TokenEOF {
+		p.advance()
+	}
+
+	dir.Subdirs = p.parseSubdirectives()
+
 	return dir
 }
 
@@ -391,7 +434,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
 
-	if p.current.Type == TokenCommodity {
+	if p.current.Type == TokenCommodity || p.current.Type == TokenText {
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
 			Range:  ast.Range{Start: toASTPosition(p.current.Pos)},
@@ -399,22 +442,44 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		p.advance()
 	}
 
-	p.skipToNextLine()
+	for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
+		p.advance()
+	}
+	if p.current.Type == TokenComment {
+		p.advance()
+	}
+
+	dir.Subdirs = p.parseSubdirectives()
+
+	if format, ok := dir.Subdirs["format"]; ok {
+		dir.Format = format
+	}
+	if note, ok := dir.Subdirs["note"]; ok {
+		dir.Note = note
+	}
+
 	return dir
 }
 
 func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {
-	if p.current.Type != TokenText {
+	var path strings.Builder
+
+	for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
+		path.WriteString(p.current.Value)
+		p.advance()
+	}
+
+	pathStr := strings.TrimSpace(path.String())
+	if pathStr == "" {
 		p.error("expected file path")
 		p.skipToNextLine()
 		return nil
 	}
 
 	inc := ast.Include{
-		Path:  p.current.Value,
+		Path:  pathStr,
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
-	p.advance()
 	p.skipToNextLine()
 	return inc
 }
@@ -451,6 +516,89 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	dir.Price = *price
 
 	dir.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return dir
+}
+
+func (p *Parser) parseSubdirectives() map[string]string {
+	subdirs := make(map[string]string)
+
+	for p.current.Type == TokenNewline {
+		p.advance()
+
+		if p.current.Type != TokenIndent {
+			break
+		}
+		p.advance()
+
+		if p.current.Type == TokenComment {
+			p.advance()
+			continue
+		}
+
+		if p.current.Type == TokenNewline || p.current.Type == TokenEOF {
+			continue
+		}
+
+		if p.current.Type == TokenText {
+			line := p.current.Value
+			p.advance()
+
+			spaceIdx := strings.Index(line, " ")
+			if spaceIdx > 0 {
+				name := line[:spaceIdx]
+				value := strings.TrimSpace(line[spaceIdx+1:])
+				subdirs[name] = value
+			} else {
+				subdirs[line] = ""
+			}
+			continue
+		}
+
+		name := ""
+		if p.current.Type == TokenDirective {
+			name = p.current.Value
+			p.advance()
+		} else {
+			p.skipToNextLine()
+			continue
+		}
+
+		var value strings.Builder
+		for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
+			value.WriteString(p.current.Value)
+			if p.current.Type == TokenNumber || p.current.Type == TokenCommodity || p.current.Type == TokenText {
+				value.WriteString(" ")
+			}
+			p.advance()
+		}
+
+		subdirs[name] = strings.TrimSpace(value.String())
+	}
+
+	return subdirs
+}
+
+func (p *Parser) parseYearDirective(startPos Position) ast.Directive {
+	if p.current.Type != TokenNumber {
+		p.error("expected year")
+		p.skipToNextLine()
+		return nil
+	}
+
+	year, err := strconv.Atoi(p.current.Value)
+	if err != nil || year < 1900 || year > 2200 {
+		p.error("invalid year: %s", p.current.Value)
+		p.skipToNextLine()
+		return nil
+	}
+
+	p.defaultYear = year
+	dir := ast.YearDirective{
+		Year:  year,
+		Range: ast.Range{Start: toASTPosition(startPos)},
+	}
+	p.advance()
 	p.skipToNextLine()
 	return dir
 }

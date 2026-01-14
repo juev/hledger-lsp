@@ -3,6 +3,7 @@ module github.com/juev/hledger-lsp
 go 1.24
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.9.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 	go.lsp.dev/jsonrpc2 v0.10.0

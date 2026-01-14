@@ -541,3 +541,156 @@ func TestParser_TagsInPostingComment(t *testing.T) {
 	assert.Equal(t, "receipt", p.Tags[1].Name)
 	assert.Equal(t, "123", p.Tags[1].Value)
 }
+
+func TestParser_YearDirective(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		year  int
+	}{
+		{
+			name:  "Y directive",
+			input: "Y2026",
+			year:  2026,
+		},
+		{
+			name:  "Y with space",
+			input: "Y 2026",
+			year:  2026,
+		},
+		{
+			name:  "year directive",
+			input: "year 2025",
+			year:  2025,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Directives, 1)
+
+			dir, ok := journal.Directives[0].(ast.YearDirective)
+			require.True(t, ok)
+			assert.Equal(t, tt.year, dir.Year)
+		})
+	}
+}
+
+func TestParser_PartialDate(t *testing.T) {
+	input := `Y2026
+01-02 Магазин
+    Расходы:Продукты  100 RUB
+    Активы:Банк`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, 2026, tx.Date.Year)
+	assert.Equal(t, 1, tx.Date.Month)
+	assert.Equal(t, 2, tx.Date.Day)
+	assert.Equal(t, "Магазин", tx.Description)
+}
+
+func TestParser_PartialDateWithoutYear(t *testing.T) {
+	input := `01-02 test
+    e:f  $1
+    a:c`
+
+	_, errs := Parse(input)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errs[0].Message, "partial date requires Y directive")
+}
+
+func TestParser_UnicodeAccountDirective(t *testing.T) {
+	input := `account Активы:Банк`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.AccountDirective)
+	require.True(t, ok)
+	assert.Equal(t, "Активы:Банк", dir.Account.Name)
+}
+
+func TestParser_UnicodeTransaction(t *testing.T) {
+	input := `2024-01-15 Покупка продуктов
+    Расходы:Продукты  100 RUB
+    Активы:Наличные`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, "Покупка продуктов", tx.Description)
+	assert.Equal(t, "Расходы:Продукты", tx.Postings[0].Account.Name)
+	assert.Equal(t, "Активы:Наличные", tx.Postings[1].Account.Name)
+}
+
+func TestParser_CommodityDirectiveWithFormat(t *testing.T) {
+	input := `commodity RUB
+  format 1.000,00 RUB`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.CommodityDirective)
+	require.True(t, ok)
+	assert.Equal(t, "RUB", dir.Commodity.Symbol)
+	assert.Equal(t, "1.000,00 RUB", dir.Format)
+}
+
+func TestParser_CommodityDirectiveMultipleSubdirs(t *testing.T) {
+	input := `commodity EUR
+  format 1.000,00 EUR
+  note European currency`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.CommodityDirective)
+	require.True(t, ok)
+	assert.Equal(t, "EUR", dir.Commodity.Symbol)
+	assert.Equal(t, "1.000,00 EUR", dir.Format)
+	assert.Equal(t, "European currency", dir.Note)
+}
+
+func TestParser_AccountDirectiveWithComment(t *testing.T) {
+	input := `account Активы  ; type:Asset`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.AccountDirective)
+	require.True(t, ok)
+	assert.Equal(t, "Активы", dir.Account.Name)
+	assert.Contains(t, dir.Comment, "type:Asset")
+	require.Len(t, dir.Tags, 1)
+	assert.Equal(t, "type", dir.Tags[0].Name)
+	assert.Equal(t, "Asset", dir.Tags[0].Value)
+}
+
+func TestParser_AccountDirectiveWithSubdirs(t *testing.T) {
+	input := `account expenses:food
+  alias food
+  note Food and groceries`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+
+	dir, ok := journal.Directives[0].(ast.AccountDirective)
+	require.True(t, ok)
+	assert.Equal(t, "expenses:food", dir.Account.Name)
+	assert.Equal(t, "food", dir.Subdirs["alias"])
+	assert.Equal(t, "Food and groceries", dir.Subdirs["note"])
+}

@@ -54,3 +54,11 @@ func isSuspiciousPath(path string) bool {
 	}
 	return depth > 5
 }
+
+func IsGlobPattern(path string) bool {
+	return strings.ContainsAny(path, "*?[") || strings.Contains(path, "<->")
+}
+
+func ConvertHledgerGlob(pattern string) string {
+	return strings.ReplaceAll(pattern, "<->", "**")
+}

@@ -299,3 +299,128 @@ func TestLoader_SelfInclude(t *testing.T) {
 		t.Error("expected cycle detection error for self-include, got none")
 	}
 }
+
+func TestLoader_GlobPattern(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+	fileA := filepath.Join(dir, "a.journal")
+	fileB := filepath.Join(dir, "b.journal")
+
+	mainContent := `include *.journal
+
+2024-01-01 * main transaction
+    expenses:main  $10
+    assets:cash
+`
+	contentA := `2024-06-15 * transaction A
+    expenses:a  $20
+    assets:cash
+`
+	contentB := `2025-06-15 * transaction B
+    expenses:b  $30
+    assets:cash
+`
+	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileA, []byte(contentA), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fileB, []byte(contentB), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	result, errs := loader.Load(mainFile)
+
+	for _, e := range errs {
+		if e.Kind == ErrorCycleDetected {
+			continue
+		}
+		t.Errorf("unexpected error: %v", e)
+	}
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	allTx := result.AllTransactions()
+	if len(allTx) != 3 {
+		t.Errorf("expected 3 transactions, got %d", len(allTx))
+	}
+}
+
+func TestLoader_GlobPatternNoMatch(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+
+	content := `include *.nonexistent
+
+2024-01-15 * transaction
+    expenses:food  $50
+    assets:cash
+`
+	if err := os.WriteFile(mainFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	result, errs := loader.Load(mainFile)
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	var notFoundErrors []LoadError
+	for _, e := range errs {
+		if e.Kind == ErrorFileNotFound {
+			notFoundErrors = append(notFoundErrors, e)
+		}
+	}
+
+	if len(notFoundErrors) == 0 {
+		t.Error("expected error for no matching files")
+	}
+}
+
+func TestLoader_HledgerGlobSyntax(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+	subdir := filepath.Join(dir, "accounts")
+	subFile := filepath.Join(subdir, "accounts.journal")
+
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mainContent := `include <->/*.journal
+
+2024-01-01 * main
+    e:main  $10
+    a:cash
+`
+	subContent := `account expenses:food
+`
+	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(subFile, []byte(subContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	result, errs := loader.Load(mainFile)
+
+	for _, e := range errs {
+		t.Logf("error: %v", e)
+	}
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	allDirs := result.AllDirectives()
+	if len(allDirs) != 1 {
+		t.Errorf("expected 1 directive from subdir, got %d", len(allDirs))
+	}
+}

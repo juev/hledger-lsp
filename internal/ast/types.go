@@ -115,6 +115,8 @@ type Directive interface {
 type AccountDirective struct {
 	Account Account
 	Tags    []Tag
+	Comment string
+	Subdirs map[string]string
 	Range   Range
 }
 
@@ -124,6 +126,9 @@ func (d AccountDirective) GetRange() Range { return d.Range }
 type CommodityDirective struct {
 	Commodity Commodity
 	Format    string
+	Alias     []string
+	Note      string
+	Subdirs   map[string]string
 	Range     Range
 }
 
@@ -147,6 +152,14 @@ type PriceDirective struct {
 
 func (PriceDirective) directive()        {}
 func (d PriceDirective) GetRange() Range { return d.Range }
+
+type YearDirective struct {
+	Year  int
+	Range Range
+}
+
+func (YearDirective) directive()        {}
+func (d YearDirective) GetRange() Range { return d.Range }
 
 type Comment struct {
 	Text  string

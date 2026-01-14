@@ -20,7 +20,7 @@ go test -v ./internal/parser -run TestLexer   # specific test
 go test -cover ./...                          # with coverage
 
 # Lint
-golangci-lint run ./...
+golangci-lint run --fix ./...
 ```
 
 ## Architecture
