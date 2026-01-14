@@ -57,3 +57,26 @@ func TestUTF16OffsetToByteOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestUTF16OffsetToByteOffset_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		utf16Off    int
+		wantByteOff int
+	}{
+		{"negative offset returns 0", "hello", -1, 0},
+		{"negative offset on empty", "", -5, 0},
+		{"large offset returns string length", "hello", 100, 5},
+		{"large offset on cyrillic", "Активы", 100, 12},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := utf16OffsetToByteOffset(tt.input, tt.utf16Off)
+			if got != tt.wantByteOff {
+				t.Errorf("utf16OffsetToByteOffset(%q, %d) = %d, want %d", tt.input, tt.utf16Off, got, tt.wantByteOff)
+			}
+		})
+	}
+}

@@ -247,6 +247,13 @@ func (l *Lexer) scanNumber() Token {
 		case ch == ' ' && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1]):
 			l.advance()
 		case (ch == 'E' || ch == 'e') && hasDigits:
+			nextPos := l.pos + 1
+			if nextPos < len(l.input) && (l.input[nextPos] == '+' || l.input[nextPos] == '-') {
+				nextPos++
+			}
+			if nextPos >= len(l.input) || !l.isDigit(l.input[nextPos]) {
+				goto done
+			}
 			l.advance()
 			if l.pos < len(l.input) && (l.peek() == '+' || l.peek() == '-') {
 				l.advance()

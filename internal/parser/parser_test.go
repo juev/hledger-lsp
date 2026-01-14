@@ -740,3 +740,61 @@ func TestParser_ScientificNotation(t *testing.T) {
 	expected := decimal.NewFromInt(1000)
 	assert.True(t, p.Amount.Quantity.Equal(expected), "got %s", p.Amount.Quantity.String())
 }
+
+func TestParser_PositiveSignBeforeCommodity(t *testing.T) {
+	input := `2024-01-15 test
+    assets:cash  +$100
+    expenses:food`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+	require.NotNil(t, p.Amount)
+	assert.True(t, p.Amount.Quantity.Equal(decimal.NewFromInt(100)), "got %s", p.Amount.Quantity.String())
+	assert.Equal(t, "$", p.Amount.Commodity.Symbol)
+}
+
+func TestParser_EuropeanNumberFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "european with dot grouping",
+			input: `2024-01-15 test
+    assets:cash  1.234.567,89 EUR
+    expenses:food`,
+			expected: "1234567.89",
+		},
+		{
+			name: "us with comma grouping",
+			input: `2024-01-15 test
+    assets:cash  1,234,567.89 USD
+    expenses:food`,
+			expected: "1234567.89",
+		},
+		{
+			name: "multiple dots as grouping",
+			input: `2024-01-15 test
+    assets:cash  1.234.567 EUR
+    expenses:food`,
+			expected: "1234567",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			p := journal.Transactions[0].Postings[0]
+			require.NotNil(t, p.Amount)
+			expected, _ := decimal.NewFromString(tt.expected)
+			assert.True(t, p.Amount.Quantity.Equal(expected), "got %s, want %s", p.Amount.Quantity.String(), tt.expected)
+		})
+	}
+}

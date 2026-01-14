@@ -649,3 +649,48 @@ func TestLexer_NumberFormatsExtended(t *testing.T) {
 		})
 	}
 }
+
+func TestLexer_InvalidScientificNotation(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantNumber string
+	}{
+		{
+			name:       "E without digits",
+			input:      "    a:b  1E",
+			wantNumber: "1",
+		},
+		{
+			name:       "E+ without digits",
+			input:      "    a:b  1E+",
+			wantNumber: "1",
+		},
+		{
+			name:       "E- without digits",
+			input:      "    a:b  1E-",
+			wantNumber: "1",
+		},
+		{
+			name:       "E followed by non-digit",
+			input:      "    a:b  1Ex",
+			wantNumber: "1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			var numberToken *Token
+			for i := range tokens {
+				if tokens[i].Type == TokenNumber {
+					numberToken = &tokens[i]
+					break
+				}
+			}
+			require.NotNil(t, numberToken, "expected a Number token")
+			assert.Equal(t, tt.wantNumber, numberToken.Value, "E without digits should not be included in number")
+		})
+	}
+}
