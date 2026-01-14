@@ -320,9 +320,11 @@ func (p *Parser) parseAmount() *ast.Amount {
 		return nil
 	}
 
-	numberStr := p.current.Value
+	rawNumberStr := p.current.Value
+	numberStr := rawNumberStr
 	if sign == "-" && !strings.HasPrefix(numberStr, "-") {
 		numberStr = "-" + numberStr
+		rawNumberStr = "-" + rawNumberStr
 	}
 
 	numberStr = strings.ReplaceAll(numberStr, " ", "")
@@ -334,6 +336,7 @@ func (p *Parser) parseAmount() *ast.Amount {
 		return nil
 	}
 	amount.Quantity = qty
+	amount.RawQuantity = rawNumberStr
 	p.advance()
 
 	if p.current.Type == TokenCommodity && amount.Commodity.Symbol == "" {

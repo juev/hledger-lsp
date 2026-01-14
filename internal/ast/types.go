@@ -76,9 +76,10 @@ type Account struct {
 }
 
 type Amount struct {
-	Quantity  decimal.Decimal
-	Commodity Commodity
-	Range     Range
+	Quantity    decimal.Decimal
+	RawQuantity string
+	Commodity   Commodity
+	Range       Range
 }
 
 type Commodity struct {

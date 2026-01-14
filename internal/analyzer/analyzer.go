@@ -24,6 +24,8 @@ func (a *Analyzer) Analyze(journal *ast.Journal) *AnalysisResult {
 
 	declaredAccounts := collectDeclaredAccounts(journal)
 
+	declaredCommodities := collectDeclaredCommodities(journal)
+
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
 		balanceResult := CheckBalance(tx)
@@ -36,6 +38,11 @@ func (a *Analyzer) Analyze(journal *ast.Journal) *AnalysisResult {
 		if len(declaredAccounts) > 0 {
 			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
 			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
+		}
+
+		if len(declaredCommodities) > 0 {
+			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
+			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
 		}
 	}
 
@@ -61,6 +68,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.Tags = collectTagsFromResolved(resolved)
 
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
+	declaredCommodities := collectDeclaredCommoditiesFromResolved(resolved)
 
 	for i := range resolved.Primary.Transactions {
 		tx := &resolved.Primary.Transactions[i]
@@ -74,6 +82,11 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		if len(declaredAccounts) > 0 {
 			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
 			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
+		}
+
+		if len(declaredCommodities) > 0 {
+			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
+			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
 		}
 	}
 
@@ -247,4 +260,53 @@ func (a *Analyzer) createBalanceDiagnostic(tx *ast.Transaction, br *BalanceResul
 		Code:     "UNBALANCED",
 		Message:  fmt.Sprintf("transaction does not balance: %s", msg),
 	}
+}
+
+func collectDeclaredCommodities(journal *ast.Journal) map[string]bool {
+	declared := make(map[string]bool)
+	for _, dir := range journal.Directives {
+		switch d := dir.(type) {
+		case *ast.CommodityDirective:
+			declared[d.Commodity.Symbol] = true
+		case ast.CommodityDirective:
+			declared[d.Commodity.Symbol] = true
+		}
+	}
+	return declared
+}
+
+func collectDeclaredCommoditiesFromResolved(resolved *include.ResolvedJournal) map[string]bool {
+	declared := make(map[string]bool)
+	if resolved.Primary != nil {
+		for k := range collectDeclaredCommodities(resolved.Primary) {
+			declared[k] = true
+		}
+	}
+	for _, journal := range resolved.Files {
+		for k := range collectDeclaredCommodities(journal) {
+			declared[k] = true
+		}
+	}
+	return declared
+}
+
+func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) []Diagnostic {
+	var diags []Diagnostic
+	seen := make(map[string]bool)
+
+	for _, posting := range tx.Postings {
+		if posting.Amount != nil && posting.Amount.Commodity.Symbol != "" {
+			symbol := posting.Amount.Commodity.Symbol
+			if !declared[symbol] && !seen[symbol] {
+				seen[symbol] = true
+				diags = append(diags, Diagnostic{
+					Range:    posting.Amount.Commodity.Range,
+					Severity: SeverityHint,
+					Code:     "UNDECLARED_COMMODITY",
+					Message:  fmt.Sprintf("commodity '%s' has no directive", symbol),
+				})
+			}
+		}
+	}
+	return diags
 }

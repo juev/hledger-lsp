@@ -213,7 +213,7 @@ func (l *Lexer) scanAccount() Token {
 			continue
 		}
 
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ':' && r != '-' && r != '_' {
+		if isAccountTerminator(r) {
 			break
 		}
 
@@ -224,6 +224,14 @@ func (l *Lexer) scanAccount() Token {
 
 	value := l.input[start:lastNonSpace]
 	return Token{Type: TokenAccount, Value: value, Pos: startPos, End: l.position()}
+}
+
+func isAccountTerminator(r rune) bool {
+	switch r {
+	case '\t', '\n', '\r', ';', '@', '=', '(', ')', '[', ']':
+		return true
+	}
+	return false
 }
 
 func (l *Lexer) scanNumber() Token {
@@ -479,7 +487,7 @@ func (l *Lexer) looksLikeAccount() bool {
 				break
 			}
 			i += size
-		} else if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+		} else if isAccountTerminator(r) {
 			break
 		} else {
 			i += size

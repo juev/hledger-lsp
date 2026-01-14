@@ -446,6 +446,129 @@ func TestLexer_UnicodeAccountNames(t *testing.T) {
 	}
 }
 
+func TestLexer_SpecialCharactersInAccountNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []Token
+	}{
+		{
+			name:  "account with slash",
+			input: "    equity:opening/closing balances  100 RUB",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "equity:opening/closing balances"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "RUB"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account with dot",
+			input: "    assets:bank.main  100 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:bank.main"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account with ampersand",
+			input: "    expenses:food&drink  50 EUR",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food&drink"},
+				{Type: TokenNumber, Value: "50"},
+				{Type: TokenCommodity, Value: "EUR"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account with apostrophe",
+			input: "    liabilities:john's card  200 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "liabilities:john's card"},
+				{Type: TokenNumber, Value: "200"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account with hash inside",
+			input: "    expenses:item#123  10 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:item#123"},
+				{Type: TokenNumber, Value: "10"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account with plus",
+			input: "    assets:c++fund  100 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:c++fund"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account stops at semicolon",
+			input: "    assets:bank  100 USD  ; comment",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:bank"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenComment, Value: " comment"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account stops at at-sign for cost",
+			input: "    assets:bank  100 USD @ 90 EUR",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:bank"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenAt, Value: "@"},
+				{Type: TokenNumber, Value: "90"},
+				{Type: TokenCommodity, Value: "EUR"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "account stops at equals for balance assertion",
+			input: "    assets:bank  100 USD = 500 USD",
+			want: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:bank"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEquals, Value: "="},
+				{Type: TokenNumber, Value: "500"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.want, tokens)
+		})
+	}
+}
+
 func TestLexer_YearDirective(t *testing.T) {
 	tests := []struct {
 		name  string

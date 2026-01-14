@@ -18,19 +18,32 @@ func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
 		return nil
 	}
 
+	commodityFormats := extractCommodityFormats(journal)
 	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		txEdits := formatTransaction(tx, mapper)
+		txEdits := formatTransaction(tx, mapper, commodityFormats)
 		edits = append(edits, txEdits...)
 	}
 
 	return edits
 }
 
-func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper) []protocol.TextEdit {
+func extractCommodityFormats(journal *ast.Journal) map[string]NumberFormat {
+	formats := make(map[string]NumberFormat)
+	for _, dir := range journal.Directives {
+		if cd, ok := dir.(ast.CommodityDirective); ok {
+			if cd.Format != "" {
+				formats[cd.Commodity.Symbol] = ParseNumberFormat(cd.Format)
+			}
+		}
+	}
+	return formats
+}
+
+func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]NumberFormat) []protocol.TextEdit {
 	if len(tx.Postings) == 0 {
 		return nil
 	}
@@ -40,7 +53,7 @@ func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper) []pr
 
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
-		formatted := FormatPosting(posting, alignCol)
+		formatted := FormatPostingWithFormats(posting, alignCol, commodityFormats)
 		line := posting.Range.Start.Line - 1
 
 		edit := protocol.TextEdit{
@@ -78,6 +91,10 @@ func CalculateAlignmentColumn(postings []ast.Posting) int {
 }
 
 func FormatPosting(posting *ast.Posting, alignCol int) string {
+	return FormatPostingWithFormats(posting, alignCol, nil)
+}
+
+func FormatPostingWithFormats(posting *ast.Posting, alignCol int, commodityFormats map[string]NumberFormat) string {
 	var sb strings.Builder
 
 	sb.WriteString(defaultIndent)
@@ -117,7 +134,7 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 			sb.WriteString(posting.Amount.Commodity.Symbol)
 		}
 
-		sb.WriteString(posting.Amount.Quantity.String())
+		sb.WriteString(formatAmountQuantity(posting.Amount, commodityFormats))
 
 		if posting.Amount.Commodity.Position == ast.CommodityRight {
 			sb.WriteString(" ")
@@ -134,7 +151,7 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 		if posting.Cost.Amount.Commodity.Position == ast.CommodityLeft {
 			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
 		}
-		sb.WriteString(posting.Cost.Amount.Quantity.String())
+		sb.WriteString(formatAmountQuantity(&posting.Cost.Amount, commodityFormats))
 		if posting.Cost.Amount.Commodity.Position == ast.CommodityRight {
 			sb.WriteString(" ")
 			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
@@ -150,7 +167,7 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityLeft {
 			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
 		}
-		sb.WriteString(posting.BalanceAssertion.Amount.Quantity.String())
+		sb.WriteString(formatAmountQuantity(&posting.BalanceAssertion.Amount, commodityFormats))
 		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityRight {
 			sb.WriteString(" ")
 			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
@@ -163,4 +180,16 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 	}
 
 	return sb.String()
+}
+
+func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]NumberFormat) string {
+	if commodityFormats != nil {
+		if format, ok := commodityFormats[amount.Commodity.Symbol]; ok {
+			return FormatNumber(amount.Quantity, format)
+		}
+	}
+	if amount.RawQuantity != "" {
+		return amount.RawQuantity
+	}
+	return amount.Quantity.String()
 }

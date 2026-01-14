@@ -118,3 +118,56 @@ func TestFormatDocument_EmptyDocument(t *testing.T) {
 	edits := FormatDocument(journal, "")
 	assert.Empty(t, edits)
 }
+
+func TestFormatDocument_WithCommodityFormat(t *testing.T) {
+	input := `commodity RUB
+  format 1 000,00 RUB
+
+2024-01-15 test
+    expenses:food  846 661,89 RUB
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	require.NotEmpty(t, journal.Transactions[0].Postings)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && len(edit.NewText) > 0 {
+			if edit.NewText == "    expenses:food  846 661,89 RUB" {
+				found = true
+				break
+			}
+		}
+	}
+	assert.True(t, found, "Expected formatted amount with commodity format")
+}
+
+func TestFormatDocument_PreservesRawQuantityWithoutCommodityDirective(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  1 000,50 EUR
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	require.NotEmpty(t, journal.Transactions[0].Postings)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && len(edit.NewText) > 0 {
+			if edit.NewText == "    expenses:food  1 000,50 EUR" {
+				found = true
+				break
+			}
+		}
+	}
+	assert.True(t, found, "Expected preserved raw quantity format")
+}
