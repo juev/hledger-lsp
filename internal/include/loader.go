@@ -25,8 +25,8 @@ type Limits struct {
 }
 
 type Loader struct {
-	mu    sync.RWMutex
-	cache map[string]*ast.Journal
+	mu     sync.RWMutex
+	cache  map[string]*ast.Journal
 	limits Limits
 }
 

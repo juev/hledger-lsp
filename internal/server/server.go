@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,16 +21,16 @@ import (
 )
 
 type Server struct {
-	client    protocol.Client
-	documents sync.Map
-	analyzer  *analyzer.Analyzer
-	loader    *include.Loader
-	resolved  sync.Map
-	cliClient *cli.Client
-	rootURI   string
-	workspace *workspace.Workspace
-	settings  serverSettings
-	settingsMu sync.RWMutex
+	client                protocol.Client
+	documents             sync.Map
+	analyzer              *analyzer.Analyzer
+	loader                *include.Loader
+	resolved              sync.Map
+	cliClient             *cli.Client
+	rootURI               string
+	workspace             *workspace.Workspace
+	settings              serverSettings
+	settingsMu            sync.RWMutex
 	supportsConfiguration bool
 }
 
@@ -147,6 +148,12 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 			}
 		}
 		s.documents.Store(params.TextDocument.URI, content)
+		if s.workspace != nil {
+			if path := uriToPath(params.TextDocument.URI); path != "" {
+				s.workspace.UpdateFile(path, content)
+				s.loader.InvalidateFile(path)
+			}
+		}
 		go s.publishDiagnostics(ctx, params.TextDocument.URI, content)
 	}
 	return nil
@@ -163,6 +170,16 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 }
 
 func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocumentParams) error {
+	if s.workspace != nil {
+		if path := uriToPath(params.TextDocument.URI); path != "" {
+			if content, ok := s.GetDocument(params.TextDocument.URI); ok {
+				s.workspace.UpdateFile(path, content)
+			} else if data, err := os.ReadFile(path); err == nil {
+				s.workspace.UpdateFile(path, string(data))
+			}
+			s.loader.InvalidateFile(path)
+		}
+	}
 	return nil
 }
 

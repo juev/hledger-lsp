@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func TestWorkspace_FindRootJournal_MainJournal(t *testing.T) {
@@ -288,4 +289,149 @@ func TestWorkspace_FindRootJournal_EnvWithTilde(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, customPath, ws.RootJournalPath())
+}
+
+func TestWorkspace_IndexSnapshot_FromIncludes(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include a.journal
+include sub/b.journal
+
+2024-02-01 Main Payee
+    assets:cash  $10
+    income:salary`
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0755))
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	aPath := filepath.Join(tmpDir, "a.journal")
+	aContent := `account expenses:food
+
+2024-02-02 Grocery
+    expenses:food  $5
+    assets:cash`
+	require.NoError(t, os.WriteFile(aPath, []byte(aContent), 0644))
+
+	bPath := filepath.Join(tmpDir, "sub", "b.journal")
+	bContent := `commodity EUR
+
+2024-02-03 Cafe
+    expenses:food  EUR 3
+    assets:cash`
+	require.NoError(t, os.WriteFile(bPath, []byte(bContent), 0644))
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	require.NotNil(t, snapshot.Accounts)
+	assert.Contains(t, snapshot.Accounts.All, "assets:cash")
+	assert.Contains(t, snapshot.Accounts.All, "expenses:food")
+	assert.Contains(t, snapshot.Payees, "Grocery")
+	assert.Contains(t, snapshot.Payees, "Cafe")
+	assert.Contains(t, snapshot.Commodities, "$")
+	assert.Contains(t, snapshot.Commodities, "EUR")
+}
+
+func TestWorkspace_IndexSnapshot_IncrementalUpdate(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include child.journal
+
+2024-02-01 Root
+    assets:wallet  $10
+    income:salary`
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	childContent := `2024-02-02 Lunch
+    expenses:food  $5
+    assets:cash`
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	updatedContent := `2024-02-02 Lunch
+    expenses:food  $5
+    assets:bank`
+	ws.UpdateFile(childPath, updatedContent)
+
+	snapshot := ws.IndexSnapshot()
+	assert.Contains(t, snapshot.Accounts.All, "assets:bank")
+	assert.NotContains(t, snapshot.Accounts.All, "assets:cash")
+	assert.Contains(t, snapshot.Accounts.All, "income:salary")
+}
+
+func TestWorkspace_IndexSnapshot_IncludeChange(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include one.journal`
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	onePath := filepath.Join(tmpDir, "one.journal")
+	oneContent := `2024-02-02 One
+    expenses:food  $5
+    assets:cash`
+	require.NoError(t, os.WriteFile(onePath, []byte(oneContent), 0644))
+
+	twoPath := filepath.Join(tmpDir, "two.journal")
+	twoContent := `2024-02-03 Two
+    expenses:travel  $20
+    assets:cash`
+	require.NoError(t, os.WriteFile(twoPath, []byte(twoContent), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	assert.Contains(t, snapshot.Accounts.All, "expenses:food")
+	assert.NotContains(t, snapshot.Accounts.All, "expenses:travel")
+
+	ws.UpdateFile(mainPath, "include one.journal\ninclude two.journal")
+	snapshot = ws.IndexSnapshot()
+	assert.Contains(t, snapshot.Accounts.All, "expenses:travel")
+
+	ws.UpdateFile(mainPath, "include two.journal")
+	snapshot = ws.IndexSnapshot()
+	assert.NotContains(t, snapshot.Accounts.All, "expenses:food")
+}
+
+func TestWorkspace_TransactionIndexKeys(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	content := `2024-03-01 Coffee Shop
+    expenses:food  $3
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	journal, errs := parser.Parse(content)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	key := buildTransactionKey(journal.Transactions[0])
+	snapshot := ws.IndexSnapshot()
+	entries := snapshot.Transactions[key]
+	require.Len(t, entries, 1)
+	assert.Equal(t, mainPath, entries[0].FilePath)
 }

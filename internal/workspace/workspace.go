@@ -27,6 +27,7 @@ type Workspace struct {
 	cachedFormats     map[string]formatter.NumberFormat
 	cachedCommodities map[string]bool
 	cachedAccounts    map[string]bool
+	index             *WorkspaceIndex
 }
 
 func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
@@ -35,6 +36,7 @@ func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
 		loader:       loader,
 		includeGraph: make(map[string][]string),
 		reverseGraph: make(map[string][]string),
+		index:        NewWorkspaceIndex(),
 	}
 }
 
@@ -47,6 +49,9 @@ func (w *Workspace) Initialize() error {
 	w.cachedFormats = nil
 	w.cachedCommodities = nil
 	w.cachedAccounts = nil
+	w.index = NewWorkspaceIndex()
+	w.includeGraph = make(map[string][]string)
+	w.reverseGraph = make(map[string][]string)
 
 	rootPath, err := w.findRootJournal()
 	if err != nil {
@@ -58,6 +63,7 @@ func (w *Workspace) Initialize() error {
 		resolved, errs := w.loader.Load(rootPath)
 		w.resolved = resolved
 		w.loadErrors = errs
+		w.buildIndexFromResolvedLocked()
 	}
 
 	return nil
@@ -200,6 +206,226 @@ func (w *Workspace) RootJournalPath() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.rootJournalPath
+}
+
+func (w *Workspace) IndexSnapshot() IndexSnapshot {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.index == nil {
+		return IndexSnapshot{}
+	}
+	return w.index.Snapshot()
+}
+
+func (w *Workspace) UpdateFile(path, content string) {
+	if path == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.rootJournalPath == "" || w.index == nil {
+		return
+	}
+	if !w.isWorkspaceFileLocked(path) {
+		return
+	}
+
+	oldIndex := w.index.FileIndex(path)
+	oldIncludes := []string(nil)
+	if oldIndex != nil {
+		oldIncludes = append([]string(nil), oldIndex.Includes...)
+	}
+
+	fileIndex, journal, _ := BuildFileIndexFromContent(path, content)
+	w.index.SetFileIndex(path, fileIndex)
+	w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
+	w.updateResolvedLocked(path, journal)
+	w.clearCachesLocked()
+
+	if !sameStringSlice(oldIncludes, fileIndex.Includes) {
+		w.refreshIncludeTreeLocked()
+	}
+}
+
+func (w *Workspace) buildIndexFromResolvedLocked() {
+	if w.index == nil {
+		w.index = NewWorkspaceIndex()
+	}
+	if w.resolved == nil || w.resolved.Primary == nil {
+		return
+	}
+
+	w.index.SetFileIndex(w.rootJournalPath, BuildFileIndexFromJournal(w.rootJournalPath, w.resolved.Primary))
+	w.updateIncludeEdgesLocked(w.rootJournalPath, nil, w.index.FileIndex(w.rootJournalPath).Includes)
+
+	for path, journal := range w.resolved.Files {
+		w.index.SetFileIndex(path, BuildFileIndexFromJournal(path, journal))
+		w.updateIncludeEdgesLocked(path, nil, w.index.FileIndex(path).Includes)
+	}
+}
+
+func (w *Workspace) updateResolvedLocked(path string, journal *ast.Journal) {
+	if w.resolved == nil {
+		w.resolved = include.NewResolvedJournal(nil)
+	}
+	if path == w.rootJournalPath {
+		w.resolved.Primary = journal
+		return
+	}
+	if journal == nil {
+		delete(w.resolved.Files, path)
+		return
+	}
+	w.resolved.Files[path] = journal
+}
+
+func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newIncludes []string) {
+	if len(oldIncludes) > 0 {
+		for _, inc := range oldIncludes {
+			w.reverseGraph[inc] = removeString(w.reverseGraph[inc], path)
+		}
+	}
+	w.includeGraph[path] = append([]string(nil), newIncludes...)
+	for _, inc := range newIncludes {
+		w.reverseGraph[inc] = addString(w.reverseGraph[inc], path)
+	}
+}
+
+func (w *Workspace) refreshIncludeTreeLocked() {
+	if w.rootJournalPath == "" || w.index == nil {
+		return
+	}
+
+	for {
+		reachable := w.computeReachableLocked()
+		w.removeUnreachableLocked(reachable)
+		added := w.addMissingReachableLocked(reachable)
+		if !added {
+			return
+		}
+	}
+}
+
+func (w *Workspace) computeReachableLocked() map[string]bool {
+	reachable := make(map[string]bool)
+	if w.rootJournalPath == "" {
+		return reachable
+	}
+	queue := []string{w.rootJournalPath}
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		if reachable[path] {
+			continue
+		}
+		reachable[path] = true
+		for _, inc := range w.includeGraph[path] {
+			if !reachable[inc] {
+				queue = append(queue, inc)
+			}
+		}
+	}
+	return reachable
+}
+
+func (w *Workspace) removeUnreachableLocked(reachable map[string]bool) {
+	var toRemove []string
+	for path := range w.index.fileIndexes {
+		if !reachable[path] {
+			toRemove = append(toRemove, path)
+		}
+	}
+	for _, path := range toRemove {
+		oldIndex := w.index.FileIndex(path)
+		if oldIndex != nil {
+			w.updateIncludeEdgesLocked(path, oldIndex.Includes, nil)
+		}
+		w.index.RemoveFile(path)
+		delete(w.includeGraph, path)
+		delete(w.reverseGraph, path)
+		if w.resolved != nil {
+			delete(w.resolved.Files, path)
+		}
+	}
+}
+
+func (w *Workspace) addMissingReachableLocked(reachable map[string]bool) bool {
+	added := false
+	for path := range reachable {
+		if w.index.FileIndex(path) != nil {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		fileIndex, journal, _ := BuildFileIndexFromContent(path, string(content))
+		w.index.SetFileIndex(path, fileIndex)
+		w.updateIncludeEdgesLocked(path, nil, fileIndex.Includes)
+		w.updateResolvedLocked(path, journal)
+		added = true
+	}
+	if added {
+		w.clearCachesLocked()
+	}
+	return added
+}
+
+func (w *Workspace) isWorkspaceFileLocked(path string) bool {
+	if path == w.rootJournalPath {
+		return true
+	}
+	if w.index.FileIndex(path) != nil {
+		return true
+	}
+	if len(w.reverseGraph[path]) > 0 {
+		return true
+	}
+	return false
+}
+
+func (w *Workspace) clearCachesLocked() {
+	w.cachedFormats = nil
+	w.cachedCommodities = nil
+	w.cachedAccounts = nil
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func removeString(values []string, target string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	result := values[:0]
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func addString(values []string, target string) []string {
+	for _, value := range values {
+		if value == target {
+			return values
+		}
+	}
+	return append(values, target)
 }
 
 func (w *Workspace) GetCommodityFormats() map[string]formatter.NumberFormat {
