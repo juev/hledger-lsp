@@ -330,3 +330,89 @@ func findAmountPosition(s string) int {
 	}
 	return -1
 }
+
+func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
+	t.Run("transactions with different posting counts", func(t *testing.T) {
+		input := `2024-01-15 single posting
+    very:long:account:name  100 RUB
+
+2024-01-16 three postings
+    short:a  50 RUB
+    short:b  30 RUB
+    short:c  20 RUB`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		edits := FormatDocument(journal, input)
+		require.NotEmpty(t, edits)
+
+		var positions []int
+		for _, edit := range edits {
+			if pos := findAmountPosition(edit.NewText); pos > 0 {
+				positions = append(positions, pos)
+			}
+		}
+
+		require.GreaterOrEqual(t, len(positions), 4)
+		for i, pos := range positions {
+			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		}
+	})
+
+	t.Run("postings without amounts", func(t *testing.T) {
+		input := `2024-01-15 test
+    very:long:account:name  100 RUB
+    short:a
+
+2024-01-16 test2
+    mid:account  50 RUB
+    assets:bank`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		edits := FormatDocument(journal, input)
+		require.NotEmpty(t, edits)
+
+		var positions []int
+		for _, edit := range edits {
+			if pos := findAmountPosition(edit.NewText); pos > 0 {
+				positions = append(positions, pos)
+			}
+		}
+
+		require.GreaterOrEqual(t, len(positions), 2)
+		for i, pos := range positions {
+			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		}
+	})
+
+	t.Run("with costs and balance assertions", func(t *testing.T) {
+		input := `2024-01-15 buy
+    assets:crypto  1 BTC @ $50000
+    assets:bank
+
+2024-01-16 check
+    very:long:account:name  100 USD = 1000 USD
+    equity:opening`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		edits := FormatDocument(journal, input)
+		require.NotEmpty(t, edits)
+
+		var positions []int
+		for _, edit := range edits {
+			if pos := findAmountPosition(edit.NewText); pos > 0 {
+				positions = append(positions, pos)
+			}
+		}
+
+		require.GreaterOrEqual(t, len(positions), 2)
+		for i, pos := range positions {
+			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		}
+	})
+}

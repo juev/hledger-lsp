@@ -90,15 +90,19 @@ func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper, comm
 	return edits
 }
 
+func calculateAccountDisplayLength(p *ast.Posting) int {
+	accountLen := utf8.RuneCountInString(p.Account.Name)
+	switch p.Virtual {
+	case ast.VirtualBalanced, ast.VirtualUnbalanced:
+		accountLen += 2
+	}
+	return accountLen
+}
+
 func CalculateAlignmentColumn(postings []ast.Posting) int {
 	maxLen := 0
-	for _, p := range postings {
-		accountLen := utf8.RuneCountInString(p.Account.Name)
-		switch p.Virtual {
-		case ast.VirtualBalanced, ast.VirtualUnbalanced:
-			accountLen += 2
-		}
-		if accountLen > maxLen {
+	for i := range postings {
+		if accountLen := calculateAccountDisplayLength(&postings[i]); accountLen > maxLen {
 			maxLen = accountLen
 		}
 	}
@@ -108,13 +112,8 @@ func CalculateAlignmentColumn(postings []ast.Posting) int {
 func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
 	maxLen := 0
 	for i := range transactions {
-		for _, p := range transactions[i].Postings {
-			accountLen := utf8.RuneCountInString(p.Account.Name)
-			switch p.Virtual {
-			case ast.VirtualBalanced, ast.VirtualUnbalanced:
-				accountLen += 2
-			}
-			if accountLen > maxLen {
+		for j := range transactions[i].Postings {
+			if accountLen := calculateAccountDisplayLength(&transactions[i].Postings[j]); accountLen > maxLen {
 				maxLen = accountLen
 			}
 		}
@@ -122,11 +121,16 @@ func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
 	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
 }
 
+// CalculateAlignment calculates alignment for a single transaction's postings.
+// For consistent file-wide alignment, use CalculateAlignmentWithGlobal with
+// a pre-calculated global column from CalculateGlobalAlignmentColumn.
 func CalculateAlignment(postings []ast.Posting, commodityFormats map[string]NumberFormat) AlignmentInfo {
 	accountCol := CalculateAlignmentColumn(postings)
 	return CalculateAlignmentWithGlobal(postings, commodityFormats, accountCol)
 }
 
+// CalculateAlignmentWithGlobal calculates alignment using a provided account column.
+// Use this with CalculateGlobalAlignmentColumn for file-wide consistent alignment.
 func CalculateAlignmentWithGlobal(postings []ast.Posting, commodityFormats map[string]NumberFormat, accountCol int) AlignmentInfo {
 
 	hasBalanceAssertion := false

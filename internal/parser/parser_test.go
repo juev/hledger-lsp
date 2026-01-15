@@ -922,3 +922,30 @@ func TestParser_CommodityRange(t *testing.T) {
 		})
 	}
 }
+
+func TestParser_CommodityRange_InCostAndAssertion(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  50 EUR @ $1.10 = 100 USD
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	p := journal.Transactions[0].Postings[0]
+
+	require.NotNil(t, p.Amount)
+	assert.Equal(t, "EUR", p.Amount.Commodity.Symbol)
+	assert.NotZero(t, p.Amount.Commodity.Range.End.Line, "Amount commodity Range.End.Line should not be zero")
+	assert.NotZero(t, p.Amount.Commodity.Range.End.Column, "Amount commodity Range.End.Column should not be zero")
+
+	require.NotNil(t, p.Cost)
+	assert.Equal(t, "$", p.Cost.Amount.Commodity.Symbol)
+	assert.NotZero(t, p.Cost.Amount.Commodity.Range.End.Line, "Cost commodity Range.End.Line should not be zero")
+	assert.NotZero(t, p.Cost.Amount.Commodity.Range.End.Column, "Cost commodity Range.End.Column should not be zero")
+
+	require.NotNil(t, p.BalanceAssertion)
+	assert.Equal(t, "USD", p.BalanceAssertion.Amount.Commodity.Symbol)
+	assert.NotZero(t, p.BalanceAssertion.Amount.Commodity.Range.End.Line, "BalanceAssertion commodity Range.End.Line should not be zero")
+	assert.NotZero(t, p.BalanceAssertion.Amount.Commodity.Range.End.Column, "BalanceAssertion commodity Range.End.Column should not be zero")
+}
