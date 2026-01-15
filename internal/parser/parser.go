@@ -729,8 +729,11 @@ func normalizeNumber(s string) string {
 
 	if dotCount == 0 && commaCount == 1 {
 		idx := strings.LastIndex(s, ",")
-		if idx >= 0 && len(s)-idx-1 == 3 {
-			return strings.Replace(s, ",", "", 1)
+		if idx >= 1 && len(s)-idx-1 == 3 {
+			prefix := strings.TrimLeft(s[:idx], "0")
+			if len(prefix) > 0 {
+				return strings.Replace(s, ",", "", 1)
+			}
 		}
 		return strings.Replace(s, ",", ".", 1)
 	}
@@ -771,8 +774,11 @@ func normalizeNumber(s string) string {
 
 	if dotCount == 1 && commaCount == 0 {
 		idx := strings.LastIndex(s, ".")
-		if idx >= 0 && len(s)-idx-1 == 3 {
-			return strings.Replace(s, ".", "", 1)
+		if idx >= 1 && len(s)-idx-1 == 3 {
+			prefix := strings.TrimLeft(s[:idx], "0")
+			if len(prefix) > 0 {
+				return strings.Replace(s, ".", "", 1)
+			}
 		}
 	}
 

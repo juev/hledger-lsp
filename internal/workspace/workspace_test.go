@@ -239,3 +239,53 @@ func TestWorkspace_GetDeclaredAccounts_NilResolved(t *testing.T) {
 	declared := ws.GetDeclaredAccounts()
 	assert.Nil(t, declared)
 }
+
+func TestExpandTilde(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"~/test.journal", filepath.Join(home, "test.journal")},
+		{"~/.hledger/main.journal", filepath.Join(home, ".hledger/main.journal")},
+		{"/absolute/path.journal", "/absolute/path.journal"},
+		{"relative/path.journal", "relative/path.journal"},
+		{"~", "~"},
+		{"~user/path", "~user/path"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := expandTilde(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestWorkspace_FindRootJournal_EnvWithTilde(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	customPath := filepath.Join(tmpDir, "custom.journal")
+	err := os.WriteFile(customPath, []byte(""), 0644)
+	require.NoError(t, err)
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	relPath, err := filepath.Rel(home, customPath)
+	if err != nil {
+		t.Skip("temp dir is not under home directory")
+	}
+
+	t.Setenv("LEDGER_FILE", "~/"+relPath)
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+
+	err = ws.Initialize()
+	require.NoError(t, err)
+
+	assert.Equal(t, customPath, ws.RootJournalPath())
+}

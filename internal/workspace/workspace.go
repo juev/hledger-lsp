@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -74,13 +75,24 @@ func (w *Workspace) ParseErrors() []string {
 	return w.parseErrors
 }
 
+func expandTilde(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
 func (w *Workspace) findRootJournal() (string, error) {
 	if envPath := os.Getenv("LEDGER_FILE"); envPath != "" {
+		envPath = expandTilde(envPath)
 		if _, err := os.Stat(envPath); err == nil {
 			return envPath, nil
 		}
 	}
 	if envPath := os.Getenv("HLEDGER_JOURNAL"); envPath != "" {
+		envPath = expandTilde(envPath)
 		if _, err := os.Stat(envPath); err == nil {
 			return envPath, nil
 		}

@@ -1054,6 +1054,20 @@ func TestParser_ThousandSeparatorSingleDot(t *testing.T) {
     assets:cash`,
 			expected: "100.5",
 		},
+		{
+			name: "small decimal 0.123",
+			input: `2024-01-15 test
+    expenses:food  0.123 EUR
+    assets:cash`,
+			expected: "0.123",
+		},
+		{
+			name: "small decimal 0.999",
+			input: `2024-01-15 test
+    expenses:food  0.999 EUR
+    assets:cash`,
+			expected: "0.999",
+		},
 	}
 
 	for _, tt := range tests {
