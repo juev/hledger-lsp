@@ -772,10 +772,13 @@ func isValidCommodityText(value string) bool {
 	if len(value) == 0 {
 		return false
 	}
+	hasLetter := false
 	for _, r := range value {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		} else if !unicode.IsDigit(r) {
 			return false
 		}
 	}
-	return true
+	return hasLetter
 }

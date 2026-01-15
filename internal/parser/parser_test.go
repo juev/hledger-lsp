@@ -955,6 +955,30 @@ func TestParser_CommodityRange(t *testing.T) {
 	}
 }
 
+func TestIsValidCommodityText(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+		desc  string
+	}{
+		{"USD", true, "uppercase letters"},
+		{"usd", true, "lowercase letters"},
+		{"Rub", true, "mixed case"},
+		{"hours", true, "all lowercase"},
+		{"USD2024", true, "letters + digits"},
+		{"Руб", true, "cyrillic"},
+		{"123", false, "digit-only should be rejected"},
+		{"", false, "empty string"},
+		{"$", false, "special character"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			got := isValidCommodityText(tt.input)
+			assert.Equal(t, tt.want, got, "isValidCommodityText(%q)", tt.input)
+		})
+	}
+}
+
 func TestParser_CommodityRange_InCostAndAssertion(t *testing.T) {
 	input := `2024-01-15 test
     expenses:food  50 EUR @ $1.10 = 100 USD

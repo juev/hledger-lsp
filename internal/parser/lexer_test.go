@@ -416,6 +416,57 @@ func TestLexer_LowercaseCommodity(t *testing.T) {
 	}
 }
 
+func TestLexer_AmbiguousCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		tokens []Token
+	}{
+		{
+			name:  "word after amount becomes Text (parser decides if commodity)",
+			input: "    expenses:food  100 note",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenText, Value: "note"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "multiple words after amount",
+			input: "    expenses:food  100 note some text",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenText, Value: "note some text"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "comment terminates text",
+			input: "    expenses:food  100 note ; comment",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenText, Value: "note"},
+				{Type: TokenComment, Value: " comment"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.tokens, tokens)
+		})
+	}
+}
+
 func TestLexer_Position(t *testing.T) {
 	input := "2024-01-15 test"
 	lexer := NewLexer(input)
