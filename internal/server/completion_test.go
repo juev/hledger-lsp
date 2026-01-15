@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/include"
 )
 
 func TestCompletion_Accounts(t *testing.T) {
@@ -167,6 +169,35 @@ func TestCompletion_DocumentNotFound(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Empty(t, result.Items)
+}
+
+func TestCompletion_MaxResults(t *testing.T) {
+	srv := NewServer()
+	srv.setSettings(serverSettings{
+		Completion: completionSettings{MaxResults: 1},
+		Limits:     include.DefaultLimits(),
+	})
+	content := `account assets:cash
+account expenses:food
+
+2024-01-15 test
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.Items, 1)
 }
 
 func extractLabels(items []protocol.CompletionItem) []string {

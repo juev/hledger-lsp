@@ -3,6 +3,7 @@ package include
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -477,5 +478,84 @@ func TestLoader_GlobPatternSortedOrder(t *testing.T) {
 	}
 	if allTx[1].Description != "transaction Z" {
 		t.Errorf("expected second transaction to be 'transaction Z', got '%s'", allTx[1].Description)
+	}
+}
+
+func TestLoader_MaxFileSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+
+	content := `2024-01-15 * grocery store
+    expenses:food  $50.00
+    assets:cash
+`
+	if err := os.WriteFile(mainFile, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	loader.SetLimits(Limits{
+		MaxFileSizeBytes: 10,
+		MaxIncludeDepth:  defaultMaxIncludeDepth,
+	})
+
+	result, errs := loader.Load(mainFile)
+	if result != nil {
+		t.Fatalf("expected nil result for oversize file, got %+v", result)
+	}
+
+	if len(errs) != 1 || errs[0].Kind != ErrorFileTooLarge {
+		t.Fatalf("expected file too large error, got: %v", errs)
+	}
+}
+
+func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+	level1File := filepath.Join(dir, "level1.journal")
+	level2File := filepath.Join(dir, "level2.journal")
+
+	mainContent := `include level1.journal
+
+2024-01-15 * main transaction
+    expenses:main  $10.00
+    assets:cash
+`
+	level1Content := `include level2.journal
+
+2024-01-16 * level1 transaction
+    expenses:level1  $20.00
+    assets:cash
+`
+	level2Content := `2024-01-17 * level2 transaction
+    expenses:level2  $30.00
+    assets:cash
+`
+	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(level1File, []byte(level1Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(level2File, []byte(level2Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	loader.SetLimits(Limits{
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
+		MaxIncludeDepth:  2,
+	})
+
+	_, errs := loader.Load(mainFile)
+
+	foundDepthError := false
+	for _, err := range errs {
+		if err.Kind == ErrorCycleDetected && strings.Contains(err.Message, "include depth limit exceeded") {
+			foundDepthError = true
+		}
+	}
+	if !foundDepthError {
+		t.Fatalf("expected include depth limit error, got: %v", errs)
 	}
 }

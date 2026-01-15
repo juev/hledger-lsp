@@ -15,22 +15,59 @@ import (
 )
 
 const (
-	MaxFileSize     = 10 * 1024 * 1024
-	MaxIncludeDepth = 50
+	defaultMaxFileSizeBytes = 10 * 1024 * 1024
+	defaultMaxIncludeDepth  = 50
 )
+
+type Limits struct {
+	MaxFileSizeBytes int64
+	MaxIncludeDepth  int
+}
 
 type Loader struct {
 	mu    sync.RWMutex
 	cache map[string]*ast.Journal
+	limits Limits
 }
 
 func NewLoader() *Loader {
 	return &Loader{
-		cache: make(map[string]*ast.Journal),
+		cache:  make(map[string]*ast.Journal),
+		limits: DefaultLimits(),
 	}
 }
 
+func DefaultLimits() Limits {
+	return Limits{
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
+		MaxIncludeDepth:  defaultMaxIncludeDepth,
+	}
+}
+
+func normalizeLimits(limits Limits) Limits {
+	if limits.MaxFileSizeBytes <= 0 {
+		limits.MaxFileSizeBytes = defaultMaxFileSizeBytes
+	}
+	if limits.MaxIncludeDepth <= 0 {
+		limits.MaxIncludeDepth = defaultMaxIncludeDepth
+	}
+	return limits
+}
+
+func (l *Loader) SetLimits(limits Limits) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.limits = normalizeLimits(limits)
+}
+
+func (l *Loader) getLimits() Limits {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.limits
+}
+
 func (l *Loader) Load(path string) (*ResolvedJournal, []LoadError) {
+	limits := l.getLimits()
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, []LoadError{{
@@ -40,11 +77,11 @@ func (l *Loader) Load(path string) (*ResolvedJournal, []LoadError) {
 		}}
 	}
 
-	if info.Size() > MaxFileSize {
+	if info.Size() > limits.MaxFileSizeBytes {
 		return nil, []LoadError{{
 			Kind:    ErrorFileTooLarge,
 			Path:    path,
-			Message: fmt.Sprintf("file too large: %d bytes (max %d)", info.Size(), MaxFileSize),
+			Message: fmt.Sprintf("file too large: %d bytes (max %d)", info.Size(), limits.MaxFileSizeBytes),
 		}}
 	}
 
@@ -61,17 +98,26 @@ func (l *Loader) Load(path string) (*ResolvedJournal, []LoadError) {
 }
 
 func (l *Loader) LoadFromContent(path, content string) (*ResolvedJournal, []LoadError) {
+	limits := l.getLimits()
+	if int64(len(content)) > limits.MaxFileSizeBytes {
+		return nil, []LoadError{{
+			Kind:    ErrorFileTooLarge,
+			Path:    path,
+			Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), limits.MaxFileSizeBytes),
+		}}
+	}
 	return l.loadWithContent(path, content, make(map[string]bool))
 }
 
 func (l *Loader) loadWithContent(path, content string, visited map[string]bool) (*ResolvedJournal, []LoadError) {
 	var errors []LoadError
+	limits := l.getLimits()
 
-	if len(visited) >= MaxIncludeDepth {
+	if len(visited) >= limits.MaxIncludeDepth {
 		return nil, []LoadError{{
 			Kind:    ErrorCycleDetected,
 			Path:    path,
-			Message: fmt.Sprintf("include depth limit exceeded (%d)", MaxIncludeDepth),
+			Message: fmt.Sprintf("include depth limit exceeded (%d)", limits.MaxIncludeDepth),
 		}}
 	}
 
@@ -138,6 +184,7 @@ func (l *Loader) loadSingleInclude(
 	result *ResolvedJournal,
 ) []LoadError {
 	var errors []LoadError
+	limits := l.getLimits()
 
 	if visited[includePath] {
 		errors = append(errors, LoadError{
@@ -168,11 +215,11 @@ func (l *Loader) loadSingleInclude(
 		return errors
 	}
 
-	if info.Size() > MaxFileSize {
+	if info.Size() > limits.MaxFileSizeBytes {
 		errors = append(errors, LoadError{
 			Kind:    ErrorFileTooLarge,
 			Path:    includePath,
-			Message: fmt.Sprintf("included file too large: %d bytes (max %d)", info.Size(), MaxFileSize),
+			Message: fmt.Sprintf("included file too large: %d bytes (max %d)", info.Size(), limits.MaxFileSizeBytes),
 			Range:   incRange,
 		})
 		return errors

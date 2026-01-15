@@ -25,6 +25,22 @@ Add to your `settings.json`:
 }
 ```
 
+Settings example:
+
+```json
+{
+  "hledger": {
+    "completion": {
+      "maxResults": 50
+    },
+    "limits": {
+      "maxFileSizeBytes": 10485760,
+      "maxIncludeDepth": 50
+    }
+  }
+}
+```
+
 ## Alternative: hledger-vscode Extension
 
 For a more integrated experience, consider using [hledger-vscode](https://github.com/juev/hledger-vscode) extension which provides additional features specific to VS Code.

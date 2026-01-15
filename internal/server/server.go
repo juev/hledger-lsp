@@ -28,14 +28,19 @@ type Server struct {
 	cliClient *cli.Client
 	rootURI   string
 	workspace *workspace.Workspace
+	settings  serverSettings
+	settingsMu sync.RWMutex
+	supportsConfiguration bool
 }
 
 func NewServer() *Server {
-	return &Server{
+	srv := &Server{
 		analyzer:  analyzer.New(),
 		loader:    include.NewLoader(),
 		cliClient: cli.NewClient("hledger", 30*time.Second),
 	}
+	srv.setSettings(defaultServerSettings())
+	return srv
 }
 
 func (s *Server) SetClient(client protocol.Client) {
@@ -43,6 +48,13 @@ func (s *Server) SetClient(client protocol.Client) {
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if params != nil && params.Capabilities.Workspace != nil {
+		s.supportsConfiguration = params.Capabilities.Workspace.Configuration
+	}
+	if params != nil {
+		settings := parseSettingsFromRaw(s.getSettings(), params.InitializationOptions)
+		s.setSettings(settings)
+	}
 	if len(params.WorkspaceFolders) > 0 {
 		s.rootURI = strings.TrimPrefix(params.WorkspaceFolders[0].URI, "file://")
 	} else {
@@ -103,6 +115,7 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 			})
 		}
 	}
+	s.refreshConfiguration(context.Background())
 	return nil
 }
 

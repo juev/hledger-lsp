@@ -71,6 +71,10 @@ hledger-lsp --version
 - [Neovim](docs/neovim.md)
 - [Emacs](docs/emacs.md)
 
+## ⚙️ Configuration
+
+See `docs/configuration.md` for supported settings and defaults.
+
 ## ⚙️ Supported Features
 
 | Feature | Status |

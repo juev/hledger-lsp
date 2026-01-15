@@ -36,6 +36,10 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	items := generateCompletionItems(completionCtx, result, doc, params.Position)
+	settings := s.getSettings()
+	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
+		items = items[:settings.Completion.MaxResults]
+	}
 
 	return &protocol.CompletionList{
 		IsIncomplete: false,
