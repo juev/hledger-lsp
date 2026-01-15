@@ -293,6 +293,27 @@ func TestAnalyzer_NoCommodityDirectives_NoDiagnostic(t *testing.T) {
 	}
 }
 
+func TestAnalyzer_CommodityDeclaredInlineFormat(t *testing.T) {
+	input := `commodity 1.000,00 USD
+commodity 1.000,00 EUR
+
+2024-01-15 test
+    expenses:food  100.00 USD
+    assets:cash  100.00 EUR`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_COMMODITY" {
+			t.Errorf("unexpected UNDECLARED_COMMODITY diagnostic: %s", d.Message)
+		}
+	}
+}
+
 func TestAnalyzer_AnalyzeWithExternalDeclarations_SuppressesCommodityWarning(t *testing.T) {
 	input := `commodity USD
 

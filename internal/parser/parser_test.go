@@ -663,6 +663,32 @@ func TestParser_CommodityDirectiveMultipleSubdirs(t *testing.T) {
 	assert.Equal(t, "European currency", dir.Note)
 }
 
+func TestParser_CommodityDirectiveInlineFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"symbol right USD", "commodity 1.000,00 USD", "USD"},
+		{"symbol right EUR", "commodity 1.000,00 EUR", "EUR"},
+		{"symbol right BTC", "commodity 1.00000000 BTC", "BTC"},
+		{"symbol left dollar", "commodity $1000.00", "$"},
+		{"symbol left euro", "commodity €1.000,00", "€"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Directives, 1)
+
+			dir, ok := journal.Directives[0].(ast.CommodityDirective)
+			require.True(t, ok)
+			assert.Equal(t, tt.expected, dir.Commodity.Symbol)
+		})
+	}
+}
+
 func TestParser_AccountDirectiveWithComment(t *testing.T) {
 	input := `account Активы  ; type:Asset`
 

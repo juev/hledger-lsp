@@ -466,6 +466,11 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
 
+	// Handle inline format: "commodity 1.000,00 USD" (number first, then symbol)
+	if p.current.Type == TokenNumber {
+		p.advance()
+	}
+
 	if p.current.Type == TokenCommodity || p.current.Type == TokenText {
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
