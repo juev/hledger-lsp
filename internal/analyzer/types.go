@@ -31,6 +31,11 @@ type AnalysisResult struct {
 	Dates          []string
 	PayeeTemplates map[string][]PostingTemplate
 	Diagnostics    []Diagnostic
+
+	AccountCounts   map[string]int
+	PayeeCounts     map[string]int
+	CommodityCounts map[string]int
+	TagCounts       map[string]int
 }
 
 type PostingTemplate struct {

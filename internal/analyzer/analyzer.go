@@ -24,14 +24,18 @@ func (a *Analyzer) AnalyzeWithExternalDeclarations(journal *ast.Journal, externa
 
 func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclarations) *AnalysisResult {
 	result := &AnalysisResult{
-		Accounts:       CollectAccounts(journal),
-		Payees:         CollectPayees(journal),
-		Commodities:    CollectCommodities(journal),
-		Tags:           CollectTags(journal),
-		TagValues:      CollectTagValues(journal),
-		Dates:          CollectDates(journal),
-		PayeeTemplates: CollectPayeeTemplates(journal),
-		Diagnostics:    make([]Diagnostic, 0),
+		Accounts:        CollectAccounts(journal),
+		Payees:          CollectPayees(journal),
+		Commodities:     CollectCommodities(journal),
+		Tags:            CollectTags(journal),
+		TagValues:       CollectTagValues(journal),
+		Dates:           CollectDates(journal),
+		PayeeTemplates:  CollectPayeeTemplates(journal),
+		Diagnostics:     make([]Diagnostic, 0),
+		AccountCounts:   CollectAccountCounts(journal),
+		PayeeCounts:     CollectPayeeCounts(journal),
+		CommodityCounts: CollectCommodityCounts(journal),
+		TagCounts:       CollectTagCounts(journal),
 	}
 
 	declaredAccounts := collectDeclaredAccounts(journal)
@@ -69,14 +73,18 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 
 func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisResult {
 	result := &AnalysisResult{
-		Accounts:       NewAccountIndex(),
-		Payees:         []string{},
-		Commodities:    []string{},
-		Tags:           []string{},
-		TagValues:      make(map[string][]string),
-		Dates:          []string{},
-		PayeeTemplates: make(map[string][]PostingTemplate),
-		Diagnostics:    make([]Diagnostic, 0),
+		Accounts:        NewAccountIndex(),
+		Payees:          []string{},
+		Commodities:     []string{},
+		Tags:            []string{},
+		TagValues:       make(map[string][]string),
+		Dates:           []string{},
+		PayeeTemplates:  make(map[string][]PostingTemplate),
+		Diagnostics:     make([]Diagnostic, 0),
+		AccountCounts:   make(map[string]int),
+		PayeeCounts:     make(map[string]int),
+		CommodityCounts: make(map[string]int),
+		TagCounts:       make(map[string]int),
 	}
 
 	if resolved == nil || resolved.Primary == nil {
@@ -90,6 +98,10 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.TagValues = collectTagValuesFromResolved(resolved)
 	result.Dates = collectDatesFromResolved(resolved)
 	result.PayeeTemplates = collectPayeeTemplatesFromResolved(resolved)
+	result.AccountCounts = collectAccountCountsFromResolved(resolved)
+	result.PayeeCounts = collectPayeeCountsFromResolved(resolved)
+	result.CommodityCounts = collectCommodityCountsFromResolved(resolved)
+	result.TagCounts = collectTagCountsFromResolved(resolved)
 
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
 	declaredCommodities := collectDeclaredCommoditiesFromResolved(resolved)
@@ -291,6 +303,74 @@ func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[st
 	mergeTemplates(resolved.Primary)
 
 	return result
+}
+
+func collectAccountCountsFromResolved(resolved *include.ResolvedJournal) map[string]int {
+	counts := make(map[string]int)
+	mergeCounts := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for k, v := range CollectAccountCounts(journal) {
+			counts[k] += v
+		}
+	}
+	mergeCounts(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeCounts(journal)
+	}
+	return counts
+}
+
+func collectPayeeCountsFromResolved(resolved *include.ResolvedJournal) map[string]int {
+	counts := make(map[string]int)
+	mergeCounts := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for k, v := range CollectPayeeCounts(journal) {
+			counts[k] += v
+		}
+	}
+	mergeCounts(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeCounts(journal)
+	}
+	return counts
+}
+
+func collectCommodityCountsFromResolved(resolved *include.ResolvedJournal) map[string]int {
+	counts := make(map[string]int)
+	mergeCounts := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for k, v := range CollectCommodityCounts(journal) {
+			counts[k] += v
+		}
+	}
+	mergeCounts(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeCounts(journal)
+	}
+	return counts
+}
+
+func collectTagCountsFromResolved(resolved *include.ResolvedJournal) map[string]int {
+	counts := make(map[string]int)
+	mergeCounts := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for k, v := range CollectTagCounts(journal) {
+			counts[k] += v
+		}
+	}
+	mergeCounts(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeCounts(journal)
+	}
+	return counts
 }
 
 func collectDeclaredAccountsFromResolved(resolved *include.ResolvedJournal) map[string]bool {

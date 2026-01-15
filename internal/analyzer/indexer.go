@@ -219,3 +219,94 @@ func CollectTagValues(journal *ast.Journal) map[string][]string {
 
 	return result
 }
+
+func CollectAccountCounts(journal *ast.Journal) map[string]int {
+	counts := make(map[string]int)
+	for _, tx := range journal.Transactions {
+		for _, posting := range tx.Postings {
+			if posting.Account.Name != "" {
+				counts[posting.Account.Name]++
+			}
+		}
+	}
+	return counts
+}
+
+func CollectPayeeCounts(journal *ast.Journal) map[string]int {
+	counts := make(map[string]int)
+	for _, tx := range journal.Transactions {
+		name := tx.Payee
+		if name == "" {
+			name = tx.Description
+		}
+		if name != "" {
+			counts[name]++
+		}
+	}
+	return counts
+}
+
+func CollectCommodityCounts(journal *ast.Journal) map[string]int {
+	counts := make(map[string]int)
+	for _, tx := range journal.Transactions {
+		for _, posting := range tx.Postings {
+			if posting.Amount != nil && posting.Amount.Commodity.Symbol != "" {
+				counts[posting.Amount.Commodity.Symbol]++
+			}
+			if posting.Cost != nil && posting.Cost.Amount.Commodity.Symbol != "" {
+				counts[posting.Cost.Amount.Commodity.Symbol]++
+			}
+		}
+	}
+	return counts
+}
+
+func CollectTagCounts(journal *ast.Journal) map[string]int {
+	counts := make(map[string]int)
+
+	countTags := func(tagList []ast.Tag) {
+		for _, tag := range tagList {
+			if tag.Name != "" {
+				counts[tag.Name]++
+			}
+		}
+	}
+
+	for _, tx := range journal.Transactions {
+		countTags(tx.Tags)
+		for _, comment := range tx.Comments {
+			countTags(comment.Tags)
+		}
+		for _, posting := range tx.Postings {
+			countTags(posting.Tags)
+		}
+	}
+	return counts
+}
+
+func CollectTagValueCounts(journal *ast.Journal) map[string]map[string]int {
+	counts := make(map[string]map[string]int)
+
+	countTagValues := func(tagList []ast.Tag) {
+		for _, tag := range tagList {
+			if tag.Name == "" || tag.Value == "" {
+				continue
+			}
+			if counts[tag.Name] == nil {
+				counts[tag.Name] = make(map[string]int)
+			}
+			counts[tag.Name][tag.Value]++
+		}
+	}
+
+	for _, tx := range journal.Transactions {
+		countTagValues(tx.Tags)
+		for _, comment := range tx.Comments {
+			countTagValues(comment.Tags)
+		}
+		for _, posting := range tx.Postings {
+			countTagValues(posting.Tags)
+		}
+	}
+	return counts
+}

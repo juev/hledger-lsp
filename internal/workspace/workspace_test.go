@@ -520,3 +520,170 @@ func TestWorkspace_IndexSnapshot_TagValues_UpdateOnFileChange(t *testing.T) {
 	assert.Contains(t, snapshot.TagValues["project"], "beta")
 	assert.NotContains(t, snapshot.TagValues["project"], "alpha")
 }
+
+func TestWorkspace_IndexSnapshot_FrequencyCounts(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include child.journal
+
+2024-03-01 Grocery Store  ; project:alpha
+    expenses:food  $10
+    assets:cash
+
+2024-03-02 Grocery Store  ; project:alpha
+    expenses:food  $20
+    assets:cash
+
+2024-03-03 Coffee Shop  ; project:beta
+    expenses:food  $5
+    assets:bank
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	childContent := `2024-03-04 Restaurant  ; project:alpha
+    expenses:food  EUR 30
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+
+	require.NotNil(t, snapshot.AccountCounts)
+	assert.Equal(t, 4, snapshot.AccountCounts["expenses:food"])
+	assert.Equal(t, 3, snapshot.AccountCounts["assets:cash"])
+	assert.Equal(t, 1, snapshot.AccountCounts["assets:bank"])
+
+	require.NotNil(t, snapshot.PayeeCounts)
+	assert.Equal(t, 2, snapshot.PayeeCounts["Grocery Store"])
+	assert.Equal(t, 1, snapshot.PayeeCounts["Coffee Shop"])
+	assert.Equal(t, 1, snapshot.PayeeCounts["Restaurant"])
+
+	require.NotNil(t, snapshot.CommodityCounts)
+	assert.Equal(t, 3, snapshot.CommodityCounts["$"])
+	assert.Equal(t, 1, snapshot.CommodityCounts["EUR"])
+
+	require.NotNil(t, snapshot.TagCounts)
+	assert.Equal(t, 4, snapshot.TagCounts["project"])
+
+	require.NotNil(t, snapshot.TagValueCounts)
+	assert.Equal(t, 3, snapshot.TagValueCounts["project"]["alpha"])
+	assert.Equal(t, 1, snapshot.TagValueCounts["project"]["beta"])
+}
+
+func TestWorkspace_IndexSnapshot_FrequencyCounts_IncrementalUpdate(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	content := `2024-03-01 Shop
+    expenses:food  $10
+    assets:cash
+
+2024-03-02 Shop
+    expenses:food  $20
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	assert.Equal(t, 2, snapshot.PayeeCounts["Shop"])
+	assert.Equal(t, 2, snapshot.AccountCounts["expenses:food"])
+
+	updatedContent := `2024-03-01 Cafe
+    expenses:drinks  $10
+    assets:cash
+`
+	ws.UpdateFile(mainPath, updatedContent)
+
+	snapshot = ws.IndexSnapshot()
+	assert.Equal(t, 0, snapshot.PayeeCounts["Shop"])
+	assert.Equal(t, 1, snapshot.PayeeCounts["Cafe"])
+	assert.Equal(t, 0, snapshot.AccountCounts["expenses:food"])
+	assert.Equal(t, 1, snapshot.AccountCounts["expenses:drinks"])
+}
+
+func TestWorkspace_IndexSnapshot_Dates(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include child.journal
+
+2024-03-01 Shop
+    expenses:food  $10
+    assets:cash
+
+2024-03-01 Cafe
+    expenses:drinks  $5
+    assets:cash
+
+2024-03-15 Restaurant
+    expenses:food  $30
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	childContent := `2024-02-20 Market
+    expenses:food  $20
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+
+	require.NotNil(t, snapshot.Dates)
+	assert.Contains(t, snapshot.Dates, "2024-03-01")
+	assert.Contains(t, snapshot.Dates, "2024-03-15")
+	assert.Contains(t, snapshot.Dates, "2024-02-20")
+}
+
+func TestWorkspace_IndexSnapshot_PayeeTemplates(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	content := `2024-03-01 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-03-02 Coffee Shop
+    expenses:drinks  EUR 5.50
+    assets:bank
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+
+	require.NotNil(t, snapshot.PayeeTemplates)
+	require.Contains(t, snapshot.PayeeTemplates, "Grocery Store")
+	require.Contains(t, snapshot.PayeeTemplates, "Coffee Shop")
+
+	groceryPostings := snapshot.PayeeTemplates["Grocery Store"]
+	require.Len(t, groceryPostings, 2)
+	assert.Equal(t, "expenses:food", groceryPostings[0].Account)
+	assert.Equal(t, "assets:cash", groceryPostings[1].Account)
+}

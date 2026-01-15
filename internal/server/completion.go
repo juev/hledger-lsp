@@ -42,15 +42,49 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	items := generateCompletionItems(completionCtx, result, doc, params.Position)
+
+	counts := getCountsForContext(completionCtx, result)
+	if counts != nil {
+		rankCompletionItems(items, counts)
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].SortText < items[j].SortText
+	})
+
 	settings := s.getSettings()
+	isIncomplete := false
 	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
 		items = items[:settings.Completion.MaxResults]
+		isIncomplete = true
 	}
 
 	return &protocol.CompletionList{
-		IsIncomplete: false,
+		IsIncomplete: isIncomplete,
 		Items:        items,
 	}, nil
+}
+
+func getCountsForContext(ctxType CompletionContextType, result *analyzer.AnalysisResult) map[string]int {
+	switch ctxType {
+	case ContextAccount:
+		return result.AccountCounts
+	case ContextPayee:
+		return result.PayeeCounts
+	case ContextCommodity:
+		return result.CommodityCounts
+	case ContextTagName:
+		return result.TagCounts
+	default:
+		return nil
+	}
+}
+
+func rankCompletionItems(items []protocol.CompletionItem, counts map[string]int) {
+	for i := range items {
+		count := counts[items[i].Label]
+		items[i].SortText = fmt.Sprintf("%06d_%s", 999999-count, items[i].Label)
+	}
 }
 
 func determineCompletionContext(content string, pos protocol.Position, ctx *protocol.CompletionContext) CompletionContextType {

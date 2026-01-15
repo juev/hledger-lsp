@@ -591,3 +591,222 @@ func TestCompletion_Template_CommodityPosition(t *testing.T) {
 	require.NotEmpty(t, euroSymItem.InsertText)
 	assert.Contains(t, euroSymItem.InsertText, "€75.00")
 }
+
+func TestCompletion_RankingByFrequency(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Rare Shop
+    expenses:rare  $10
+    assets:cash
+
+2024-01-02 Frequent Store
+    expenses:food  $20
+    assets:cash
+
+2024-01-03 Frequent Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-04 Frequent Store
+    expenses:food  $40
+    assets:cash
+
+2024-01-05 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 16, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var frequentItem, rareItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "Frequent Store" {
+			frequentItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "Rare Shop" {
+			rareItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, frequentItem, "Frequent Store should be in completion items")
+	require.NotNil(t, rareItem, "Rare Shop should be in completion items")
+
+	assert.NotEmpty(t, frequentItem.SortText, "Frequent item should have SortText")
+	assert.NotEmpty(t, rareItem.SortText, "Rare item should have SortText")
+	assert.True(t, frequentItem.SortText < rareItem.SortText,
+		"Frequent item (SortText=%s) should sort before rare item (SortText=%s)",
+		frequentItem.SortText, rareItem.SortText)
+}
+
+func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Test1
+    expenses:rare  $10
+    assets:cash
+
+2024-01-02 Test2
+    expenses:food  $20
+    assets:cash
+
+2024-01-03 Test3
+    expenses:food  $30
+    assets:cash
+
+2024-01-04 Test4
+    expenses:food  $40
+    assets:cash
+
+2024-01-05 Test5
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 17, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var foodItem, rareItem, cashItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "expenses:food" {
+			foodItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "expenses:rare" {
+			rareItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "assets:cash" {
+			cashItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, foodItem, "expenses:food should be in completion items")
+	require.NotNil(t, rareItem, "expenses:rare should be in completion items")
+	require.NotNil(t, cashItem, "assets:cash should be in completion items")
+
+	assert.NotEmpty(t, foodItem.SortText, "expenses:food should have SortText")
+	assert.NotEmpty(t, rareItem.SortText, "expenses:rare should have SortText")
+
+	assert.True(t, foodItem.SortText < rareItem.SortText,
+		"Frequent account expenses:food (SortText=%s) should sort before rare expenses:rare (SortText=%s)",
+		foodItem.SortText, rareItem.SortText)
+
+	assert.True(t, cashItem.SortText < rareItem.SortText,
+		"assets:cash (used 4 times) should sort before expenses:rare (used 1 time)")
+}
+
+func TestCompletion_MaxResultsPreservesFrequent(t *testing.T) {
+	srv := NewServer()
+	srv.setSettings(serverSettings{
+		Completion: completionSettings{MaxResults: 2},
+		Limits:     include.DefaultLimits(),
+	})
+
+	content := `2024-01-01 Rare Shop
+    expenses:rare  $10
+    assets:cash
+
+2024-01-02 Another Rare
+    expenses:rare  $15
+    assets:cash
+
+2024-01-03 Frequent Store
+    expenses:food  $20
+    assets:cash
+
+2024-01-04 Frequent Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-05 Frequent Store
+    expenses:food  $40
+    assets:cash
+
+2024-01-06 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 20, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, result.IsIncomplete, "should be incomplete when truncated")
+	assert.Len(t, result.Items, 2, "should respect maxResults limit")
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "Frequent Store", "frequent item should be preserved")
+}
+
+func TestCompletion_MaxResultsAccountsPreservesFrequent(t *testing.T) {
+	srv := NewServer()
+	srv.setSettings(serverSettings{
+		Completion: completionSettings{MaxResults: 2},
+		Limits:     include.DefaultLimits(),
+	})
+
+	content := `2024-01-01 Test1
+    expenses:rare  $10
+    assets:cash
+
+2024-01-02 Test2
+    expenses:food  $20
+    assets:frequent
+
+2024-01-03 Test3
+    expenses:food  $30
+    assets:frequent
+
+2024-01-04 Test4
+    expenses:food  $40
+    assets:frequent
+
+2024-01-05 Test5
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 17, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, result.IsIncomplete, "should be incomplete when truncated")
+	assert.Len(t, result.Items, 2, "should respect maxResults limit")
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "expenses:food", "most frequent account should be preserved")
+	assert.Contains(t, labels, "assets:frequent", "second most frequent account should be preserved")
+}

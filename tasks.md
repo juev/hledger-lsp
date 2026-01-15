@@ -93,16 +93,16 @@
 
 ### 5) Completion: теги, даты, шаблоны
 
-- [ ] Tag name completion из тегов в комментариях/AST
-- [ ] Tag value completion по контексту
-- [ ] Date completion (today/relative/история)
-- [ ] Template completion из исторических транзакций
+- [x] Tag name completion из тегов в комментариях/AST
+- [x] Tag value completion по контексту
+- [x] Date completion (today/relative/история)
+- [x] Template completion из исторических транзакций
 
 ### 6) Completion: качество выдачи
 
-- [ ] Приоритизация по частоте/релевантности
-- [ ] Лимит maxResults через конфиг
-- [ ] Workspace‑wide completion на основе индекса
+- [x] Приоритизация по частоте/релевантности
+- [x] Лимит maxResults через конфиг
+- [x] Workspace‑wide completion на основе индекса
 
 ### 7) Diagnostics: дубликаты транзакций
 
