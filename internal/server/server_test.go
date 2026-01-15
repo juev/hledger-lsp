@@ -89,6 +89,9 @@ func (m *slowMockClient) Configuration(_ context.Context, _ *protocol.Configurat
 	return nil, nil
 }
 
+// TestServer_Initialized_NonBlocking verifies that Initialized returns immediately
+// without blocking on client.Configuration(). Uses 200ms client delay with 50ms
+// timeout (4x safety margin) to avoid flakiness on loaded CI systems.
 func TestServer_Initialized_NonBlocking(t *testing.T) {
 	srv := NewServer()
 	client := &slowMockClient{delay: 200 * time.Millisecond}
@@ -109,6 +112,8 @@ func TestServer_Initialized_NonBlocking(t *testing.T) {
 	}
 }
 
+// TestServer_DidChangeConfiguration_NonBlocking verifies that DidChangeConfiguration
+// returns immediately without blocking. Uses same timing assumptions as above.
 func TestServer_DidChangeConfiguration_NonBlocking(t *testing.T) {
 	srv := NewServer()
 	client := &slowMockClient{delay: 200 * time.Millisecond}

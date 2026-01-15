@@ -74,8 +74,8 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 	s.setSettings(settings)
 }
 
-func (s *Server) DidChangeConfiguration(ctx context.Context, _ *protocol.DidChangeConfigurationParams) error {
-	go s.refreshConfiguration(ctx)
+func (s *Server) DidChangeConfiguration(_ context.Context, _ *protocol.DidChangeConfigurationParams) error {
+	go s.refreshConfiguration(context.Background())
 	return nil
 }
 
