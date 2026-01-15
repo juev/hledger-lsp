@@ -398,7 +398,28 @@ func collectDeclaredAccounts(journal *ast.Journal) map[string]bool {
 	return declared
 }
 
+var predefinedAccountTypes = map[string]bool{
+	"assets":      true,
+	"liabilities": true,
+	"equity":      true,
+	"expenses":    true,
+	"revenues":    true,
+	"income":      true,
+}
+
 func isAccountDeclared(accountName string, declared map[string]bool) bool {
+	lowerName := strings.ToLower(accountName)
+	colonIdx := strings.Index(lowerName, ":")
+	var prefix string
+	if colonIdx == -1 {
+		prefix = lowerName
+	} else {
+		prefix = lowerName[:colonIdx]
+	}
+	if predefinedAccountTypes[prefix] {
+		return true
+	}
+
 	if declared[accountName] {
 		return true
 	}

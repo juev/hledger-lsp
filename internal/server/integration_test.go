@@ -228,7 +228,7 @@ func TestIntegration_MultipleErrorTypes(t *testing.T) {
 account assets:declared
 
 2024-01-15 transaction with undeclared account
-    expenses:undeclared  $50.00
+    custom:undeclared  $50.00
     assets:declared
 
 2024-01-16 unbalanced transaction

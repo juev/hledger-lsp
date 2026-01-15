@@ -40,6 +40,100 @@ account expenses:food
 	assert.Contains(t, labels, "expenses:food")
 }
 
+func TestCompletion_AccountsShowUsageCount(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 another
+    expenses:food  $30
+    assets:cash
+
+2024-01-17 third
+    expenses:food  $20
+    assets:bank
+
+2024-01-18 new
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 13, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var foodDetail, cashDetail, bankDetail string
+	for _, item := range result.Items {
+		switch item.Label {
+		case "expenses:food":
+			foodDetail = item.Detail
+		case "assets:cash":
+			cashDetail = item.Detail
+		case "assets:bank":
+			bankDetail = item.Detail
+		}
+	}
+
+	assert.Equal(t, "Account (3)", foodDetail, "expenses:food used 3 times")
+	assert.Equal(t, "Account (2)", cashDetail, "assets:cash used 2 times")
+	assert.Equal(t, "Account (1)", bankDetail, "assets:bank used 1 time")
+}
+
+func TestCompletion_PayeesShowUsageCount(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 Grocery Store
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 Coffee Shop
+    expenses:food  $5
+    assets:cash
+
+2024-01-17 Grocery Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-18 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 12, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var groceryDetail, coffeeDetail string
+	for _, item := range result.Items {
+		switch item.Label {
+		case "Grocery Store":
+			groceryDetail = item.Detail
+		case "Coffee Shop":
+			coffeeDetail = item.Detail
+		}
+	}
+
+	assert.Equal(t, "Payee (2) + template", groceryDetail, "Grocery Store used 2 times with template")
+	assert.Equal(t, "Payee (1) + template", coffeeDetail, "Coffee Shop used 1 time with template")
+}
+
 func TestCompletion_AccountsByPrefix(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-15 test
@@ -256,6 +350,37 @@ func TestDetermineContext_Date_EmptyLine(t *testing.T) {
 
 	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, nil)
 	assert.Equal(t, ContextDate, ctx)
+}
+
+func TestDetermineContext_Date_EmptyLine_SpaceTrigger(t *testing.T) {
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+`
+
+	completionCtx := &protocol.CompletionContext{
+		TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
+		TriggerCharacter: " ",
+	}
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, completionCtx)
+	assert.Equal(t, ContextDate, ctx, "empty line with space trigger should return ContextDate")
+}
+
+func TestDetermineContext_Date_EmptyLine_Invoked(t *testing.T) {
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+`
+
+	completionCtx := &protocol.CompletionContext{
+		TriggerKind: protocol.CompletionTriggerKindInvoked,
+	}
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, completionCtx)
+	assert.Equal(t, ContextDate, ctx, "empty line with invoked trigger should return ContextDate")
 }
 
 func TestCompletion_TagNames(t *testing.T) {

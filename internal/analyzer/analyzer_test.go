@@ -154,7 +154,7 @@ func TestAnalyzer_UndeclaredAccount(t *testing.T) {
 
 2024-01-15 test
     expenses:food  $50
-    assets:cash  $-50`
+    custom:wallet  $-50`
 
 	journal, errs := parser.Parse(input)
 	require.Empty(t, errs)
@@ -166,7 +166,7 @@ func TestAnalyzer_UndeclaredAccount(t *testing.T) {
 	for _, d := range result.Diagnostics {
 		if d.Code == "UNDECLARED_ACCOUNT" {
 			foundUndeclared = true
-			assert.Contains(t, d.Message, "assets:cash")
+			assert.Contains(t, d.Message, "custom:wallet")
 			assert.Equal(t, SeverityWarning, d.Severity, "UNDECLARED_ACCOUNT should have Warning severity")
 		}
 	}
@@ -205,6 +205,98 @@ func TestAnalyzer_NoAccountDirectives_NoDiagnostic(t *testing.T) {
 
 	for _, d := range result.Diagnostics {
 		assert.NotEqual(t, "UNDECLARED_ACCOUNT", d.Code)
+	}
+}
+
+func TestAnalyzer_PredefinedAccounts_NoDiagnostic(t *testing.T) {
+	input := `account custom:category
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50
+    liabilities:credit  $10
+    equity:opening  $5
+    revenues:salary  $100`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			assert.NotContains(t, d.Message, "expenses:", "predefined 'expenses' should not trigger warning")
+			assert.NotContains(t, d.Message, "assets:", "predefined 'assets' should not trigger warning")
+			assert.NotContains(t, d.Message, "liabilities:", "predefined 'liabilities' should not trigger warning")
+			assert.NotContains(t, d.Message, "equity:", "predefined 'equity' should not trigger warning")
+			assert.NotContains(t, d.Message, "revenues:", "predefined 'revenues' should not trigger warning")
+		}
+	}
+}
+
+func TestAnalyzer_PredefinedAccounts_CaseInsensitive(t *testing.T) {
+	input := `account custom:category
+
+2024-01-15 test
+    Expenses:Food  $50
+    Assets:Cash  $-50
+    LIABILITIES:Credit  $10
+    Equity:Opening  $5
+    Revenues:Salary  $100`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			t.Errorf("predefined accounts should be case-insensitive, got warning: %s", d.Message)
+		}
+	}
+}
+
+func TestAnalyzer_CustomAccount_StillRequiresDeclaration(t *testing.T) {
+	input := `account expenses:food
+
+2024-01-15 test
+    expenses:food  $50
+    custom:account  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var foundCustom bool
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" && d.Message == "account 'custom:account' is not declared" {
+			foundCustom = true
+		}
+	}
+	assert.True(t, foundCustom, "custom:account should still require declaration")
+}
+
+func TestAnalyzer_PredefinedAccounts_Income(t *testing.T) {
+	input := `account custom:category
+
+2024-01-15 test
+    income:salary  $1000
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			assert.NotContains(t, d.Message, "income:", "predefined 'income' should not trigger warning")
+		}
 	}
 }
 

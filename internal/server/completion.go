@@ -41,9 +41,9 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	}
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
-	items := generateCompletionItems(completionCtx, result, doc, params.Position)
-
 	counts := getCountsForContext(completionCtx, result)
+	items := generateCompletionItems(completionCtx, result, doc, params.Position, counts)
+
 	if counts != nil {
 		rankCompletionItems(items, counts)
 	}
@@ -159,7 +159,7 @@ func determineTagContext(line string, pos protocol.Position) CompletionContextTy
 	return ContextTagValue
 }
 
-func generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position) []protocol.CompletionItem {
+func generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 
 	switch ctxType {
@@ -170,21 +170,22 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: "Account",
+				Detail: formatDetailWithCount("Account", acc, counts),
 			})
 		}
 
 	case ContextPayee:
 		for _, payee := range result.Payees {
+			hasTemplate := false
 			item := protocol.CompletionItem{
-				Label:  payee,
-				Kind:   protocol.CompletionItemKindClass,
-				Detail: "Payee",
+				Label: payee,
+				Kind:  protocol.CompletionItemKindClass,
 			}
 			if postings, ok := result.PayeeTemplates[payee]; ok && len(postings) > 0 {
 				item.InsertText = buildPayeeTemplate(payee, postings)
-				item.Detail = "Payee (with template)"
+				hasTemplate = true
 			}
+			item.Detail = formatPayeeDetailWithCount(payee, counts, hasTemplate)
 			items = append(items, item)
 		}
 
@@ -193,7 +194,7 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 			items = append(items, protocol.CompletionItem{
 				Label:  commodity,
 				Kind:   protocol.CompletionItemKindEnum,
-				Detail: "Commodity",
+				Detail: formatDetailWithCount("Commodity", commodity, counts),
 			})
 		}
 
@@ -202,7 +203,7 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 			items = append(items, protocol.CompletionItem{
 				Label:      tagName,
 				Kind:       protocol.CompletionItemKindProperty,
-				Detail:     "Tag",
+				Detail:     formatDetailWithCount("Tag", tagName, counts),
 				InsertText: tagName + ":",
 			})
 		}
@@ -231,12 +232,41 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: "Account",
+				Detail: formatDetailWithCount("Account", acc, counts),
 			})
 		}
 	}
 
 	return items
+}
+
+func formatDetailWithCount(baseDetail, label string, counts map[string]int) string {
+	if counts == nil {
+		return baseDetail
+	}
+	count := counts[label]
+	if count > 0 {
+		return fmt.Sprintf("%s (%d)", baseDetail, count)
+	}
+	return baseDetail
+}
+
+func formatPayeeDetailWithCount(payee string, counts map[string]int, hasTemplate bool) string {
+	count := 0
+	if counts != nil {
+		count = counts[payee]
+	}
+
+	if count > 0 && hasTemplate {
+		return fmt.Sprintf("Payee (%d) + template", count)
+	}
+	if count > 0 {
+		return fmt.Sprintf("Payee (%d)", count)
+	}
+	if hasTemplate {
+		return "Payee + template"
+	}
+	return "Payee"
 }
 
 func extractAccountPrefix(content string, pos protocol.Position) string {
