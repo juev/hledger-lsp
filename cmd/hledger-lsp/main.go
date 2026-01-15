@@ -131,7 +131,7 @@ func (d *serverDispatcher) DidChange(ctx context.Context, params *protocol.DidCh
 }
 
 func (d *serverDispatcher) DidChangeConfiguration(ctx context.Context, params *protocol.DidChangeConfigurationParams) error {
-	return nil
+	return d.srv.DidChangeConfiguration(ctx, params)
 }
 
 func (d *serverDispatcher) DidChangeWatchedFiles(ctx context.Context, params *protocol.DidChangeWatchedFilesParams) error {

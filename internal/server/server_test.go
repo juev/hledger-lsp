@@ -79,6 +79,56 @@ func (m *mockClient) getDiagnostics() []protocol.PublishDiagnosticsParams {
 	return result
 }
 
+type slowMockClient struct {
+	mockClient
+	delay time.Duration
+}
+
+func (m *slowMockClient) Configuration(_ context.Context, _ *protocol.ConfigurationParams) ([]interface{}, error) {
+	time.Sleep(m.delay)
+	return nil, nil
+}
+
+func TestServer_Initialized_NonBlocking(t *testing.T) {
+	srv := NewServer()
+	client := &slowMockClient{delay: 200 * time.Millisecond}
+	srv.SetClient(client)
+	srv.supportsConfiguration = true
+
+	done := make(chan struct{})
+	go func() {
+		err := srv.Initialized(context.Background(), &protocol.InitializedParams{})
+		assert.NoError(t, err)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Initialized blocked on Configuration call - should return immediately")
+	}
+}
+
+func TestServer_DidChangeConfiguration_NonBlocking(t *testing.T) {
+	srv := NewServer()
+	client := &slowMockClient{delay: 200 * time.Millisecond}
+	srv.SetClient(client)
+	srv.supportsConfiguration = true
+
+	done := make(chan struct{})
+	go func() {
+		err := srv.DidChangeConfiguration(context.Background(), &protocol.DidChangeConfigurationParams{})
+		assert.NoError(t, err)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("DidChangeConfiguration blocked on Configuration call - should return immediately")
+	}
+}
+
 func TestServer_Initialize(t *testing.T) {
 	srv := NewServer()
 

@@ -116,7 +116,7 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 			})
 		}
 	}
-	s.refreshConfiguration(context.Background())
+	go s.refreshConfiguration(context.Background())
 	return nil
 }
 

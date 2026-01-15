@@ -75,7 +75,7 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 }
 
 func (s *Server) DidChangeConfiguration(ctx context.Context, _ *protocol.DidChangeConfigurationParams) error {
-	s.refreshConfiguration(ctx)
+	go s.refreshConfiguration(ctx)
 	return nil
 }
 
