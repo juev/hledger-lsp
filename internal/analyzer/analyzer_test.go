@@ -366,3 +366,39 @@ func TestAnalyzer_AnalyzeWithExternalDeclarations_NilMaps(t *testing.T) {
 	}
 	assert.True(t, foundEUR, "EUR should trigger warning when external declarations are nil")
 }
+
+func TestAnalyzer_AnalyzeWithExternalDeclarations_OverlappingDeclarations(t *testing.T) {
+	input := `commodity USD
+commodity EUR
+
+2024-01-15 test
+    expenses:food  USD 50
+    expenses:travel  EUR 30
+    assets:bank  RUB 1000
+    assets:cash  GBP -20`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	external := ExternalDeclarations{
+		Commodities: map[string]bool{
+			"EUR": true,
+			"RUB": true,
+		},
+	}
+
+	a := New()
+	result := a.AnalyzeWithExternalDeclarations(journal, external)
+
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_COMMODITY" {
+			warnings = append(warnings, d.Message)
+		}
+	}
+
+	assert.Len(t, warnings, 1, "Expected exactly 1 undeclared commodity warning")
+	if len(warnings) == 1 {
+		assert.Contains(t, warnings[0], "GBP", "Only GBP should trigger warning")
+	}
+}

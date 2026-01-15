@@ -14,16 +14,18 @@ import (
 )
 
 type Workspace struct {
-	mu              sync.RWMutex
-	rootURI         string
-	rootJournalPath string
-	resolved        *include.ResolvedJournal
-	includeGraph    map[string][]string
-	reverseGraph    map[string][]string
-	loader          *include.Loader
-	loadErrors      []include.LoadError
-	parseErrors     []string
-	cachedFormats   map[string]formatter.NumberFormat
+	mu                sync.RWMutex
+	rootURI           string
+	rootJournalPath   string
+	resolved          *include.ResolvedJournal
+	includeGraph      map[string][]string
+	reverseGraph      map[string][]string
+	loader            *include.Loader
+	loadErrors        []include.LoadError
+	parseErrors       []string
+	cachedFormats     map[string]formatter.NumberFormat
+	cachedCommodities map[string]bool
+	cachedAccounts    map[string]bool
 }
 
 func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
@@ -42,6 +44,8 @@ func (w *Workspace) Initialize() error {
 	w.loadErrors = nil
 	w.parseErrors = nil
 	w.cachedFormats = nil
+	w.cachedCommodities = nil
+	w.cachedAccounts = nil
 
 	rootPath, err := w.findRootJournal()
 	if err != nil {
@@ -220,7 +224,18 @@ func (w *Workspace) GetCommodityFormats() map[string]formatter.NumberFormat {
 
 func (w *Workspace) GetDeclaredCommodities() map[string]bool {
 	w.mu.RLock()
-	defer w.mu.RUnlock()
+	if w.cachedCommodities != nil {
+		defer w.mu.RUnlock()
+		return w.cachedCommodities
+	}
+	w.mu.RUnlock()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.cachedCommodities != nil {
+		return w.cachedCommodities
+	}
 
 	if w.resolved == nil {
 		return nil
@@ -232,12 +247,24 @@ func (w *Workspace) GetDeclaredCommodities() map[string]bool {
 			declared[cd.Commodity.Symbol] = true
 		}
 	}
+	w.cachedCommodities = declared
 	return declared
 }
 
 func (w *Workspace) GetDeclaredAccounts() map[string]bool {
 	w.mu.RLock()
-	defer w.mu.RUnlock()
+	if w.cachedAccounts != nil {
+		defer w.mu.RUnlock()
+		return w.cachedAccounts
+	}
+	w.mu.RUnlock()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.cachedAccounts != nil {
+		return w.cachedAccounts
+	}
 
 	if w.resolved == nil {
 		return nil
@@ -249,5 +276,6 @@ func (w *Workspace) GetDeclaredAccounts() map[string]bool {
 			declared[ad.Account.Name] = true
 		}
 	}
+	w.cachedAccounts = declared
 	return declared
 }
