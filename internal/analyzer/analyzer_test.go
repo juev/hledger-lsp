@@ -80,6 +80,7 @@ func TestAnalyzer_DiagnosticsForMultipleInferred(t *testing.T) {
 
 	require.Len(t, result.Diagnostics, 1)
 	assert.Equal(t, "MULTIPLE_INFERRED", result.Diagnostics[0].Code)
+	assert.Equal(t, SeverityError, result.Diagnostics[0].Severity, "MULTIPLE_INFERRED should have Error severity")
 }
 
 func TestAnalyzer_NoDiagnosticsForBalanced(t *testing.T) {
@@ -127,6 +128,7 @@ func TestAnalyzer_MultipleTransactions(t *testing.T) {
 
 	require.Len(t, result.Diagnostics, 1)
 	assert.Equal(t, 5, result.Diagnostics[0].Range.Start.Line)
+	assert.Equal(t, SeverityError, result.Diagnostics[0].Severity, "UNBALANCED should have Error severity")
 }
 
 func TestAnalyzer_AccountsByPrefix(t *testing.T) {
@@ -164,6 +166,7 @@ func TestAnalyzer_UndeclaredAccount(t *testing.T) {
 		if d.Code == "UNDECLARED_ACCOUNT" {
 			foundUndeclared = true
 			assert.Contains(t, d.Message, "assets:cash")
+			assert.Equal(t, SeverityWarning, d.Severity, "UNDECLARED_ACCOUNT should have Warning severity")
 		}
 	}
 	assert.True(t, foundUndeclared, "expected UNDECLARED_ACCOUNT diagnostic")
@@ -244,6 +247,7 @@ func TestAnalyzer_UndeclaredCommodity_Cost(t *testing.T) {
 	for _, d := range result.Diagnostics {
 		if d.Code == "UNDECLARED_COMMODITY" && d.Message == "commodity 'EUR' has no directive" {
 			foundUndeclared = true
+			assert.Equal(t, SeverityWarning, d.Severity, "UNDECLARED_COMMODITY should have Warning severity")
 		}
 	}
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY diagnostic for cost commodity EUR")
@@ -266,6 +270,7 @@ func TestAnalyzer_UndeclaredCommodity_BalanceAssertion(t *testing.T) {
 	for _, d := range result.Diagnostics {
 		if d.Code == "UNDECLARED_COMMODITY" && d.Message == "commodity 'EUR' has no directive" {
 			foundUndeclared = true
+			assert.Equal(t, SeverityWarning, d.Severity, "UNDECLARED_COMMODITY should have Warning severity")
 		}
 	}
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY diagnostic for balance assertion commodity EUR")
