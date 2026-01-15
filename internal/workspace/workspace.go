@@ -208,6 +208,12 @@ func (w *Workspace) RootJournalPath() string {
 	return w.rootJournalPath
 }
 
+func (w *Workspace) GetResolved() *include.ResolvedJournal {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.resolved
+}
+
 func (w *Workspace) IndexSnapshot() IndexSnapshot {
 	w.mu.RLock()
 	defer w.mu.RUnlock()

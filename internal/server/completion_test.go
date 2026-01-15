@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -615,6 +616,76 @@ func TestCompletion_Date_Historical(t *testing.T) {
 	assert.Contains(t, labels, "2024-01-10")
 }
 
+func TestCompletion_Date_UsesFileFormat(t *testing.T) {
+	srv := NewServer()
+	content := `01-10 old transaction
+    expenses:food  $50
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{2}-\d{2}$`, todayItem.Label, "today should use MM-DD format from file")
+}
+
+func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
+	srv := NewServer()
+	content := `2024/01/10 transaction
+    expenses:food  $50
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{4}/\d{2}/\d{2}$`, todayItem.Label, "today should use YYYY/MM/DD format from file")
+}
+
 func extractDetails(items []protocol.CompletionItem) []string {
 	details := make([]string, len(items))
 	for i, item := range items {
@@ -934,4 +1005,135 @@ func TestCompletion_MaxResultsAccountsPreservesFrequent(t *testing.T) {
 	labels := extractLabels(result.Items)
 	assert.Contains(t, labels, "expenses:food", "most frequent account should be preserved")
 	assert.Contains(t, labels, "assets:frequent", "second most frequent account should be preserved")
+}
+
+func TestCompletion_WorkspaceUsageCount(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := tmpDir + "/main.journal"
+	mainContent := `2024-01-01 Main Transaction 1
+    expenses:food  $10
+    assets:cash
+
+2024-01-02 Main Transaction 2
+    expenses:food  $20
+    assets:cash
+
+2024-01-03 Main Transaction 3
+    expenses:food  $30
+    assets:cash
+
+include transactions.journal`
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	txPath := tmpDir + "/transactions.journal"
+	txContent := `2024-01-15 Included Transaction
+    expenses:food  $50
+    assets:bank
+
+2024-01-16 Another
+    `
+	err = os.WriteFile(txPath, []byte(txContent), 0644)
+	require.NoError(t, err)
+
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	initParams := &protocol.InitializeParams{
+		RootURI: protocol.DocumentURI("file://" + tmpDir),
+	}
+	_, err = srv.Initialize(context.Background(), initParams)
+	require.NoError(t, err)
+
+	err = srv.workspace.Initialize()
+	require.NoError(t, err)
+
+	uri := protocol.DocumentURI("file://" + txPath)
+	srv.documents.Store(uri, txContent)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: uri,
+			},
+			Position: protocol.Position{Line: 5, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var foodDetail string
+	for _, item := range result.Items {
+		if item.Label == "expenses:food" {
+			foodDetail = item.Detail
+			break
+		}
+	}
+
+	assert.Equal(t, "Account (4)", foodDetail,
+		"expenses:food should show count 4 (3 from main + 1 from included), not just 1 from current file")
+}
+
+func TestCompletion_PayeeSnippetWithTabstops(t *testing.T) {
+	srv := NewServer()
+
+	initParams := &protocol.InitializeParams{
+		Capabilities: protocol.ClientCapabilities{
+			TextDocument: &protocol.TextDocumentClientCapabilities{
+				Completion: &protocol.CompletionTextDocumentClientCapabilities{
+					CompletionItem: &protocol.CompletionTextDocumentClientCapabilitiesItem{
+						SnippetSupport: true,
+					},
+				},
+			},
+		},
+	}
+	_, err := srv.Initialize(context.Background(), initParams)
+	require.NoError(t, err)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var groceryItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "Grocery Store" {
+			groceryItem = &result.Items[i]
+			break
+		}
+	}
+
+	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
+	require.NotEmpty(t, groceryItem.InsertText, "Should have template text")
+
+	assert.Equal(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
+		"Should use snippet format when client supports it")
+	assert.Contains(t, groceryItem.InsertText, "${1:",
+		"Snippet should contain tabstops like ${1:...}")
+	assert.Contains(t, groceryItem.InsertText, "$0",
+		"Snippet should end with $0 for final cursor position")
 }

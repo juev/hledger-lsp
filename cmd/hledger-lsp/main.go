@@ -195,7 +195,7 @@ func (d *serverDispatcher) Implementation(ctx context.Context, params *protocol.
 }
 
 func (d *serverDispatcher) OnTypeFormatting(ctx context.Context, params *protocol.DocumentOnTypeFormattingParams) ([]protocol.TextEdit, error) {
-	return nil, nil
+	return d.srv.OnTypeFormatting(ctx, params)
 }
 
 func (d *serverDispatcher) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {

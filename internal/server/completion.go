@@ -33,16 +33,25 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	}
 
 	var result *analyzer.AnalysisResult
-	if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
-		result = s.analyzer.AnalyzeResolved(resolved)
-	} else {
-		journal, _ := parser.Parse(doc)
-		result = s.analyzer.Analyze(journal)
+
+	if s.workspace != nil {
+		if wsResolved := s.workspace.GetResolved(); wsResolved != nil {
+			result = s.analyzer.AnalyzeResolved(wsResolved)
+		}
+	}
+
+	if result == nil {
+		if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
+			result = s.analyzer.AnalyzeResolved(resolved)
+		} else {
+			journal, _ := parser.Parse(doc)
+			result = s.analyzer.Analyze(journal)
+		}
 	}
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	counts := getCountsForContext(completionCtx, result)
-	items := generateCompletionItems(completionCtx, result, doc, params.Position, counts)
+	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts)
 
 	if counts != nil {
 		rankCompletionItems(items, counts)
@@ -159,7 +168,7 @@ func determineTagContext(line string, pos protocol.Position) CompletionContextTy
 	return ContextTagValue
 }
 
-func generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int) []protocol.CompletionItem {
+func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 
 	switch ctxType {
@@ -182,7 +191,12 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 				Kind:  protocol.CompletionItemKindClass,
 			}
 			if postings, ok := result.PayeeTemplates[payee]; ok && len(postings) > 0 {
-				item.InsertText = buildPayeeTemplate(payee, postings)
+				if s.snippetSupport {
+					item.InsertText = buildPayeeSnippet(payee, postings)
+					item.InsertTextFormat = protocol.InsertTextFormatSnippet
+				} else {
+					item.InsertText = buildPayeeTemplate(payee, postings)
+				}
 				hasTemplate = true
 			}
 			item.Detail = formatPayeeDetailWithCount(payee, counts, hasTemplate)
@@ -225,7 +239,7 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 		}
 
 	case ContextDate:
-		items = generateDateCompletionItems(result.Dates)
+		items = generateDateCompletionItems(result.Dates, content)
 
 	default:
 		for _, acc := range result.Accounts.All {
@@ -337,13 +351,14 @@ func extractCurrentTagName(line string, pos int) string {
 
 // generateDateCompletionItems creates date suggestions with today/yesterday/tomorrow at top.
 // Tests check detail strings ("today" etc.) not specific dates, making them time-independent.
-func generateDateCompletionItems(historicalDates []string) []protocol.CompletionItem {
+func generateDateCompletionItems(historicalDates []string, content string) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 	now := time.Now()
 
-	today := formatDateForCompletion(now)
-	yesterday := formatDateForCompletion(now.AddDate(0, 0, -1))
-	tomorrow := formatDateForCompletion(now.AddDate(0, 0, 1))
+	format := detectDateFormat(content)
+	today := formatDateWithFormat(now, format)
+	yesterday := formatDateWithFormat(now.AddDate(0, 0, -1), format)
+	tomorrow := formatDateWithFormat(now.AddDate(0, 0, 1), format)
 
 	items = append(items, protocol.CompletionItem{
 		Label:    today,
@@ -385,8 +400,98 @@ func generateDateCompletionItems(historicalDates []string) []protocol.Completion
 	return items
 }
 
-func formatDateForCompletion(t time.Time) string {
-	return fmt.Sprintf("%04d-%02d-%02d", t.Year(), int(t.Month()), t.Day())
+type DateFormat struct {
+	Separator    string
+	HasYear      bool
+	LeadingZeros bool
+}
+
+var defaultDateFormat = DateFormat{Separator: "-", HasYear: true, LeadingZeros: true}
+
+func detectDateFormat(content string) DateFormat {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) < 5 {
+			continue
+		}
+
+		if trimmed[0] < '0' || trimmed[0] > '9' {
+			continue
+		}
+
+		if format, ok := parseDateFormat(trimmed); ok {
+			return format
+		}
+	}
+	return defaultDateFormat
+}
+
+func parseDateFormat(line string) (DateFormat, bool) {
+	for _, sep := range []string{"-", "/", "."} {
+		if format, ok := tryParseDateWithSep(line, sep); ok {
+			return format, true
+		}
+	}
+	return DateFormat{}, false
+}
+
+func tryParseDateWithSep(line string, sep string) (DateFormat, bool) {
+	parts := strings.SplitN(line, sep, 4)
+	if len(parts) < 2 {
+		return DateFormat{}, false
+	}
+
+	first := parts[0]
+	if len(first) == 4 && isAllDigits(first) {
+		if len(parts) >= 3 && isAllDigits(parts[1]) && len(parts[2]) >= 2 {
+			dayPart := strings.SplitN(parts[2], " ", 2)[0]
+			if isAllDigits(dayPart) {
+				leadingZeros := len(parts[1]) == 2 && parts[1][0] == '0'
+				return DateFormat{Separator: sep, HasYear: true, LeadingZeros: leadingZeros}, true
+			}
+		}
+	}
+
+	if len(first) <= 2 && isAllDigits(first) {
+		if len(parts) >= 2 && len(parts[1]) >= 2 {
+			dayPart := strings.SplitN(parts[1], " ", 2)[0]
+			if isAllDigits(dayPart) {
+				leadingZeros := len(first) == 2 && first[0] == '0'
+				return DateFormat{Separator: sep, HasYear: false, LeadingZeros: leadingZeros}, true
+			}
+		}
+	}
+
+	return DateFormat{}, false
+}
+
+func isAllDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func formatDateWithFormat(t time.Time, f DateFormat) string {
+	month := int(t.Month())
+	day := t.Day()
+
+	var monthStr, dayStr string
+	if f.LeadingZeros {
+		monthStr = fmt.Sprintf("%02d", month)
+		dayStr = fmt.Sprintf("%02d", day)
+	} else {
+		monthStr = fmt.Sprintf("%d", month)
+		dayStr = fmt.Sprintf("%d", day)
+	}
+
+	if f.HasYear {
+		return fmt.Sprintf("%04d%s%s%s%s", t.Year(), f.Separator, monthStr, f.Separator, dayStr)
+	}
+	return monthStr + f.Separator + dayStr
 }
 
 func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) string {
@@ -412,6 +517,37 @@ func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) strin
 		}
 		sb.WriteString("\n")
 	}
+
+	return sb.String()
+}
+
+func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string {
+	var sb strings.Builder
+	sb.WriteString(payee)
+	sb.WriteString("\n")
+
+	tabstop := 1
+	for _, p := range postings {
+		sb.WriteString("    ")
+		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, p.Account))
+		tabstop++
+		if p.Amount != "" || p.Commodity != "" {
+			sb.WriteString("  ")
+			var amountStr string
+			if p.CommodityLeft && p.Commodity != "" {
+				amountStr = p.Commodity + p.Amount
+			} else if p.Amount != "" {
+				amountStr = p.Amount
+				if p.Commodity != "" {
+					amountStr += " " + p.Commodity
+				}
+			}
+			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, amountStr))
+			tabstop++
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("$0")
 
 	return sb.String()
 }
