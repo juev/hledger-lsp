@@ -268,3 +268,84 @@ account assets:cash`
 	assert.Contains(t, string(result[0].URI), "accounts.journal")
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
 }
+
+func TestIntegration_ReferencesAcrossIncludedFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	accountsContent := `account expenses:food`
+
+	transactionsContent := `2024-01-10 paycheck
+    expenses:food  $100.00
+    assets:cash`
+
+	mainContent := `include accounts.journal
+include transactions.journal
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`
+
+	accountsPath := filepath.Join(tmpDir, "accounts.journal")
+	transactionsPath := filepath.Join(tmpDir, "transactions.journal")
+	mainPath := filepath.Join(tmpDir, "main.journal")
+
+	err := os.WriteFile(accountsPath, []byte(accountsContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(transactionsPath, []byte(transactionsContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	ts := newTestServer()
+	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+
+	_, err = ts.openAndWait(uri, mainContent)
+	require.NoError(t, err)
+
+	result, err := ts.references(uri, 4, 6, true) // on "expenses:food", includeDeclaration=true
+	require.NoError(t, err)
+	require.Len(t, result, 3) // 1 declaration + 2 usages
+
+	uris := make(map[string]int)
+	for _, loc := range result {
+		uris[string(loc.URI)]++
+	}
+	assert.Equal(t, 1, uris[fmt.Sprintf("file://%s", accountsPath)])
+	assert.Equal(t, 1, uris[fmt.Sprintf("file://%s", transactionsPath)])
+	assert.Equal(t, 1, uris[fmt.Sprintf("file://%s", mainPath)])
+}
+
+func TestIntegration_ReferencesDeclarationInIncludedFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	accountsContent := `account expenses:food`
+
+	mainContent := `include accounts.journal
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`
+
+	accountsPath := filepath.Join(tmpDir, "accounts.journal")
+	mainPath := filepath.Join(tmpDir, "main.journal")
+
+	err := os.WriteFile(accountsPath, []byte(accountsContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	ts := newTestServer()
+	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+
+	_, err = ts.openAndWait(uri, mainContent)
+	require.NoError(t, err)
+
+	resultInclude, err := ts.references(uri, 3, 6, true)
+	require.NoError(t, err)
+	require.Len(t, resultInclude, 2) // declaration + usage
+
+	resultExclude, err := ts.references(uri, 3, 6, false)
+	require.NoError(t, err)
+	require.Len(t, resultExclude, 1) // only usage
+	assert.Contains(t, string(resultExclude[0].URI), "main.journal")
+}

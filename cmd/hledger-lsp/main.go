@@ -207,7 +207,7 @@ func (d *serverDispatcher) RangeFormatting(ctx context.Context, params *protocol
 }
 
 func (d *serverDispatcher) References(ctx context.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
-	return nil, nil
+	return d.srv.References(ctx, params)
 }
 
 func (d *serverDispatcher) Rename(ctx context.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {

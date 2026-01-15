@@ -86,10 +86,10 @@
 
 ### 4) Find References
 
-- [ ] Добавить LSP handler `textDocument/references`
-- [ ] Поиск ссылок на account/commodity/payee
-- [ ] Тесты на references в одном файле
-- [ ] Тесты на references через include
+- [x] Добавить LSP handler `textDocument/references`
+- [x] Поиск ссылок на account/commodity/payee
+- [x] Тесты на references в одном файле
+- [x] Тесты на references через include
 
 ### 5) Completion: теги, даты, шаблоны
 

@@ -85,8 +85,8 @@ See `docs/configuration.md` for supported settings and defaults.
 | Hover | ✅ |
 | Semantic Tokens | ✅ |
 | Document Symbols | ✅ |
-| Go to Definition | 🔜 |
-| Find References | 🔜 |
+| Go to Definition | ✅ |
+| Find References | ✅ |
 
 ## 📚 Resources
 

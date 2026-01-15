@@ -209,6 +209,17 @@ func (ts *testServer) definition(uri protocol.DocumentURI, line, character uint3
 	return ts.Definition(context.Background(), params)
 }
 
+func (ts *testServer) references(uri protocol.DocumentURI, line, character uint32, includeDeclaration bool) ([]protocol.Location, error) {
+	params := &protocol.ReferenceParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: line, Character: character},
+		},
+		Context: protocol.ReferenceContext{IncludeDeclaration: includeDeclaration},
+	}
+	return ts.References(context.Background(), params)
+}
+
 func extractCompletionLabels(items []protocol.CompletionItem) []string {
 	labels := make([]string, len(items))
 	for i, item := range items {
