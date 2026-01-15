@@ -123,7 +123,7 @@ func (d *serverDispatcher) Declaration(ctx context.Context, params *protocol.Dec
 }
 
 func (d *serverDispatcher) Definition(ctx context.Context, params *protocol.DefinitionParams) ([]protocol.Location, error) {
-	return nil, nil
+	return d.srv.Definition(ctx, params)
 }
 
 func (d *serverDispatcher) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {

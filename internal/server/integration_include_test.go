@@ -234,3 +234,37 @@ func TestIntegration_IncludeRelativePath(t *testing.T) {
 	assert.Contains(t, labels, "expenses:subscriptions")
 	assert.Contains(t, labels, "assets:bank")
 }
+
+func TestIntegration_DefinitionAccountInIncludedFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	accountsContent := `account expenses:food
+account assets:cash`
+
+	mainContent := `include accounts.journal
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`
+
+	accountsPath := filepath.Join(tmpDir, "accounts.journal")
+	mainPath := filepath.Join(tmpDir, "main.journal")
+
+	err := os.WriteFile(accountsPath, []byte(accountsContent), 0644)
+	require.NoError(t, err)
+	err = os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	ts := newTestServer()
+	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+
+	_, err = ts.openAndWait(uri, mainContent)
+	require.NoError(t, err)
+
+	result, err := ts.definition(uri, 3, 6) // on "expenses:food" in posting
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	assert.Contains(t, string(result[0].URI), "accounts.journal")
+	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
+}

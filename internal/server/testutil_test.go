@@ -199,6 +199,16 @@ func (ts *testServer) format(uri protocol.DocumentURI) ([]protocol.TextEdit, err
 	return ts.Format(context.Background(), params)
 }
 
+func (ts *testServer) definition(uri protocol.DocumentURI, line, character uint32) ([]protocol.Location, error) {
+	params := &protocol.DefinitionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: line, Character: character},
+		},
+	}
+	return ts.Definition(context.Background(), params)
+}
+
 func extractCompletionLabels(items []protocol.CompletionItem) []string {
 	labels := make([]string, len(items))
 	for i, item := range items {

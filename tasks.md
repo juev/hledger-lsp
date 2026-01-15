@@ -1,153 +1,128 @@
-# hledger-lsp: План разработки
+# hledger-lsp: План доработок
 
-## Статус проекта
+## Цель
 
-**Фаза 1: Основа** — ✅ Завершена
-**Фаза 2: Основные функции LSP** — ✅ Завершена
+Закрыть отложенные функции и расширить LSP‑возможности: go to definition, find references, completion (теги/даты/шаблоны), диагностика дублей, workspace‑индексация и ограничения производительности.
 
-| Компонент | Статус | Покрытие |
-|-----------|--------|----------|
-| Структура проекта | ✅ | - |
-| Lexer | ✅ | 89.3% |
-| Parser | ✅ | есть тесты |
-| AST типы | ✅ | - |
-| Базовый LSP сервер | ✅ | - |
-| Синхронизация документов | ✅ | - |
-| Базовая диагностика | ✅ | - |
+## План работ (чек‑лист)
 
----
+### 1) Анализ требований и дизайн
 
-## Фаза 2: Основные функции LSP
+- [x] Зафиксировать критерии готовности для каждой фичи
+- [x] Описать модель индекса символов и источники данных
+- [x] Согласовать минимальный набор конфигураций (лимиты/флаги)
 
-- [x] **2.1 Analyzer модуль** — валидация баланса, семантический анализ
-  - ✅ Создан `internal/analyzer/` (analyzer.go, types.go, indexer.go, balance.go)
-  - ✅ Проверка баланса транзакций (включая multi-commodity и cost)
-  - ✅ Сбор информации о счетах, плательщиках, валютах
-  - ✅ Покрытие тестами: 87.6%
+#### Критерии готовности (разделы 2–10)
 
-- [x] **2.2 Completion Provider** — автодополнение
-  - ✅ Счета (из директив и использования)
-  - ✅ Плательщики (payee из транзакций)
-  - ✅ Валюты/commodities
-  - Теги (ожидает 3.4 — теги из комментариев)
-  - Даты (отложено)
+**2) Индексация и workspace**
 
-- [x] **2.3 Diagnostics Provider** — расширенная диагностика
-  - ✅ Несбалансированные транзакции (UNBALANCED, MULTIPLE_INFERRED)
-  - ✅ Неизвестные счета (UNDECLARED_ACCOUNT, если есть директивы account)
-  - Дублирующиеся транзакции (отложено)
+- Workspace‑индекс (accounts/payees/commodities/tags) строится по include‑дереву, обновляется инкрементально на didChange/didSave, есть unit‑тесты в `internal/workspace` или `internal/analyzer`, подтверждающие актуальность индекса.
+- Индекс транзакций добавлен и используется для references/duplicates, формат ключей документирован, есть unit‑тесты на выборку.
+- Include‑дерево интегрировано в индекс, есть тесты на мультифайловые сценарии и циклы include.
+- Cache invalidation обновляет только затронутые файлы/узлы, есть тесты на корректность и бенчмарк на инкрементальные обновления (< 50ms, NFR‑1.3).
 
-- [x] **2.4 Formatting Provider** — форматирование документов
-  - ✅ Выравнивание сумм
-  - ✅ Нормализация отступов
-  - ✅ Поддержка статусов и virtual postings
+**3) Go to Definition**
 
-- [x] **2.5 Semantic Tokens** — подсветка синтаксиса
-  - ✅ Даты, счета, суммы, комментарии
-  - ✅ Директивы, статусы, операторы
+- Handler `textDocument/definition` зарегистрирован в capabilities.
+- Определения работают для accounts/commodities/payees, возвращают корректный `Location`/`Range`, неизвестные символы дают пустой ответ без ошибок.
+- Тесты: один файл + include‑сценарии, проверка точных диапазонов.
 
----
+**4) Find References**
 
-## Фаза 3: Расширенные функции
+- Handler `textDocument/references` зарегистрирован в capabilities.
+- Поиск ссылок по account/commodity/payee в пределах workspace, результаты уникальны и стабильно отсортированы (uri+range).
+- Тесты: один файл + include‑сценарии, проверка сортировки/уникальности.
 
-- [x] **3.1 Hover Provider** — информация при наведении
-  - ✅ Баланс счёта (по валютам)
-  - ✅ Информация о транзакции (дата, плательщик, постинги)
-  - ✅ Информация о сумме (количество, валюта, cost)
-  - ✅ Информация о плательщике (количество транзакций)
+**5) Completion: теги, даты, шаблоны**
 
-- [x] **3.2 Document Symbols** — структура документа
-  - ✅ Транзакции (дата + описание)
-  - ✅ Директивы (account, commodity)
-  - ✅ Include файлы
+- Tag name completion строится по тегам из комментариев/AST, tag value completion учитывает контекст (ключ тега).
+- Date completion включает today/relative/history, контекстом определяется допустимый формат.
+- Template completion использует исторические транзакции и корректно формирует шаблон с postings.
+- Unit‑тесты на каждый тип completion и контекст.
 
-- [x] **3.3 Include file resolution** — обработка include
-  - ✅ Разрешение путей (относительные, абсолютные, ~)
-  - ✅ Обнаружение циклов (set-based)
-  - ✅ Агрегация данных из всех файлов
-  - ✅ Интеграция с Completion/Hover
+**6) Completion: качество выдачи**
 
-- [x] **3.4 Parser extensions** — расширение парсера
-  - ✅ Virtual postings (скобки `[account]` и `(account)`)
-  - ✅ Теги из комментариев (`tag:value`)
-  - ✅ Date2 (вторичная дата `2024-01-15=2024-01-20`)
-  - ✅ Price directive (`P 2024-01-15 EUR $1.08`)
+- Приоритизация по частоте/релевантности реализована и подтверждена тестами на ранжирование.
+- Лимит `hledger.completion.maxResults` применяется ко всем completion‑источникам, есть тесты на лимит и стабильность выдачи.
+- Workspace‑wide completion использует индекс include‑дерева, есть тесты на кросс‑файловые данные.
+- Бенчмарк подтверждает latency completion < 100ms (NFR‑1.1).
 
-- [x] **3.5 CLI Integration** — интеграция с hledger
-  - ✅ CLI клиент (`internal/cli/client.go`) — обёртка для вызова hledger
-  - ✅ Code Actions для запуска команд (bal, reg, is, bs, cf)
-  - ✅ Результат вставляется как комментарии на позицию курсора
-  - ✅ Graceful degradation — работает без hledger
+**7) Diagnostics: дубликаты транзакций**
 
----
+- Нормализованный хэш транзакции определен (дата/плательщик/postings/amount/commodity/теги), порядок и пробелы не влияют.
+- Диагностика сообщает понятное сообщение, корректный range указывает на строку транзакции.
+- Тесты на истинные и ложные срабатывания.
 
-## Фаза 4: Тестирование
+**8) Производительность и лимиты**
 
-- [x] **4.1 Server tests** — тесты LSP хендлеров
-  - ✅ Initialize/Shutdown/Exit
-  - ✅ TextDocumentSync (DidOpen, DidChange, DidClose, DidSave)
-  - ✅ Completion requests (были ранее)
-  - ✅ Diagnostics publishing (с mock client)
-  - ✅ Helper functions (applyChange, splitLines, isFullChange)
-  - ✅ Покрытие: 83.1%
+- Конфиг‑лимиты (file size, include depth, max results) описаны в конфигурации и документации, применяются в коде.
+- Бенчмарки для completion и index‑операций добавлены; цели: parsing < 500ms на 10k строк, incremental < 50ms, memory < 200MB (NFR‑1.2/1.3/1.4).
+- Профилирование подтверждено отчётом/комментарием в PRD или docs, оптимизации задокументированы.
 
-- [x] **4.2 Benchmark tests** — производительность
-  - ✅ Парсинг больших файлов (Lexer, Parser: small/medium/large)
-  - ✅ Инкрементальные обновления (applyChange)
-  - ✅ Время отклика completion (Account/Payee/Commodity)
-  - ✅ Analyzer benchmarks (Analyze, CheckBalance, Collect*)
+**9) Тесты и тестовые данные**
 
-- [x] **4.3 Integration tests** — интеграционные тесты
-  - ✅ 17 тестов покрывающих полные user flows
-  - ✅ Open → Edit → Diagnostics workflow
-  - ✅ Completion в разных контекстах
-  - ✅ Hover с обновлением баланса
-  - ✅ Include файлы (вложенные, циклы, относительные пути)
-  - ✅ Error recovery (completion работает при ошибках парсинга)
-  - ✅ Channel-based синхронизация (без time.Sleep)
+- Unit‑тесты для tag/date/template completion в `internal/providers`.
+- Интеграционные тесты definition/references в `internal/integration`.
+- Добавлены testdata‑файлы: include‑дерево, дубликаты, large‑файлы.
 
----
+**10) Документация**
 
-## Фаза 5: Финализация
+- `README.md` обновлен: таблица фичей и статус.
+- `docs/` содержит описание новых возможностей и ключей конфигурации.
 
-- [x] **5.1 Code review** — ревью кода
-  - ✅ Автоматический анализ (golangci-lint, race detector)
-  - ✅ Исправлены critical issues: path traversal, cache race condition, UTF-8 column tracking
-  - ✅ Исправлены high issues: type assertions, bounds checking, empty function removal
-  - ✅ Добавлены: file size limits, include depth limits, mutex protection
-- [x] **5.2 CI/CD pipeline** — автоматизация сборки и релизов
-  - ✅ CI workflow (lint, test, build)
-  - ✅ Release workflow (goreleaser, cross-platform)
-  - ✅ Version info в binary (--version flag)
-  - ✅ Coverage reporting (codecov)
-- [x] **5.3 Документация для редакторов** — VS Code, Neovim, Emacs
-  - ✅ LICENSE (MIT)
-  - ✅ README.md (badges, features, installation, editor links)
-  - ✅ docs/vscode.md — setup guide
-  - ✅ docs/neovim.md — nvim-lspconfig, lazy.nvim
-  - ✅ docs/emacs.md — eglot, lsp-mode, use-package
+### 2) Индексация и workspace
 
----
+- [x] Реализовать workspace‑индекс: accounts, payees, commodities, tags
+- [x] Добавить индекс транзакций (для references/duplicates)
+- [x] Интегрировать include‑дерево в workspace‑индексацию
+- [x] Обновить cache invalidation при изменениях файлов
 
-## Порядок выполнения
+### 3) Go to Definition
 
-```
-Analyzer (2.1)
-     │
-     ▼
-┌────┴────┬────────┬────────┬────────┐
-│         │        │        │        │
-▼         ▼        ▼        ▼        ▼
-2.2      2.3      2.4      2.5      3.x
-Completion Diagnostics Formatting Semantic
-     │         │        │        │
-     └────┬────┴────────┴────────┘
-          │
-          ▼
-    Тестирование (4.x)
-          │
-          ▼
-    Финализация (5.x)
-```
+- [x] Добавить LSP handler `textDocument/definition`
+- [x] Разрешение определения для accounts/commodities/payees
+- [x] Тесты на определения в одном файле
+- [x] Тесты на определения через include
 
-**Критический путь**: 2.1 → (2.2-2.5 параллельно) → 4.x → 5.x
+### 4) Find References
+
+- [ ] Добавить LSP handler `textDocument/references`
+- [ ] Поиск ссылок на account/commodity/payee
+- [ ] Тесты на references в одном файле
+- [ ] Тесты на references через include
+
+### 5) Completion: теги, даты, шаблоны
+
+- [ ] Tag name completion из тегов в комментариях/AST
+- [ ] Tag value completion по контексту
+- [ ] Date completion (today/relative/история)
+- [ ] Template completion из исторических транзакций
+
+### 6) Completion: качество выдачи
+
+- [ ] Приоритизация по частоте/релевантности
+- [ ] Лимит maxResults через конфиг
+- [ ] Workspace‑wide completion на основе индекса
+
+### 7) Diagnostics: дубликаты транзакций
+
+- [ ] Детектор дублей по нормализованному хэшу транзакций
+- [ ] Диагностика с понятным сообщением и range
+- [ ] Тесты на ложные/истинные срабатывания
+
+### 8) Производительность и лимиты
+
+- [ ] Конфигурируемые лимиты: file size, include depth, max results
+- [ ] Бенчмарки для новых completion и index‑операций
+- [ ] Профилирование горячих путей и оптимизация
+
+### 9) Тесты и тестовые данные
+
+- [ ] Unit‑тесты для tag/date/template completion
+- [ ] Интеграционные тесты definition/references
+- [ ] Добавить testdata для новых сценариев
+
+### 10) Документация
+
+- [ ] Обновить `README.md` (таблица фичей)
+- [ ] Обновить `docs/` с описанием новых возможностей
