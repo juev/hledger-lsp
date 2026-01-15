@@ -688,6 +688,75 @@ func TestServer_Format_DocumentNotFound(t *testing.T) {
 	assert.Nil(t, edits)
 }
 
+func TestServer_Diagnostics_WithWorkspaceDeclarations(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := tmpDir + "/main.journal"
+	mainContent := `commodity RUB
+commodity USD
+
+include transactions.journal`
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	txPath := tmpDir + "/transactions.journal"
+	txContent := `2024-01-15 test
+    expenses:food  100 EUR
+    assets:cash  100 RUB`
+	err = os.WriteFile(txPath, []byte(txContent), 0644)
+	require.NoError(t, err)
+
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	initParams := &protocol.InitializeParams{
+		RootURI: protocol.DocumentURI("file://" + tmpDir),
+	}
+	_, err = srv.Initialize(context.Background(), initParams)
+	require.NoError(t, err)
+
+	err = srv.workspace.Initialize()
+	require.NoError(t, err)
+
+	uri := protocol.DocumentURI("file://" + txPath)
+	params := &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{
+			URI:  uri,
+			Text: txContent,
+		},
+	}
+
+	err = srv.DidOpen(context.Background(), params)
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	diagnostics := client.getDiagnostics()
+	require.NotEmpty(t, diagnostics)
+
+	var foundEURWarning bool
+	var foundRUBWarning bool
+	for _, pub := range diagnostics {
+		for _, d := range pub.Diagnostics {
+			if d.Code == "UNDECLARED_COMMODITY" {
+				if strings.Contains(d.Message, "EUR") {
+					foundEURWarning = true
+				}
+				if strings.Contains(d.Message, "RUB") {
+					foundRUBWarning = true
+				}
+			}
+		}
+	}
+
+	assert.True(t, foundEURWarning, "Expected UNDECLARED_COMMODITY warning for EUR (not in workspace declarations)")
+	assert.False(t, foundRUBWarning, "RUB should NOT trigger warning (declared in workspace)")
+}
+
 func TestServer_Format_WithWorkspaceCommodityFormat(t *testing.T) {
 	t.Setenv("LEDGER_FILE", "")
 	t.Setenv("HLEDGER_JOURNAL", "")

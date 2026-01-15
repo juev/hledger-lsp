@@ -157,3 +157,85 @@ commodity EUR
 	assert.Equal(t, ',', eurFormat.DecimalMark)
 	assert.Equal(t, " ", eurFormat.ThousandsSep)
 }
+
+func TestWorkspace_GetDeclaredCommodities(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `commodity RUB
+  format 1.000,00 RUB
+
+commodity EUR
+
+include transactions.journal`
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	txPath := filepath.Join(tmpDir, "transactions.journal")
+	err = os.WriteFile(txPath, []byte(""), 0644)
+	require.NoError(t, err)
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+
+	err = ws.Initialize()
+	require.NoError(t, err)
+
+	declared := ws.GetDeclaredCommodities()
+	require.NotNil(t, declared)
+
+	assert.True(t, declared["RUB"], "RUB should be declared")
+	assert.True(t, declared["EUR"], "EUR should be declared")
+	assert.False(t, declared["USD"], "USD should not be declared")
+}
+
+func TestWorkspace_GetDeclaredCommodities_NilResolved(t *testing.T) {
+	loader := include.NewLoader()
+	ws := NewWorkspace("/nonexistent", loader)
+
+	declared := ws.GetDeclaredCommodities()
+	assert.Nil(t, declared)
+}
+
+func TestWorkspace_GetDeclaredAccounts(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `account expenses:food
+account assets:cash
+
+include transactions.journal`
+	err := os.WriteFile(mainPath, []byte(mainContent), 0644)
+	require.NoError(t, err)
+
+	txPath := filepath.Join(tmpDir, "transactions.journal")
+	err = os.WriteFile(txPath, []byte(""), 0644)
+	require.NoError(t, err)
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+
+	err = ws.Initialize()
+	require.NoError(t, err)
+
+	declared := ws.GetDeclaredAccounts()
+	require.NotNil(t, declared)
+
+	assert.True(t, declared["expenses:food"], "expenses:food should be declared")
+	assert.True(t, declared["assets:cash"], "assets:cash should be declared")
+	assert.False(t, declared["liabilities:card"], "liabilities:card should not be declared")
+}
+
+func TestWorkspace_GetDeclaredAccounts_NilResolved(t *testing.T) {
+	loader := include.NewLoader()
+	ws := NewWorkspace("/nonexistent", loader)
+
+	declared := ws.GetDeclaredAccounts()
+	assert.Nil(t, declared)
+}

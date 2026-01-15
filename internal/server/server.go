@@ -219,7 +219,19 @@ func (s *Server) analyze(content string) []protocol.Diagnostic {
 		})
 	}
 
-	result := s.analyzer.Analyze(journal)
+	external := analyzer.ExternalDeclarations{}
+	if s.workspace != nil {
+		external.Accounts = s.workspace.GetDeclaredAccounts()
+		external.Commodities = s.workspace.GetDeclaredCommodities()
+	}
+
+	var result *analyzer.AnalysisResult
+	if external.Accounts != nil || external.Commodities != nil {
+		result = s.analyzer.AnalyzeWithExternalDeclarations(journal, external)
+	} else {
+		result = s.analyzer.Analyze(journal)
+	}
+
 	for _, diag := range result.Diagnostics {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{

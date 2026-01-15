@@ -291,3 +291,78 @@ func TestAnalyzer_NoCommodityDirectives_NoDiagnostic(t *testing.T) {
 		assert.NotEqual(t, "UNDECLARED_COMMODITY", d.Code)
 	}
 }
+
+func TestAnalyzer_AnalyzeWithExternalDeclarations_SuppressesCommodityWarning(t *testing.T) {
+	input := `commodity USD
+
+2024-01-15 test
+    expenses:food  EUR 50
+    assets:cash  USD -50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	external := ExternalDeclarations{
+		Commodities: map[string]bool{"EUR": true},
+	}
+
+	a := New()
+	result := a.AnalyzeWithExternalDeclarations(journal, external)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_COMMODITY" {
+			assert.NotContains(t, d.Message, "EUR", "EUR should not trigger warning when in external declarations")
+		}
+	}
+}
+
+func TestAnalyzer_AnalyzeWithExternalDeclarations_SuppressesAccountWarning(t *testing.T) {
+	input := `account expenses:food
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	external := ExternalDeclarations{
+		Accounts: map[string]bool{"assets:cash": true},
+	}
+
+	a := New()
+	result := a.AnalyzeWithExternalDeclarations(journal, external)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			assert.NotContains(t, d.Message, "assets:cash", "assets:cash should not trigger warning when in external declarations")
+		}
+	}
+}
+
+func TestAnalyzer_AnalyzeWithExternalDeclarations_NilMaps(t *testing.T) {
+	input := `commodity USD
+
+2024-01-15 test
+    expenses:food  EUR 50
+    assets:cash  USD -50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	external := ExternalDeclarations{
+		Accounts:    nil,
+		Commodities: nil,
+	}
+
+	a := New()
+	result := a.AnalyzeWithExternalDeclarations(journal, external)
+
+	var foundEUR bool
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_COMMODITY" && d.Message == "commodity 'EUR' has no directive" {
+			foundEUR = true
+		}
+	}
+	assert.True(t, foundEUR, "EUR should trigger warning when external declarations are nil")
+}

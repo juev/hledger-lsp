@@ -217,3 +217,37 @@ func (w *Workspace) GetCommodityFormats() map[string]formatter.NumberFormat {
 	w.cachedFormats = formats
 	return formats
 }
+
+func (w *Workspace) GetDeclaredCommodities() map[string]bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if w.resolved == nil {
+		return nil
+	}
+
+	declared := make(map[string]bool)
+	for _, dir := range w.resolved.AllDirectives() {
+		if cd, ok := dir.(ast.CommodityDirective); ok {
+			declared[cd.Commodity.Symbol] = true
+		}
+	}
+	return declared
+}
+
+func (w *Workspace) GetDeclaredAccounts() map[string]bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	if w.resolved == nil {
+		return nil
+	}
+
+	declared := make(map[string]bool)
+	for _, dir := range w.resolved.AllDirectives() {
+		if ad, ok := dir.(ast.AccountDirective); ok {
+			declared[ad.Account.Name] = true
+		}
+	}
+	return declared
+}

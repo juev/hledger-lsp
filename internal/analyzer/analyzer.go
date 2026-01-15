@@ -49,6 +49,48 @@ func (a *Analyzer) Analyze(journal *ast.Journal) *AnalysisResult {
 	return result
 }
 
+func (a *Analyzer) AnalyzeWithExternalDeclarations(journal *ast.Journal, external ExternalDeclarations) *AnalysisResult {
+	result := &AnalysisResult{
+		Accounts:    CollectAccounts(journal),
+		Payees:      CollectPayees(journal),
+		Commodities: CollectCommodities(journal),
+		Tags:        CollectTags(journal),
+		Diagnostics: make([]Diagnostic, 0),
+	}
+
+	declaredAccounts := collectDeclaredAccounts(journal)
+	for k := range external.Accounts {
+		declaredAccounts[k] = true
+	}
+
+	declaredCommodities := collectDeclaredCommodities(journal)
+	for k := range external.Commodities {
+		declaredCommodities[k] = true
+	}
+
+	for i := range journal.Transactions {
+		tx := &journal.Transactions[i]
+		balanceResult := CheckBalance(tx)
+
+		if !balanceResult.Balanced {
+			diag := a.createBalanceDiagnostic(tx, balanceResult)
+			result.Diagnostics = append(result.Diagnostics, diag)
+		}
+
+		if len(declaredAccounts) > 0 {
+			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
+			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
+		}
+
+		if len(declaredCommodities) > 0 {
+			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
+			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
+		}
+	}
+
+	return result
+}
+
 func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisResult {
 	result := &AnalysisResult{
 		Accounts:    NewAccountIndex(),

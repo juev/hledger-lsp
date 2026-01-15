@@ -55,3 +55,8 @@ func NewBalanceResult() *BalanceResult {
 		InferredIdx: -1,
 	}
 }
+
+type ExternalDeclarations struct {
+	Accounts    map[string]bool
+	Commodities map[string]bool
+}
