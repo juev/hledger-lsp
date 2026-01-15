@@ -28,6 +28,7 @@ type FileIndex struct {
 	Payees       []string
 	Commodities  []string
 	Tags         []string
+	TagValues    map[string][]string
 	Transactions []TransactionEntry
 	Includes     []string
 }
@@ -37,6 +38,7 @@ type IndexSnapshot struct {
 	Payees       []string
 	Commodities  []string
 	Tags         []string
+	TagValues    map[string][]string
 	Transactions map[string][]TransactionEntry
 }
 
@@ -46,11 +48,13 @@ type WorkspaceIndex struct {
 	payeeCounts       map[string]int
 	commodityCounts   map[string]int
 	tagCounts         map[string]int
+	tagValueCounts    map[string]map[string]int
 	transactionsByKey map[string][]TransactionEntry
 	accounts          *analyzer.AccountIndex
 	payees            []string
 	commodities       []string
 	tags              []string
+	tagValues         map[string][]string
 }
 
 func NewWorkspaceIndex() *WorkspaceIndex {
@@ -60,8 +64,10 @@ func NewWorkspaceIndex() *WorkspaceIndex {
 		payeeCounts:       make(map[string]int),
 		commodityCounts:   make(map[string]int),
 		tagCounts:         make(map[string]int),
+		tagValueCounts:    make(map[string]map[string]int),
 		transactionsByKey: make(map[string][]TransactionEntry),
 		accounts:          analyzer.NewAccountIndex(),
+		tagValues:         make(map[string][]string),
 	}
 }
 
@@ -71,6 +77,7 @@ func (idx *WorkspaceIndex) Snapshot() IndexSnapshot {
 		Payees:       append([]string(nil), idx.payees...),
 		Commodities:  append([]string(nil), idx.commodities...),
 		Tags:         append([]string(nil), idx.tags...),
+		TagValues:    cloneTagValues(idx.tagValues),
 		Transactions: cloneTransactions(idx.transactionsByKey),
 	}
 }
@@ -112,6 +119,14 @@ func (idx *WorkspaceIndex) addFileIndex(path string, fi *FileIndex) {
 	for _, name := range fi.Tags {
 		idx.tagCounts[name]++
 	}
+	for tagName, values := range fi.TagValues {
+		if idx.tagValueCounts[tagName] == nil {
+			idx.tagValueCounts[tagName] = make(map[string]int)
+		}
+		for _, value := range values {
+			idx.tagValueCounts[tagName][value]++
+		}
+	}
 	for _, entry := range fi.Transactions {
 		idx.transactionsByKey[entry.Key] = append(idx.transactionsByKey[entry.Key], entry)
 	}
@@ -132,6 +147,11 @@ func (idx *WorkspaceIndex) removeFileIndex(path string, fi *FileIndex) {
 	for _, name := range fi.Tags {
 		idx.decrement(idx.tagCounts, name)
 	}
+	for tagName, values := range fi.TagValues {
+		for _, value := range values {
+			idx.decrementTagValue(tagName, value)
+		}
+	}
 	for _, entry := range fi.Transactions {
 		entries := idx.transactionsByKey[entry.Key]
 		idx.transactionsByKey[entry.Key] = filterTransactions(entries, path)
@@ -150,11 +170,34 @@ func (idx *WorkspaceIndex) decrement(counts map[string]int, key string) {
 	counts[key]--
 }
 
+func (idx *WorkspaceIndex) decrementTagValue(tagName, value string) {
+	if idx.tagValueCounts[tagName] == nil {
+		return
+	}
+	if idx.tagValueCounts[tagName][value] <= 1 {
+		delete(idx.tagValueCounts[tagName], value)
+		if len(idx.tagValueCounts[tagName]) == 0 {
+			delete(idx.tagValueCounts, tagName)
+		}
+		return
+	}
+	idx.tagValueCounts[tagName][value]--
+}
+
 func (idx *WorkspaceIndex) refreshDerived() {
 	idx.accounts = buildAccountIndex(idx.accountCounts)
 	idx.payees = sortedKeys(idx.payeeCounts)
 	idx.commodities = sortedKeys(idx.commodityCounts)
 	idx.tags = sortedKeys(idx.tagCounts)
+	idx.tagValues = buildTagValues(idx.tagValueCounts)
+}
+
+func buildTagValues(counts map[string]map[string]int) map[string][]string {
+	result := make(map[string][]string, len(counts))
+	for tagName, valueCounts := range counts {
+		result[tagName] = sortedKeys(valueCounts)
+	}
+	return result
 }
 
 func buildAccountIndex(counts map[string]int) *analyzer.AccountIndex {
@@ -218,6 +261,17 @@ func cloneTransactions(source map[string][]TransactionEntry) map[string][]Transa
 	return clone
 }
 
+func cloneTagValues(source map[string][]string) map[string][]string {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string][]string, len(source))
+	for key, values := range source {
+		clone[key] = append([]string(nil), values...)
+	}
+	return clone
+}
+
 func BuildFileIndexFromContent(path, content string) (*FileIndex, *ast.Journal, []string) {
 	journal, parseErrs := parser.Parse(content)
 	var errors []string
@@ -238,6 +292,7 @@ func BuildFileIndexFromJournal(path string, journal *ast.Journal) *FileIndex {
 	payees := analyzer.CollectPayees(journal)
 	commodities := analyzer.CollectCommodities(journal)
 	tags := analyzer.CollectTags(journal)
+	tagValues := analyzer.CollectTagValues(journal)
 	transactions := collectTransactions(path, journal)
 	includes := resolveIncludePaths(path, journal.Includes)
 	return &FileIndex{
@@ -245,6 +300,7 @@ func BuildFileIndexFromJournal(path string, journal *ast.Journal) *FileIndex {
 		Payees:       payees,
 		Commodities:  commodities,
 		Tags:         tags,
+		TagValues:    tagValues,
 		Transactions: transactions,
 		Includes:     includes,
 	}

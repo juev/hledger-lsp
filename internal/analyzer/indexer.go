@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -101,22 +102,116 @@ func CollectTags(journal *ast.Journal) []string {
 	seen := make(map[string]bool)
 	var tags []string
 
-	for _, tx := range journal.Transactions {
-		for _, tag := range tx.Tags {
+	collectTagsFrom := func(tagList []ast.Tag) {
+		for _, tag := range tagList {
 			if tag.Name != "" && !seen[tag.Name] {
 				seen[tag.Name] = true
 				tags = append(tags, tag.Name)
 			}
 		}
+	}
+
+	for _, tx := range journal.Transactions {
+		collectTagsFrom(tx.Tags)
+		for _, comment := range tx.Comments {
+			collectTagsFrom(comment.Tags)
+		}
 		for _, posting := range tx.Postings {
-			for _, tag := range posting.Tags {
-				if tag.Name != "" && !seen[tag.Name] {
-					seen[tag.Name] = true
-					tags = append(tags, tag.Name)
-				}
-			}
+			collectTagsFrom(posting.Tags)
 		}
 	}
 
 	return tags
+}
+
+func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
+	result := make(map[string][]PostingTemplate)
+
+	for _, tx := range journal.Transactions {
+		payee := tx.Payee
+		if payee == "" {
+			payee = tx.Description
+		}
+		if payee == "" {
+			continue
+		}
+
+		var postings []PostingTemplate
+		for _, p := range tx.Postings {
+			pt := PostingTemplate{
+				Account: p.Account.Name,
+			}
+			if p.Amount != nil {
+				pt.Amount = p.Amount.RawQuantity
+				if pt.Amount == "" {
+					pt.Amount = p.Amount.Quantity.String()
+				}
+				pt.Commodity = p.Amount.Commodity.Symbol
+			}
+			postings = append(postings, pt)
+		}
+		result[payee] = postings
+	}
+
+	return result
+}
+
+func CollectDates(journal *ast.Journal) []string {
+	seen := make(map[string]bool)
+	var dates []string
+
+	for _, tx := range journal.Transactions {
+		dateStr := formatDate(tx.Date)
+		if dateStr != "" && !seen[dateStr] {
+			seen[dateStr] = true
+			dates = append(dates, dateStr)
+		}
+	}
+
+	return dates
+}
+
+func formatDate(d ast.Date) string {
+	if d.Year == 0 && d.Month == 0 && d.Day == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
+}
+
+func CollectTagValues(journal *ast.Journal) map[string][]string {
+	result := make(map[string][]string)
+	seen := make(map[string]map[string]bool)
+
+	addTagValue := func(tagList []ast.Tag) {
+		for _, tag := range tagList {
+			if tag.Name == "" {
+				continue
+			}
+			if tag.Value == "" {
+				if _, ok := result[tag.Name]; !ok {
+					result[tag.Name] = []string{}
+				}
+				continue
+			}
+			if seen[tag.Name] == nil {
+				seen[tag.Name] = make(map[string]bool)
+			}
+			if !seen[tag.Name][tag.Value] {
+				seen[tag.Name][tag.Value] = true
+				result[tag.Name] = append(result[tag.Name], tag.Value)
+			}
+		}
+	}
+
+	for _, tx := range journal.Transactions {
+		addTagValue(tx.Tags)
+		for _, comment := range tx.Comments {
+			addTagValue(comment.Tags)
+		}
+		for _, posting := range tx.Postings {
+			addTagValue(posting.Tags)
+		}
+	}
+
+	return result
 }

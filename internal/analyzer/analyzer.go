@@ -24,11 +24,14 @@ func (a *Analyzer) AnalyzeWithExternalDeclarations(journal *ast.Journal, externa
 
 func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclarations) *AnalysisResult {
 	result := &AnalysisResult{
-		Accounts:    CollectAccounts(journal),
-		Payees:      CollectPayees(journal),
-		Commodities: CollectCommodities(journal),
-		Tags:        CollectTags(journal),
-		Diagnostics: make([]Diagnostic, 0),
+		Accounts:       CollectAccounts(journal),
+		Payees:         CollectPayees(journal),
+		Commodities:    CollectCommodities(journal),
+		Tags:           CollectTags(journal),
+		TagValues:      CollectTagValues(journal),
+		Dates:          CollectDates(journal),
+		PayeeTemplates: CollectPayeeTemplates(journal),
+		Diagnostics:    make([]Diagnostic, 0),
 	}
 
 	declaredAccounts := collectDeclaredAccounts(journal)
@@ -66,11 +69,14 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 
 func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisResult {
 	result := &AnalysisResult{
-		Accounts:    NewAccountIndex(),
-		Payees:      []string{},
-		Commodities: []string{},
-		Tags:        []string{},
-		Diagnostics: make([]Diagnostic, 0),
+		Accounts:       NewAccountIndex(),
+		Payees:         []string{},
+		Commodities:    []string{},
+		Tags:           []string{},
+		TagValues:      make(map[string][]string),
+		Dates:          []string{},
+		PayeeTemplates: make(map[string][]PostingTemplate),
+		Diagnostics:    make([]Diagnostic, 0),
 	}
 
 	if resolved == nil || resolved.Primary == nil {
@@ -81,6 +87,9 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.Payees = collectPayeesFromResolved(resolved)
 	result.Commodities = collectCommoditiesFromResolved(resolved)
 	result.Tags = collectTagsFromResolved(resolved)
+	result.TagValues = collectTagValuesFromResolved(resolved)
+	result.Dates = collectDatesFromResolved(resolved)
+	result.PayeeTemplates = collectPayeeTemplatesFromResolved(resolved)
 
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
 	declaredCommodities := collectDeclaredCommoditiesFromResolved(resolved)
@@ -206,6 +215,79 @@ func collectTagsFromResolved(resolved *include.ResolvedJournal) []string {
 	}
 
 	return tags
+}
+
+func collectTagValuesFromResolved(resolved *include.ResolvedJournal) map[string][]string {
+	result := make(map[string][]string)
+	seen := make(map[string]map[string]bool)
+
+	mergeTagValues := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for tagName, values := range CollectTagValues(journal) {
+			if seen[tagName] == nil {
+				seen[tagName] = make(map[string]bool)
+			}
+			for _, value := range values {
+				if !seen[tagName][value] {
+					seen[tagName][value] = true
+					result[tagName] = append(result[tagName], value)
+				}
+			}
+		}
+	}
+
+	mergeTagValues(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeTagValues(journal)
+	}
+
+	return result
+}
+
+func collectDatesFromResolved(resolved *include.ResolvedJournal) []string {
+	seen := make(map[string]bool)
+	var dates []string
+
+	mergeDates := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for _, d := range CollectDates(journal) {
+			if !seen[d] {
+				seen[d] = true
+				dates = append(dates, d)
+			}
+		}
+	}
+
+	mergeDates(resolved.Primary)
+	for _, journal := range resolved.Files {
+		mergeDates(journal)
+	}
+
+	return dates
+}
+
+func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
+	result := make(map[string][]PostingTemplate)
+
+	mergeTemplates := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for payee, postings := range CollectPayeeTemplates(journal) {
+			result[payee] = postings
+		}
+	}
+
+	for _, journal := range resolved.Files {
+		mergeTemplates(journal)
+	}
+	mergeTemplates(resolved.Primary)
+
+	return result
 }
 
 func collectDeclaredAccountsFromResolved(resolved *include.ResolvedJournal) map[string]bool {

@@ -435,3 +435,88 @@ func TestWorkspace_TransactionIndexKeys(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, mainPath, entries[0].FilePath)
 }
+
+func TestWorkspace_IndexSnapshot_TagValues_SingleFile(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	content := `2024-03-01 Coffee Shop  ; project:alpha, status:active
+    expenses:food  $3  ; category:coffee
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	require.NotNil(t, snapshot.TagValues)
+
+	assert.Contains(t, snapshot.TagValues["project"], "alpha")
+	assert.Contains(t, snapshot.TagValues["status"], "active")
+	assert.Contains(t, snapshot.TagValues["category"], "coffee")
+}
+
+func TestWorkspace_IndexSnapshot_TagValues_MultipleFiles(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	mainContent := `include child.journal
+
+2024-03-01 Main  ; project:alpha
+    expenses:food  $10
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	childContent := `2024-03-02 Child  ; project:beta
+    expenses:rent  $100
+    assets:bank
+`
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	require.NotNil(t, snapshot.TagValues)
+
+	assert.Contains(t, snapshot.TagValues["project"], "alpha")
+	assert.Contains(t, snapshot.TagValues["project"], "beta")
+}
+
+func TestWorkspace_IndexSnapshot_TagValues_UpdateOnFileChange(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	content := `2024-03-01 Test  ; project:alpha
+    expenses:food  $10
+    assets:cash
+`
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	snapshot := ws.IndexSnapshot()
+	assert.Contains(t, snapshot.TagValues["project"], "alpha")
+
+	updatedContent := `2024-03-01 Test  ; project:beta
+    expenses:food  $10
+    assets:cash
+`
+	ws.UpdateFile(mainPath, updatedContent)
+
+	snapshot = ws.IndexSnapshot()
+	assert.Contains(t, snapshot.TagValues["project"], "beta")
+	assert.NotContains(t, snapshot.TagValues["project"], "alpha")
+}

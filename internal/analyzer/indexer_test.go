@@ -204,15 +204,138 @@ func TestCollectCommodities_NoDuplicates(t *testing.T) {
 }
 
 func TestCollectTags_FromTransaction(t *testing.T) {
-	t.Skip("Parser does not yet support tag extraction from comments (task 3.4)")
+	input := `2024-01-15 test  ; project:alpha, status:done
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tags := CollectTags(journal)
+
+	assert.Contains(t, tags, "project")
+	assert.Contains(t, tags, "status")
 }
 
 func TestCollectTags_FromPosting(t *testing.T) {
-	t.Skip("Parser does not yet support tag extraction from comments (task 3.4)")
+	input := `2024-01-15 test
+    expenses:food  $50  ; category:groceries
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tags := CollectTags(journal)
+
+	assert.Contains(t, tags, "category")
 }
 
 func TestCollectTags_NoDuplicates(t *testing.T) {
-	t.Skip("Parser does not yet support tag extraction from comments (task 3.4)")
+	input := `2024-01-15 test1  ; project:alpha
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:beta
+    expenses:rent  $1000
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tags := CollectTags(journal)
+
+	count := 0
+	for _, tag := range tags {
+		if tag == "project" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestCollectTagValues_FromTransaction(t *testing.T) {
+	input := `2024-01-15 test  ; project:alpha
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tagValues := CollectTagValues(journal)
+
+	require.Contains(t, tagValues, "project")
+	assert.Contains(t, tagValues["project"], "alpha")
+}
+
+func TestCollectTagValues_FromPosting(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; category:groceries
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tagValues := CollectTagValues(journal)
+
+	require.Contains(t, tagValues, "category")
+	assert.Contains(t, tagValues["category"], "groceries")
+}
+
+func TestCollectTagValues_GroupedByTagName(t *testing.T) {
+	input := `2024-01-15 test1  ; project:alpha
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:beta
+    expenses:rent  $1000
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tagValues := CollectTagValues(journal)
+
+	require.Contains(t, tagValues, "project")
+	assert.Contains(t, tagValues["project"], "alpha")
+	assert.Contains(t, tagValues["project"], "beta")
+}
+
+func TestCollectTagValues_NoDuplicates(t *testing.T) {
+	input := `2024-01-15 test1  ; project:alpha
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:alpha
+    expenses:rent  $1000
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tagValues := CollectTagValues(journal)
+
+	require.Contains(t, tagValues, "project")
+	count := 0
+	for _, v := range tagValues["project"] {
+		if v == "alpha" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestCollectTagValues_EmptyValues(t *testing.T) {
+	input := `2024-01-15 test  ; billable:
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	tagValues := CollectTagValues(journal)
+
+	require.Contains(t, tagValues, "billable")
+	assert.Empty(t, tagValues["billable"])
 }
 
 func TestCollectAll_EmptyJournal(t *testing.T) {

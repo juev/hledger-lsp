@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"go.lsp.dev/protocol"
 
@@ -18,6 +21,9 @@ const (
 	ContextAccount
 	ContextPayee
 	ContextCommodity
+	ContextTagName
+	ContextTagValue
+	ContextDate
 )
 
 func (s *Server) Completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
@@ -50,10 +56,14 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 func determineCompletionContext(content string, pos protocol.Position, ctx *protocol.CompletionContext) CompletionContextType {
 	lines := strings.Split(content, "\n")
 	if int(pos.Line) >= len(lines) {
-		return ContextUnknown
+		return ContextDate
 	}
 
 	line := lines[pos.Line]
+
+	if tagCtx := determineTagContext(line, pos); tagCtx != ContextUnknown {
+		return tagCtx
+	}
 
 	if ctx != nil && ctx.TriggerCharacter == ":" {
 		return ContextAccount
@@ -61,6 +71,10 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 
 	if ctx != nil && (ctx.TriggerCharacter == "@" || ctx.TriggerCharacter == "=") {
 		return ContextCommodity
+	}
+
+	if line == "" {
+		return ContextDate
 	}
 
 	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
@@ -71,7 +85,44 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return ContextPayee
 	}
 
-	return ContextAccount
+	return ContextDate
+}
+
+func determineTagContext(line string, pos protocol.Position) CompletionContextType {
+	semicolonIdx := strings.Index(line, ";")
+	if semicolonIdx == -1 {
+		return ContextUnknown
+	}
+
+	cursorPos := int(pos.Character)
+	if cursorPos <= semicolonIdx {
+		return ContextUnknown
+	}
+
+	afterSemicolon := line[semicolonIdx+1:]
+	cursorInComment := cursorPos - semicolonIdx - 1
+	if cursorInComment < 0 || cursorInComment > len(afterSemicolon) {
+		cursorInComment = len(afterSemicolon)
+	}
+
+	beforeCursor := afterSemicolon[:cursorInComment]
+
+	lastColon := strings.LastIndex(beforeCursor, ":")
+	lastComma := strings.LastIndex(beforeCursor, ",")
+
+	if lastColon == -1 {
+		return ContextTagName
+	}
+
+	if lastComma > lastColon {
+		afterComma := strings.TrimSpace(beforeCursor[lastComma+1:])
+		if strings.Contains(afterComma, ":") {
+			return ContextTagValue
+		}
+		return ContextTagName
+	}
+
+	return ContextTagValue
 }
 
 func generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position) []protocol.CompletionItem {
@@ -91,11 +142,16 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 
 	case ContextPayee:
 		for _, payee := range result.Payees {
-			items = append(items, protocol.CompletionItem{
+			item := protocol.CompletionItem{
 				Label:  payee,
 				Kind:   protocol.CompletionItemKindClass,
 				Detail: "Payee",
-			})
+			}
+			if postings, ok := result.PayeeTemplates[payee]; ok && len(postings) > 0 {
+				item.InsertText = buildPayeeTemplate(payee, postings)
+				item.Detail = "Payee (with template)"
+			}
+			items = append(items, item)
 		}
 
 	case ContextCommodity:
@@ -106,6 +162,35 @@ func generateCompletionItems(ctxType CompletionContextType, result *analyzer.Ana
 				Detail: "Commodity",
 			})
 		}
+
+	case ContextTagName:
+		for _, tagName := range result.Tags {
+			items = append(items, protocol.CompletionItem{
+				Label:      tagName,
+				Kind:       protocol.CompletionItemKindProperty,
+				Detail:     "Tag",
+				InsertText: tagName + ":",
+			})
+		}
+
+	case ContextTagValue:
+		lines := strings.Split(content, "\n")
+		if int(pos.Line) < len(lines) {
+			line := lines[pos.Line]
+			tagName := extractCurrentTagName(line, int(pos.Character))
+			if values, ok := result.TagValues[tagName]; ok {
+				for _, value := range values {
+					items = append(items, protocol.CompletionItem{
+						Label:  value,
+						Kind:   protocol.CompletionItemKindValue,
+						Detail: "Tag value for " + tagName,
+					})
+				}
+			}
+		}
+
+	case ContextDate:
+		items = generateDateCompletionItems(result.Dates)
 
 	default:
 		for _, acc := range result.Accounts.All {
@@ -156,4 +241,109 @@ func getAccountsForPrefix(accounts *analyzer.AccountIndex, prefix string) []stri
 	}
 
 	return accounts.All
+}
+
+func extractCurrentTagName(line string, pos int) string {
+	semicolonIdx := strings.Index(line, ";")
+	if semicolonIdx == -1 || pos <= semicolonIdx {
+		return ""
+	}
+
+	afterSemicolon := line[semicolonIdx+1:]
+	cursorInComment := pos - semicolonIdx - 1
+	if cursorInComment < 0 || cursorInComment > len(afterSemicolon) {
+		cursorInComment = len(afterSemicolon)
+	}
+
+	beforeCursor := afterSemicolon[:cursorInComment]
+
+	lastColon := strings.LastIndex(beforeCursor, ":")
+	if lastColon == -1 {
+		return ""
+	}
+
+	lastComma := strings.LastIndex(beforeCursor[:lastColon], ",")
+	start := lastComma + 1
+	tagName := strings.TrimSpace(beforeCursor[start:lastColon])
+
+	return tagName
+}
+
+func generateDateCompletionItems(historicalDates []string) []protocol.CompletionItem {
+	var items []protocol.CompletionItem
+	now := time.Now()
+
+	today := formatDateForCompletion(now)
+	yesterday := formatDateForCompletion(now.AddDate(0, 0, -1))
+	tomorrow := formatDateForCompletion(now.AddDate(0, 0, 1))
+
+	items = append(items, protocol.CompletionItem{
+		Label:    today,
+		Kind:     protocol.CompletionItemKindConstant,
+		Detail:   "today",
+		SortText: "0001",
+	})
+	items = append(items, protocol.CompletionItem{
+		Label:    yesterday,
+		Kind:     protocol.CompletionItemKindConstant,
+		Detail:   "yesterday",
+		SortText: "0002",
+	})
+	items = append(items, protocol.CompletionItem{
+		Label:    tomorrow,
+		Kind:     protocol.CompletionItemKindConstant,
+		Detail:   "tomorrow",
+		SortText: "0003",
+	})
+
+	sortedDates := make([]string, len(historicalDates))
+	copy(sortedDates, historicalDates)
+	sort.Sort(sort.Reverse(sort.StringSlice(sortedDates)))
+
+	seen := map[string]bool{today: true, yesterday: true, tomorrow: true}
+	for i, date := range sortedDates {
+		if seen[date] {
+			continue
+		}
+		seen[date] = true
+		items = append(items, protocol.CompletionItem{
+			Label:    date,
+			Kind:     protocol.CompletionItemKindConstant,
+			Detail:   "from history",
+			SortText: fmt.Sprintf("%04d", 100+i),
+		})
+	}
+
+	return items
+}
+
+func formatDateForCompletion(t time.Time) string {
+	return fmt.Sprintf("%04d-%02d-%02d", t.Year(), int(t.Month()), t.Day())
+}
+
+func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) string {
+	var sb strings.Builder
+	sb.WriteString(payee)
+	sb.WriteString("\n")
+
+	for _, p := range postings {
+		sb.WriteString("    ")
+		sb.WriteString(p.Account)
+		if p.Amount != "" || p.Commodity != "" {
+			sb.WriteString("  ")
+			if p.Commodity != "" && len(p.Commodity) == 1 {
+				sb.WriteString(p.Commodity)
+				sb.WriteString(p.Amount)
+			} else if p.Amount != "" {
+				sb.WriteString(p.Amount)
+				if p.Commodity != "" {
+					sb.WriteString(" ")
+					sb.WriteString(p.Commodity)
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }

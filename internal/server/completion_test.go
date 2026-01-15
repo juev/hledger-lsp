@@ -150,7 +150,11 @@ func TestCompletion_EmptyDocument(t *testing.T) {
 	result, err := srv.Completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Empty(t, result.Items)
+
+	details := extractDetails(result.Items)
+	assert.Contains(t, details, "today")
+	assert.Contains(t, details, "yesterday")
+	assert.Contains(t, details, "tomorrow")
 }
 
 func TestCompletion_DocumentNotFound(t *testing.T) {
@@ -206,4 +210,307 @@ func extractLabels(items []protocol.CompletionItem) []string {
 		labels[i] = item.Label
 	}
 	return labels
+}
+
+func TestDetermineContext_TagName(t *testing.T) {
+	content := `2024-01-15 test  ; `
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 19}, nil)
+	assert.Equal(t, ContextTagName, ctx)
+}
+
+func TestDetermineContext_TagName_AfterComma(t *testing.T) {
+	content := `2024-01-15 test  ; project:alpha, `
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 34}, nil)
+	assert.Equal(t, ContextTagName, ctx)
+}
+
+func TestDetermineContext_TagValue(t *testing.T) {
+	content := `2024-01-15 test  ; project:`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 27}, nil)
+	assert.Equal(t, ContextTagValue, ctx)
+}
+
+func TestDetermineContext_TagValue_AfterComma(t *testing.T) {
+	content := `2024-01-15 test  ; project:alpha, status:`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 41}, nil)
+	assert.Equal(t, ContextTagValue, ctx)
+}
+
+func TestDetermineContext_Date(t *testing.T) {
+	content := ``
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 0}, nil)
+	assert.Equal(t, ContextDate, ctx)
+}
+
+func TestDetermineContext_Date_EmptyLine(t *testing.T) {
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, nil)
+	assert.Equal(t, ContextDate, ctx)
+}
+
+func TestCompletion_TagNames(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test  ; project:alpha, status:done
+    expenses:food  $50  ; category:groceries
+    assets:cash
+
+2024-01-16 another ; `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 21},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "project")
+	assert.Contains(t, labels, "status")
+	assert.Contains(t, labels, "category")
+}
+
+func TestCompletion_TagNames_NoDuplicates(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test1  ; project:alpha
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:beta
+    expenses:rent  $1000
+    assets:bank
+
+2024-01-17 new ; `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 8, Character: 17},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	count := 0
+	for _, label := range labels {
+		if label == "project" {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+func TestCompletion_TagValues(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test1  ; project:alpha
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:beta
+    expenses:rent  $1000
+    assets:bank
+
+2024-01-17 new ; project:`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 8, Character: 26},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "alpha")
+	assert.Contains(t, labels, "beta")
+}
+
+func TestCompletion_TagValues_OnlyForCurrentTag(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test1  ; project:alpha, status:active
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 test2  ; project:beta, status:done
+    expenses:rent  $1000
+    assets:bank
+
+2024-01-17 new ; status:`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 8, Character: 24},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "active")
+	assert.Contains(t, labels, "done")
+	assert.NotContains(t, labels, "alpha")
+	assert.NotContains(t, labels, "beta")
+}
+
+func TestExtractCurrentTagName(t *testing.T) {
+	tests := []struct {
+		line     string
+		pos      int
+		expected string
+	}{
+		{"; project:", 10, "project"},
+		{"; project: val, status:", 23, "status"},
+		{"; no tag here", 13, ""},
+		{"; project:alpha, category:", 26, "category"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			result := extractCurrentTagName(tt.line, tt.pos)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCompletion_Date_BuiltIn(t *testing.T) {
+	srv := NewServer()
+	content := ``
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	details := extractDetails(result.Items)
+
+	assert.True(t, len(labels) >= 3, "should have at least 3 date suggestions")
+	assert.Contains(t, details, "today")
+	assert.Contains(t, details, "yesterday")
+	assert.Contains(t, details, "tomorrow")
+}
+
+func TestCompletion_Date_Historical(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-10 old transaction
+    expenses:food  $50
+    assets:cash
+
+2024-01-12 another
+    expenses:rent  $1000
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 8, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "2024-01-12")
+	assert.Contains(t, labels, "2024-01-10")
+}
+
+func extractDetails(items []protocol.CompletionItem) []string {
+	details := make([]string, len(items))
+	for i, item := range items {
+		details[i] = item.Detail
+	}
+	return details
+}
+
+func TestCompletion_Template_ByPayee(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var groceryItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "Grocery Store" {
+			groceryItem = &result.Items[i]
+			break
+		}
+	}
+
+	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
+	require.NotEmpty(t, groceryItem.InsertText, "Should have template text")
+	assert.Contains(t, groceryItem.InsertText, "expenses:food")
+	assert.Contains(t, groceryItem.InsertText, "assets:cash")
 }

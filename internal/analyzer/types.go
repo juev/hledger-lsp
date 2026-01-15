@@ -23,11 +23,20 @@ type Diagnostic struct {
 }
 
 type AnalysisResult struct {
-	Accounts    *AccountIndex
-	Payees      []string
-	Commodities []string
-	Tags        []string
-	Diagnostics []Diagnostic
+	Accounts       *AccountIndex
+	Payees         []string
+	Commodities    []string
+	Tags           []string
+	TagValues      map[string][]string
+	Dates          []string
+	PayeeTemplates map[string][]PostingTemplate
+	Diagnostics    []Diagnostic
+}
+
+type PostingTemplate struct {
+	Account   string
+	Amount    string
+	Commodity string
 }
 
 type AccountIndex struct {
