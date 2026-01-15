@@ -310,7 +310,10 @@ func (p *Parser) parseAmount() *ast.Amount {
 		amount.Commodity = ast.Commodity{
 			Symbol:   p.current.Value,
 			Position: ast.CommodityLeft,
-			Range:    ast.Range{Start: toASTPosition(p.current.Pos)},
+			Range: ast.Range{
+				Start: toASTPosition(p.current.Pos),
+				End:   toASTPosition(p.current.End),
+			},
 		}
 		p.advance()
 	}
@@ -342,7 +345,10 @@ func (p *Parser) parseAmount() *ast.Amount {
 		amount.Commodity = ast.Commodity{
 			Symbol:   p.current.Value,
 			Position: ast.CommodityRight,
-			Range:    ast.Range{Start: toASTPosition(p.current.Pos)},
+			Range: ast.Range{
+				Start: toASTPosition(p.current.Pos),
+				End:   toASTPosition(p.current.End),
+			},
 		}
 		p.advance()
 	}

@@ -864,3 +864,61 @@ func TestParseTransactionWithOnlySpacesLine(t *testing.T) {
 	require.Len(t, journal.Transactions, 1)
 	require.Len(t, journal.Transactions[0].Postings, 2)
 }
+
+func TestParser_CommodityRange(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantSymbol   string
+		wantPosition ast.CommodityPosition
+	}{
+		{
+			name: "commodity left (currency symbol)",
+			input: `2024-01-15 test
+    expenses:food  $50
+    assets:cash`,
+			wantSymbol:   "$",
+			wantPosition: ast.CommodityLeft,
+		},
+		{
+			name: "commodity right",
+			input: `2024-01-15 test
+    expenses:food  50 EUR
+    assets:cash`,
+			wantSymbol:   "EUR",
+			wantPosition: ast.CommodityRight,
+		},
+		{
+			name: "commodity right multi-char",
+			input: `2024-01-15 test
+    expenses:food  3.000 FF
+    assets:cash`,
+			wantSymbol:   "FF",
+			wantPosition: ast.CommodityRight,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			p := journal.Transactions[0].Postings[0]
+			require.NotNil(t, p.Amount)
+
+			commodity := p.Amount.Commodity
+			assert.Equal(t, tt.wantSymbol, commodity.Symbol)
+			assert.Equal(t, tt.wantPosition, commodity.Position)
+
+			assert.NotZero(t, commodity.Range.Start.Line, "Range.Start.Line should not be zero")
+			assert.NotZero(t, commodity.Range.Start.Column, "Range.Start.Column should not be zero")
+			assert.NotZero(t, commodity.Range.End.Line, "Range.End.Line should not be zero")
+			assert.NotZero(t, commodity.Range.End.Column, "Range.End.Column should not be zero")
+
+			assert.True(t, commodity.Range.End.Column > commodity.Range.Start.Column ||
+				commodity.Range.End.Line > commodity.Range.Start.Line,
+				"Range.End should be after Range.Start")
+		})
+	}
+}

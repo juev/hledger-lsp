@@ -32,12 +32,14 @@ func FormatDocumentWithFormats(journal *ast.Journal, content string, commodityFo
 		commodityFormats = extractCommodityFormats(journal)
 	}
 
+	globalAccountCol := CalculateGlobalAlignmentColumn(journal.Transactions)
+
 	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		txEdits := formatTransaction(tx, mapper, commodityFormats)
+		txEdits := formatTransaction(tx, mapper, commodityFormats, globalAccountCol)
 		edits = append(edits, txEdits...)
 	}
 
@@ -56,12 +58,12 @@ func extractCommodityFormats(journal *ast.Journal) map[string]NumberFormat {
 	return formats
 }
 
-func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]NumberFormat) []protocol.TextEdit {
+func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]NumberFormat, globalAccountCol int) []protocol.TextEdit {
 	if len(tx.Postings) == 0 {
 		return nil
 	}
 
-	alignment := CalculateAlignment(tx.Postings, commodityFormats)
+	alignment := CalculateAlignmentWithGlobal(tx.Postings, commodityFormats, globalAccountCol)
 	var edits []protocol.TextEdit
 
 	for i := range tx.Postings {
@@ -103,8 +105,29 @@ func CalculateAlignmentColumn(postings []ast.Posting) int {
 	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
 }
 
+func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
+	maxLen := 0
+	for i := range transactions {
+		for _, p := range transactions[i].Postings {
+			accountLen := utf8.RuneCountInString(p.Account.Name)
+			switch p.Virtual {
+			case ast.VirtualBalanced, ast.VirtualUnbalanced:
+				accountLen += 2
+			}
+			if accountLen > maxLen {
+				maxLen = accountLen
+			}
+		}
+	}
+	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
+}
+
 func CalculateAlignment(postings []ast.Posting, commodityFormats map[string]NumberFormat) AlignmentInfo {
 	accountCol := CalculateAlignmentColumn(postings)
+	return CalculateAlignmentWithGlobal(postings, commodityFormats, accountCol)
+}
+
+func CalculateAlignmentWithGlobal(postings []ast.Posting, commodityFormats map[string]NumberFormat, accountCol int) AlignmentInfo {
 
 	hasBalanceAssertion := false
 	maxAmountCostLen := 0

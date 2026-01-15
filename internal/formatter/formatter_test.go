@@ -269,3 +269,64 @@ func findEqualSignIndex(s string) int {
 	}
 	return -1
 }
+
+func TestFormatDocument_GlobalAlignment(t *testing.T) {
+	input := `2024-01-15 first
+    short:a  100 RUB
+    assets:cash
+
+2024-01-16 second
+    very:long:account:name  500 RUB
+    assets:bank
+
+2024-01-17 third
+    mid:acc  200 RUB
+    assets:wallet`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 3)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	var amountPositions []int
+	for _, edit := range edits {
+		if edit.NewText != "" && containsAmount(edit.NewText) {
+			pos := findAmountPosition(edit.NewText)
+			if pos > 0 {
+				amountPositions = append(amountPositions, pos)
+			}
+		}
+	}
+
+	require.GreaterOrEqual(t, len(amountPositions), 3, "Expected at least 3 postings with amounts")
+
+	firstPos := amountPositions[0]
+	for i, pos := range amountPositions {
+		assert.Equal(t, firstPos, pos, "All amounts should be at the same column, posting %d is at %d, expected %d", i, pos, firstPos)
+	}
+}
+
+func containsAmount(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func findAmountPosition(s string) int {
+	inSpaces := false
+	for i, r := range s {
+		if r == ' ' {
+			inSpaces = true
+		} else if inSpaces && (r >= '0' && r <= '9') {
+			return i
+		} else {
+			inSpaces = false
+		}
+	}
+	return -1
+}
