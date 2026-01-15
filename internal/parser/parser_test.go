@@ -1005,3 +1005,67 @@ func TestParser_CommodityRange_InCostAndAssertion(t *testing.T) {
 	assert.NotZero(t, p.BalanceAssertion.Amount.Commodity.Range.End.Line, "BalanceAssertion commodity Range.End.Line should not be zero")
 	assert.NotZero(t, p.BalanceAssertion.Amount.Commodity.Range.End.Column, "BalanceAssertion commodity Range.End.Column should not be zero")
 }
+
+func TestParser_ThousandSeparatorSingleDot(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "single dot thousand separator 3.000",
+			input: `2024-01-15 test
+    expenses:food  3.000 EUR
+    assets:cash`,
+			expected: "3000",
+		},
+		{
+			name: "single dot decimal 3.00",
+			input: `2024-01-15 test
+    expenses:food  3.00 EUR
+    assets:cash`,
+			expected: "3",
+		},
+		{
+			name: "single dot decimal 3.5",
+			input: `2024-01-15 test
+    expenses:food  3.5 EUR
+    assets:cash`,
+			expected: "3.5",
+		},
+		{
+			name: "single comma thousand separator 3,000",
+			input: `2024-01-15 test
+    expenses:food  3,000 EUR
+    assets:cash`,
+			expected: "3000",
+		},
+		{
+			name: "larger thousand separator 123.456",
+			input: `2024-01-15 test
+    expenses:food  123.456 EUR
+    assets:cash`,
+			expected: "123456",
+		},
+		{
+			name: "hundred with decimal 100.50",
+			input: `2024-01-15 test
+    expenses:food  100.50 EUR
+    assets:cash`,
+			expected: "100.5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			p := journal.Transactions[0].Postings[0]
+			require.NotNil(t, p.Amount)
+			expected, _ := decimal.NewFromString(tt.expected)
+			assert.True(t, p.Amount.Quantity.Equal(expected), "got %s, want %s", p.Amount.Quantity.String(), tt.expected)
+		})
+	}
+}

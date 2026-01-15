@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -401,4 +402,68 @@ commodity EUR
 	if len(warnings) == 1 {
 		assert.Contains(t, warnings[0], "GBP", "Only GBP should trigger warning")
 	}
+}
+
+func TestAnalyzer_SubaccountOfDeclaredParent_NoDiagnostic(t *testing.T) {
+	input := `account expenses
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			assert.NotContains(t, d.Message, "expenses:food",
+				"subaccount of declared parent should not trigger warning")
+		}
+	}
+}
+
+func TestAnalyzer_DeepSubaccountOfDeclaredParent_NoDiagnostic(t *testing.T) {
+	input := `account Расходы
+
+2024-01-15 test
+    Расходы:Продукты:Магазин  100 RUB
+    Активы:Банк  -100 RUB`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" {
+			assert.NotContains(t, d.Message, "Расходы:Продукты",
+				"deep subaccount of declared parent should not trigger warning")
+		}
+	}
+}
+
+func TestAnalyzer_SimilarNameNotSubaccount_Diagnostic(t *testing.T) {
+	input := `account expenses
+
+2024-01-15 test
+    expenses2:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var foundExpenses2 bool
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_ACCOUNT" && strings.Contains(d.Message, "expenses2:food") {
+			foundExpenses2 = true
+		}
+	}
+	assert.True(t, foundExpenses2, "expenses2:food should trigger warning (not a subaccount of expenses)")
 }

@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -232,10 +233,22 @@ func collectDeclaredAccounts(journal *ast.Journal) map[string]bool {
 	return declared
 }
 
+func isAccountDeclared(accountName string, declared map[string]bool) bool {
+	if declared[accountName] {
+		return true
+	}
+	for declaredAccount := range declared {
+		if strings.HasPrefix(accountName, declaredAccount+":") {
+			return true
+		}
+	}
+	return false
+}
+
 func checkUndeclaredAccounts(tx *ast.Transaction, declared map[string]bool) []Diagnostic {
 	var diags []Diagnostic
 	for _, posting := range tx.Postings {
-		if !declared[posting.Account.Name] {
+		if !isAccountDeclared(posting.Account.Name, declared) {
 			diags = append(diags, Diagnostic{
 				Range:    posting.Range,
 				Severity: SeverityWarning,

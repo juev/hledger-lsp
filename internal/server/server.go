@@ -96,14 +96,12 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 
 func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) error {
 	if s.workspace != nil {
-		go func() {
-			if err := s.workspace.Initialize(); err != nil && s.client != nil {
-				_ = s.client.LogMessage(context.Background(), &protocol.LogMessageParams{
-					Type:    protocol.MessageTypeWarning,
-					Message: "Workspace initialization failed: " + err.Error(),
-				})
-			}
-		}()
+		if err := s.workspace.Initialize(); err != nil && s.client != nil {
+			_ = s.client.LogMessage(context.Background(), &protocol.LogMessageParams{
+				Type:    protocol.MessageTypeWarning,
+				Message: "Workspace initialization failed: " + err.Error(),
+			})
+		}
 	}
 	return nil
 }
