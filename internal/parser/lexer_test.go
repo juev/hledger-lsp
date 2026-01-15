@@ -344,6 +344,78 @@ func TestLexer_QuotedCommodity(t *testing.T) {
 	assertTokenTypesAndValues(t, expected, tokens)
 }
 
+func TestLexer_LowercaseCommodity(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		tokens []Token
+	}{
+		{
+			name:  "mixed case FFf returns Text (parser handles as commodity)",
+			input: "    expenses:food  3.000 FFf",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "3.000"},
+				{Type: TokenText, Value: "FFf"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "lowercase Rub returns Text (parser handles as commodity)",
+			input: "    expenses:food  100 Rub",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenText, Value: "Rub"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "all lowercase hours returns Text (parser handles as commodity)",
+			input: "    work:project  8 hours",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "work:project"},
+				{Type: TokenNumber, Value: "8"},
+				{Type: TokenText, Value: "hours"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "uppercase only USD2024 returns Commodity",
+			input: "    assets:stocks  10 USD2024",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "assets:stocks"},
+				{Type: TokenNumber, Value: "10"},
+				{Type: TokenCommodity, Value: "USD2024"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "cyrillic Руб returns Text (parser handles as commodity)",
+			input: "    expenses:food  100 Руб",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenText, Value: "Руб"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.tokens, tokens)
+		})
+	}
+}
+
 func TestLexer_Position(t *testing.T) {
 	input := "2024-01-15 test"
 	lexer := NewLexer(input)

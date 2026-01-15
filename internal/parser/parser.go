@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/shopspring/decimal"
 
@@ -341,16 +342,20 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount.RawQuantity = rawNumberStr
 	p.advance()
 
-	if p.current.Type == TokenCommodity && amount.Commodity.Symbol == "" {
-		amount.Commodity = ast.Commodity{
-			Symbol:   p.current.Value,
-			Position: ast.CommodityRight,
-			Range: ast.Range{
-				Start: toASTPosition(p.current.Pos),
-				End:   toASTPosition(p.current.End),
-			},
+	if amount.Commodity.Symbol == "" {
+		isCommodity := p.current.Type == TokenCommodity ||
+			(p.current.Type == TokenText && isValidCommodityText(p.current.Value))
+		if isCommodity {
+			amount.Commodity = ast.Commodity{
+				Symbol:   p.current.Value,
+				Position: ast.CommodityRight,
+				Range: ast.Range{
+					Start: toASTPosition(p.current.Pos),
+					End:   toASTPosition(p.current.End),
+				},
+			}
+			p.advance()
 		}
-		p.advance()
 	}
 
 	amount.Range.End = toASTPosition(p.current.Pos)
@@ -761,4 +766,16 @@ func normalizeNumber(s string) string {
 	}
 
 	return s
+}
+
+func isValidCommodityText(value string) bool {
+	if len(value) == 0 {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }

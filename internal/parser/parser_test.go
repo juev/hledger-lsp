@@ -896,6 +896,38 @@ func TestParser_CommodityRange(t *testing.T) {
 			wantSymbol:   "FF",
 			wantPosition: ast.CommodityRight,
 		},
+		{
+			name: "commodity right mixed case FFf",
+			input: `2024-01-15 test
+    expenses:food  3.000 FFf
+    assets:cash`,
+			wantSymbol:   "FFf",
+			wantPosition: ast.CommodityRight,
+		},
+		{
+			name: "commodity right lowercase Rub",
+			input: `2024-01-15 test
+    expenses:food  100 Rub
+    assets:cash`,
+			wantSymbol:   "Rub",
+			wantPosition: ast.CommodityRight,
+		},
+		{
+			name: "commodity right all lowercase hours",
+			input: `2024-01-15 test
+    work:project  8 hours
+    income:salary`,
+			wantSymbol:   "hours",
+			wantPosition: ast.CommodityRight,
+		},
+		{
+			name: "commodity right cyrillic Руб",
+			input: `2024-01-15 test
+    expenses:food  100 Руб
+    assets:cash`,
+			wantSymbol:   "Руб",
+			wantPosition: ast.CommodityRight,
+		},
 	}
 
 	for _, tt := range tests {
