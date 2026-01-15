@@ -221,6 +221,7 @@ func TestAnalyzer_UndeclaredCommodity_Amount(t *testing.T) {
 	for _, d := range result.Diagnostics {
 		if d.Code == "UNDECLARED_COMMODITY" && d.Message == "commodity 'EUR' has no directive" {
 			foundUndeclared = true
+			assert.Equal(t, SeverityWarning, d.Severity, "UNDECLARED_COMMODITY should have Warning severity")
 		}
 	}
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY diagnostic for EUR")

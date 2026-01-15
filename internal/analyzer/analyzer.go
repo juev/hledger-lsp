@@ -293,7 +293,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 			seen[symbol] = true
 			diags = append(diags, Diagnostic{
 				Range:    r,
-				Severity: SeverityHint,
+				Severity: SeverityWarning,
 				Code:     "UNDECLARED_COMMODITY",
 				Message:  fmt.Sprintf("commodity '%s' has no directive", symbol),
 			})
