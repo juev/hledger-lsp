@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"sort"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -105,7 +106,8 @@ func findDefinitionLocation(target *definitionTarget, resolved *include.Resolved
 func findAccountDefinitionResolved(name string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 
-	for filePath, journal := range journals {
+	for _, filePath := range sortedJournalPaths(journals) {
+		journal := journals[filePath]
 		for _, dir := range journal.Directives {
 			if ad, ok := dir.(ast.AccountDirective); ok {
 				if ad.Account.Name == name {
@@ -125,7 +127,8 @@ func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal
 	var earliest *protocol.Location
 	var earliestDate *ast.Date
 
-	for filePath, journal := range journals {
+	for _, filePath := range sortedJournalPaths(journals) {
+		journal := journals[filePath]
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
 			for j := range tx.Postings {
@@ -149,7 +152,8 @@ func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal
 func findCommodityDefinitionResolved(symbol string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 
-	for filePath, journal := range journals {
+	for _, filePath := range sortedJournalPaths(journals) {
+		journal := journals[filePath]
 		for _, dir := range journal.Directives {
 			if cd, ok := dir.(ast.CommodityDirective); ok {
 				if cd.Commodity.Symbol == symbol {
@@ -169,7 +173,8 @@ func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Jou
 	var earliest *protocol.Location
 	var earliestDate *ast.Date
 
-	for filePath, journal := range journals {
+	for _, filePath := range sortedJournalPaths(journals) {
+		journal := journals[filePath]
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
 			for j := range tx.Postings {
@@ -196,7 +201,8 @@ func findPayeeDefinitionResolved(payee string, resolved *include.ResolvedJournal
 	var earliest *protocol.Location
 	var earliestDate *ast.Date
 
-	for filePath, journal := range journals {
+	for _, filePath := range sortedJournalPaths(journals) {
+		journal := journals[filePath]
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
 			txPayee := getPayeeOrDescription(tx)
@@ -244,4 +250,13 @@ func compareDates(a, b ast.Date) int {
 		return a.Month - b.Month
 	}
 	return a.Day - b.Day
+}
+
+func sortedJournalPaths(journals map[string]*ast.Journal) []string {
+	paths := make([]string, 0, len(journals))
+	for path := range journals {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
 }

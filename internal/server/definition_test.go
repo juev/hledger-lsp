@@ -165,3 +165,66 @@ func TestDefinition_DocumentNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }
+
+func TestDefinition_CommodityOnRight(t *testing.T) {
+	srv := NewServer()
+	content := `commodity EUR
+    format 1.000,00 EUR
+
+2024-01-15 grocery
+    expenses:food  100.00 EUR
+    assets:cash`
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := &protocol.DefinitionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: uri,
+			},
+			Position: protocol.Position{Line: 4, Character: 26}, // on "EUR" after amount
+		},
+	}
+
+	result, err := srv.Definition(context.Background(), params)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	assert.Equal(t, uri, result[0].URI)
+	assert.Equal(t, uint32(0), result[0].Range.Start.Line) // commodity directive is on line 0
+}
+
+func TestDefinition_AccountBoundary(t *testing.T) {
+	srv := NewServer()
+	content := `account expenses:food
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	// Test cursor at start of account name
+	params := &protocol.DefinitionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: uri,
+			},
+			Position: protocol.Position{Line: 3, Character: 4}, // at start of "expenses:food"
+		},
+	}
+
+	result, err := srv.Definition(context.Background(), params)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
+
+	// Test cursor at end of account name
+	params.Position = protocol.Position{Line: 3, Character: 16} // at end of "expenses:food"
+	result, err = srv.Definition(context.Background(), params)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
+}
