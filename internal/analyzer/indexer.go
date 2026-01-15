@@ -147,6 +147,7 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 					pt.Amount = p.Amount.Quantity.String()
 				}
 				pt.Commodity = p.Amount.Commodity.Symbol
+				pt.CommodityLeft = p.Amount.Commodity.Position == ast.CommodityLeft
 			}
 			postings = append(postings, pt)
 		}
@@ -173,6 +174,9 @@ func CollectDates(journal *ast.Journal) []string {
 
 func formatDate(d ast.Date) string {
 	if d.Year == 0 && d.Month == 0 && d.Day == 0 {
+		return ""
+	}
+	if d.Month < 1 || d.Month > 12 || d.Day < 1 || d.Day > 31 {
 		return ""
 	}
 	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)

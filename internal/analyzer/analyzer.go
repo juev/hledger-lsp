@@ -270,6 +270,9 @@ func collectDatesFromResolved(resolved *include.ResolvedJournal) []string {
 	return dates
 }
 
+// collectPayeeTemplatesFromResolved collects payee templates from all journals.
+// When the same payee exists in multiple files, the primary file's template wins.
+// Included files are processed first, then primary file overwrites conflicts.
 func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
 	result := make(map[string][]PostingTemplate)
 

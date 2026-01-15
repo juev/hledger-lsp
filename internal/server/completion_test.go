@@ -410,6 +410,26 @@ func TestExtractCurrentTagName(t *testing.T) {
 	}
 }
 
+func TestExtractCurrentTagName_Unicode(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		utf16Pos int
+		expected string
+	}{
+		{"cyrillic tag name", "; проект:", 9, "проект"},
+		{"cyrillic with value cursor", "; проект:alpha, статус:", 23, "статус"},
+		{"japanese tag name", "; 日本語:", 6, "日本語"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractCurrentTagName(tt.line, tt.utf16Pos)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestCompletion_Date_BuiltIn(t *testing.T) {
 	srv := NewServer()
 	content := ``
@@ -513,4 +533,61 @@ func TestCompletion_Template_ByPayee(t *testing.T) {
 	require.NotEmpty(t, groceryItem.InsertText, "Should have template text")
 	assert.Contains(t, groceryItem.InsertText, "expenses:food")
 	assert.Contains(t, groceryItem.InsertText, "assets:cash")
+}
+
+func TestCompletion_Template_CommodityPosition(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-10 Shop EUR
+    expenses:food  100 EUR
+    assets:cash
+
+2024-01-11 Dollar Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-12 Euro Shop
+    expenses:food  €75.00
+    assets:cash
+
+2024-01-15 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 12, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var eurItem, dollarItem, euroSymItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "Shop EUR" {
+			eurItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "Dollar Store" {
+			dollarItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "Euro Shop" {
+			euroSymItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, eurItem, "Shop EUR should be in completion items")
+	require.NotEmpty(t, eurItem.InsertText)
+	assert.Contains(t, eurItem.InsertText, "100 EUR")
+
+	require.NotNil(t, dollarItem, "Dollar Store should be in completion items")
+	require.NotEmpty(t, dollarItem.InsertText)
+	assert.Contains(t, dollarItem.InsertText, "$50.00")
+
+	require.NotNil(t, euroSymItem, "Euro Shop should be in completion items")
+	require.NotEmpty(t, euroSymItem.InsertText)
+	assert.Contains(t, euroSymItem.InsertText, "€75.00")
 }

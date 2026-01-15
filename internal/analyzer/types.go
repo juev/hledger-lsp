@@ -34,9 +34,10 @@ type AnalysisResult struct {
 }
 
 type PostingTemplate struct {
-	Account   string
-	Amount    string
-	Commodity string
+	Account       string
+	Amount        string
+	Commodity     string
+	CommodityLeft bool
 }
 
 type AccountIndex struct {

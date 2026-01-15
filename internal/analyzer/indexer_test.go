@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -352,4 +353,26 @@ func TestCollectAll_EmptyJournal(t *testing.T) {
 	assert.Empty(t, payees)
 	assert.Empty(t, commodities)
 	assert.Empty(t, tags)
+}
+
+func TestFormatDate_ValidatesRange(t *testing.T) {
+	tests := []struct {
+		name     string
+		date     ast.Date
+		expected string
+	}{
+		{"valid date", ast.Date{Year: 2024, Month: 1, Day: 15}, "2024-01-15"},
+		{"zero date", ast.Date{Year: 0, Month: 0, Day: 0}, ""},
+		{"invalid month high", ast.Date{Year: 2024, Month: 13, Day: 15}, ""},
+		{"invalid month zero", ast.Date{Year: 2024, Month: 0, Day: 15}, ""},
+		{"invalid day high", ast.Date{Year: 2024, Month: 1, Day: 32}, ""},
+		{"invalid day zero", ast.Date{Year: 2024, Month: 1, Day: 0}, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatDate(tt.date)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

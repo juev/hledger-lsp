@@ -94,13 +94,13 @@ func determineTagContext(line string, pos protocol.Position) CompletionContextTy
 		return ContextUnknown
 	}
 
-	cursorPos := int(pos.Character)
-	if cursorPos <= semicolonIdx {
+	bytePos := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	if bytePos <= semicolonIdx {
 		return ContextUnknown
 	}
 
 	afterSemicolon := line[semicolonIdx+1:]
-	cursorInComment := cursorPos - semicolonIdx - 1
+	cursorInComment := bytePos - semicolonIdx - 1
 	if cursorInComment < 0 || cursorInComment > len(afterSemicolon) {
 		cursorInComment = len(afterSemicolon)
 	}
@@ -244,13 +244,15 @@ func getAccountsForPrefix(accounts *analyzer.AccountIndex, prefix string) []stri
 }
 
 func extractCurrentTagName(line string, pos int) string {
+	bytePos := lsputil.UTF16OffsetToByteOffset(line, pos)
+
 	semicolonIdx := strings.Index(line, ";")
-	if semicolonIdx == -1 || pos <= semicolonIdx {
+	if semicolonIdx == -1 || bytePos <= semicolonIdx {
 		return ""
 	}
 
 	afterSemicolon := line[semicolonIdx+1:]
-	cursorInComment := pos - semicolonIdx - 1
+	cursorInComment := bytePos - semicolonIdx - 1
 	if cursorInComment < 0 || cursorInComment > len(afterSemicolon) {
 		cursorInComment = len(afterSemicolon)
 	}
@@ -269,6 +271,8 @@ func extractCurrentTagName(line string, pos int) string {
 	return tagName
 }
 
+// generateDateCompletionItems creates date suggestions with today/yesterday/tomorrow at top.
+// Tests check detail strings ("today" etc.) not specific dates, making them time-independent.
 func generateDateCompletionItems(historicalDates []string) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 	now := time.Now()
@@ -331,7 +335,7 @@ func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) strin
 		sb.WriteString(p.Account)
 		if p.Amount != "" || p.Commodity != "" {
 			sb.WriteString("  ")
-			if p.Commodity != "" && len(p.Commodity) == 1 {
+			if p.CommodityLeft && p.Commodity != "" {
 				sb.WriteString(p.Commodity)
 				sb.WriteString(p.Amount)
 			} else if p.Amount != "" {
