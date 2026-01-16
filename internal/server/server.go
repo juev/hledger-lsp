@@ -370,6 +370,15 @@ func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJourn
 	return nil
 }
 
+func (s *Server) getWorkspaceResolved(docURI protocol.DocumentURI) *include.ResolvedJournal {
+	if s.workspace != nil {
+		if resolved := s.workspace.GetResolved(); resolved != nil {
+			return resolved
+		}
+	}
+	return s.GetResolved(docURI)
+}
+
 func (s *Server) RootURI() string {
 	return s.rootURI
 }

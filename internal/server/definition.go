@@ -39,7 +39,7 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 		return nil, nil
 	}
 
-	resolved := s.GetResolved(params.TextDocument.URI)
+	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
 	location := findDefinitionLocation(target, resolved, currentPath, journal)

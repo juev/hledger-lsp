@@ -40,19 +40,11 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 
 	var result *analyzer.AnalysisResult
 
-	if s.workspace != nil {
-		if wsResolved := s.workspace.GetResolved(); wsResolved != nil {
-			result = s.analyzer.AnalyzeResolved(wsResolved)
-		}
-	}
-
-	if result == nil {
-		if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
-			result = s.analyzer.AnalyzeResolved(resolved)
-		} else {
-			journal, _ := parser.Parse(doc)
-			result = s.analyzer.Analyze(journal)
-		}
+	if resolved := s.getWorkspaceResolved(params.TextDocument.URI); resolved != nil {
+		result = s.analyzer.AnalyzeResolved(resolved)
+	} else {
+		journal, _ := parser.Parse(doc)
+		result = s.analyzer.Analyze(journal)
 	}
 
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)

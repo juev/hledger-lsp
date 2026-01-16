@@ -24,7 +24,7 @@ func (s *Server) References(ctx context.Context, params *protocol.ReferenceParam
 		return nil, nil
 	}
 
-	resolved := s.GetResolved(params.TextDocument.URI)
+	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
 	return findReferences(target, resolved, currentPath, journal, params.Context.IncludeDeclaration), nil

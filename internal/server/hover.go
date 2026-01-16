@@ -51,7 +51,7 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 	var balances analyzer.AccountBalances
 	var allTransactions []ast.Transaction
 
-	if resolved := s.GetResolved(params.TextDocument.URI); resolved != nil {
+	if resolved := s.getWorkspaceResolved(params.TextDocument.URI); resolved != nil {
 		allTransactions = resolved.AllTransactions()
 		balances = analyzer.CalculateAccountBalancesFromTransactions(allTransactions)
 	} else {
