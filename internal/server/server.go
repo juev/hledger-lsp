@@ -90,13 +90,9 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 			},
 			HoverProvider:              true,
 			DocumentFormattingProvider: true,
-			DocumentOnTypeFormattingProvider: &protocol.DocumentOnTypeFormattingOptions{
-				FirstTriggerCharacter: "\n",
-				MoreTriggerCharacter:  []string{"\t"},
-			},
-			DocumentSymbolProvider: true,
-			DefinitionProvider:     true,
-			ReferencesProvider:     true,
+			DocumentSymbolProvider:     true,
+			DefinitionProvider:         true,
+			ReferencesProvider:         true,
 			RenameProvider: &protocol.RenameOptions{
 				PrepareProvider: true,
 			},
