@@ -1008,3 +1008,192 @@ include 2025.journal`
 	}
 	assert.True(t, found, "Expected formatted amount with commodity format from sibling include, got edits: %v", edits)
 }
+
+func TestServer_Initialize_FeatureToggles(t *testing.T) {
+	tests := []struct {
+		name        string
+		initOptions map[string]interface{}
+		checkCaps   func(t *testing.T, caps protocol.ServerCapabilities)
+	}{
+		{
+			name:        "all features enabled by default",
+			initOptions: nil,
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.NotNil(t, caps.CompletionProvider)
+				assert.True(t, caps.HoverProvider.(bool))
+				assert.True(t, caps.DocumentFormattingProvider.(bool))
+				assert.True(t, caps.SemanticTokensProvider.(bool))
+				assert.NotNil(t, caps.CodeActionProvider)
+			},
+		},
+		{
+			name: "hover disabled",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"hover": false,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.Nil(t, caps.HoverProvider)
+			},
+		},
+		{
+			name: "completion disabled",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"completion": false,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.Nil(t, caps.CompletionProvider)
+			},
+		},
+		{
+			name: "formatting disabled",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"formatting": false,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.Nil(t, caps.DocumentFormattingProvider)
+			},
+		},
+		{
+			name: "semantic tokens disabled",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"semanticTokens": false,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.Nil(t, caps.SemanticTokensProvider)
+			},
+		},
+		{
+			name: "code actions disabled",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"codeActions": false,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.Nil(t, caps.CodeActionProvider)
+				assert.Nil(t, caps.ExecuteCommandProvider)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			params := &protocol.InitializeParams{
+				InitializationOptions: tt.initOptions,
+			}
+			result, err := srv.Initialize(context.Background(), params)
+			require.NoError(t, err)
+			tt.checkCaps(t, result.Capabilities)
+		})
+	}
+}
+
+func TestServer_DiagnosticsSettings(t *testing.T) {
+	t.Run("undeclared accounts disabled", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.SetClient(client)
+
+		settings := srv.getSettings()
+		settings.Diagnostics.UndeclaredAccounts = false
+		srv.setSettings(settings)
+
+		content := `account assets:cash
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash
+`
+		uri := protocol.DocumentURI("file:///test.journal")
+		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
+		})
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+
+		diagnostics := client.getDiagnostics()
+		require.NotEmpty(t, diagnostics)
+
+		for _, pub := range diagnostics {
+			for _, d := range pub.Diagnostics {
+				assert.NotEqual(t, "UNDECLARED_ACCOUNT", d.Code,
+					"undeclared account diagnostics should be filtered out")
+			}
+		}
+	})
+
+	t.Run("undeclared commodities disabled", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.SetClient(client)
+
+		settings := srv.getSettings()
+		settings.Diagnostics.UndeclaredCommodities = false
+		srv.setSettings(settings)
+
+		content := `commodity $
+
+2024-01-15 test
+    expenses:food  50 EUR
+    assets:cash
+`
+		uri := protocol.DocumentURI("file:///test.journal")
+		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
+		})
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+
+		diagnostics := client.getDiagnostics()
+		require.NotEmpty(t, diagnostics)
+
+		for _, pub := range diagnostics {
+			for _, d := range pub.Diagnostics {
+				assert.NotEqual(t, "UNDECLARED_COMMODITY", d.Code,
+					"undeclared commodity diagnostics should be filtered out")
+			}
+		}
+	})
+
+	t.Run("unbalanced transactions disabled", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.SetClient(client)
+
+		settings := srv.getSettings()
+		settings.Diagnostics.UnbalancedTransactions = false
+		srv.setSettings(settings)
+
+		content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash  $20
+`
+		uri := protocol.DocumentURI("file:///test.journal")
+		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
+		})
+		require.NoError(t, err)
+		time.Sleep(100 * time.Millisecond)
+
+		diagnostics := client.getDiagnostics()
+		require.NotEmpty(t, diagnostics)
+
+		for _, pub := range diagnostics {
+			for _, d := range pub.Diagnostics {
+				assert.NotEqual(t, "UNBALANCED", d.Code,
+					"unbalanced transaction diagnostics should be filtered out")
+				assert.NotEqual(t, "MULTIPLE_INFERRED", d.Code,
+					"multiple inferred diagnostics should be filtered out")
+			}
+		}
+	})
+}

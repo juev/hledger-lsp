@@ -10,8 +10,20 @@ import (
 	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
-const defaultIndent = "    "
+const defaultIndentSize = 4
 const minSpaces = 2
+
+var defaultIndent = strings.Repeat(" ", defaultIndentSize)
+
+type Options struct {
+	IndentSize      int
+	AlignAmounts    bool
+	AlignmentColumn int
+}
+
+func DefaultOptions() Options {
+	return Options{IndentSize: defaultIndentSize, AlignAmounts: true}
+}
 
 type AlignmentInfo struct {
 	AccountCol          int
@@ -24,6 +36,10 @@ func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
 }
 
 func FormatDocumentWithFormats(journal *ast.Journal, content string, commodityFormats map[string]NumberFormat) []protocol.TextEdit {
+	return FormatDocumentWithOptions(journal, content, commodityFormats, DefaultOptions())
+}
+
+func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFormats map[string]NumberFormat, opts Options) []protocol.TextEdit {
 	if len(journal.Transactions) == 0 {
 		return nil
 	}
@@ -32,14 +48,25 @@ func FormatDocumentWithFormats(journal *ast.Journal, content string, commodityFo
 		commodityFormats = extractCommodityFormats(journal)
 	}
 
-	globalAccountCol := CalculateGlobalAlignmentColumn(journal.Transactions)
+	if opts.IndentSize <= 0 {
+		opts.IndentSize = defaultIndentSize
+	}
+
+	globalAccountCol := 0
+	if opts.AlignAmounts {
+		if opts.AlignmentColumn > 0 {
+			globalAccountCol = opts.AlignmentColumn
+		} else {
+			globalAccountCol = calculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+		}
+	}
 
 	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		txEdits := formatTransaction(tx, mapper, commodityFormats, globalAccountCol)
+		txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, opts)
 		edits = append(edits, txEdits...)
 	}
 
@@ -58,17 +85,22 @@ func extractCommodityFormats(journal *ast.Journal) map[string]NumberFormat {
 	return formats
 }
 
-func formatTransaction(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]NumberFormat, globalAccountCol int) []protocol.TextEdit {
+func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]NumberFormat, globalAccountCol int, opts Options) []protocol.TextEdit {
 	if len(tx.Postings) == 0 {
 		return nil
 	}
 
-	alignment := CalculateAlignmentWithGlobal(tx.Postings, commodityFormats, globalAccountCol)
+	indent := strings.Repeat(" ", opts.IndentSize)
 	var edits []protocol.TextEdit
+
+	var alignment AlignmentInfo
+	if opts.AlignAmounts {
+		alignment = CalculateAlignmentWithGlobal(tx.Postings, commodityFormats, globalAccountCol)
+	}
 
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
-		formatted := FormatPostingWithAlignment(posting, alignment, commodityFormats)
+		formatted := formatPostingWithOpts(posting, alignment, commodityFormats, indent, opts.AlignAmounts)
 		line := posting.Range.Start.Line - 1
 
 		edit := protocol.TextEdit{
@@ -119,6 +151,18 @@ func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
 		}
 	}
 	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
+}
+
+func calculateGlobalAlignmentColumnWithIndent(transactions []ast.Transaction, indentSize int) int {
+	maxLen := 0
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			if accountLen := calculateAccountDisplayLength(&transactions[i].Postings[j]); accountLen > maxLen {
+				maxLen = accountLen
+			}
+		}
+	}
+	return indentSize + maxLen + minSpaces
 }
 
 // CalculateAlignment calculates alignment for a single transaction's postings.
@@ -192,9 +236,17 @@ func calculateAmountCostLen(posting *ast.Posting, commodityFormats map[string]Nu
 }
 
 func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]NumberFormat) string {
+	return formatPostingWithOpts(posting, alignment, commodityFormats, defaultIndent, true)
+}
+
+func FormatPosting(posting *ast.Posting, alignCol int) string {
+	return FormatPostingWithAlignment(posting, AlignmentInfo{AccountCol: alignCol}, nil)
+}
+
+func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]NumberFormat, indent string, alignAmounts bool) string {
 	var sb strings.Builder
 
-	sb.WriteString(defaultIndent)
+	sb.WriteString(indent)
 
 	switch posting.Status {
 	case ast.StatusCleared:
@@ -220,8 +272,11 @@ func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, c
 	}
 
 	if posting.Amount != nil {
-		currentLen := utf8.RuneCountInString(sb.String())
-		spaces := max(alignment.AccountCol-currentLen, minSpaces)
+		spaces := minSpaces
+		if alignAmounts && alignment.AccountCol > 0 {
+			currentLen := utf8.RuneCountInString(sb.String())
+			spaces = max(alignment.AccountCol-currentLen, minSpaces)
+		}
 		sb.WriteString(strings.Repeat(" ", spaces))
 
 		if posting.Amount.Commodity.Position == ast.CommodityLeft {
@@ -253,10 +308,12 @@ func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, c
 	}
 
 	if posting.BalanceAssertion != nil {
-		if alignment.BalanceAssertionCol > 0 {
+		if alignAmounts && alignment.BalanceAssertionCol > 0 {
 			currentLen := utf8.RuneCountInString(sb.String())
 			spaces := max(alignment.BalanceAssertionCol-currentLen, minSpaces)
 			sb.WriteString(strings.Repeat(" ", spaces))
+		} else {
+			sb.WriteString(strings.Repeat(" ", minSpaces))
 		}
 
 		if posting.BalanceAssertion.IsStrict {
@@ -280,10 +337,6 @@ func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, c
 	}
 
 	return sb.String()
-}
-
-func FormatPosting(posting *ast.Posting, alignCol int) string {
-	return FormatPostingWithAlignment(posting, AlignmentInfo{AccountCol: alignCol}, nil)
 }
 
 // formatAmountQuantity returns formatted quantity string.

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1458,7 +1459,7 @@ func TestFilterAndScoreFuzzyMatch(t *testing.T) {
 	}
 
 	t.Run("filters by cyrillic query", func(t *testing.T) {
-		scored := filterAndScoreFuzzyMatch(items, "альа")
+		scored := filterAndScoreFuzzyMatch(items, "альа", true)
 		filtered := make([]protocol.CompletionItem, len(scored))
 		for i, s := range scored {
 			filtered[i] = s.item
@@ -1471,12 +1472,12 @@ func TestFilterAndScoreFuzzyMatch(t *testing.T) {
 	})
 
 	t.Run("empty query returns all", func(t *testing.T) {
-		scored := filterAndScoreFuzzyMatch(items, "")
+		scored := filterAndScoreFuzzyMatch(items, "", true)
 		assert.Len(t, scored, len(items))
 	})
 
 	t.Run("no matches returns empty", func(t *testing.T) {
-		scored := filterAndScoreFuzzyMatch(items, "xyz")
+		scored := filterAndScoreFuzzyMatch(items, "xyz", true)
 		assert.Empty(t, scored)
 	})
 }
@@ -1953,7 +1954,7 @@ func TestFilterAndScoreFuzzyMatch_SegmentBased(t *testing.T) {
 	}
 
 	t.Run("filters by segment matching cyrillic", func(t *testing.T) {
-		scored := filterAndScoreFuzzyMatch(items, "ал")
+		scored := filterAndScoreFuzzyMatch(items, "ал", true)
 		labels := make([]string, len(scored))
 		for i, s := range scored {
 			labels[i] = s.item.Label
@@ -1965,7 +1966,7 @@ func TestFilterAndScoreFuzzyMatch_SegmentBased(t *testing.T) {
 	})
 
 	t.Run("handles query with trailing colon", func(t *testing.T) {
-		scored := filterAndScoreFuzzyMatch(items, "Альфа:")
+		scored := filterAndScoreFuzzyMatch(items, "Альфа:", true)
 		labels := make([]string, len(scored))
 		for i, s := range scored {
 			labels[i] = s.item.Label
@@ -1973,4 +1974,102 @@ func TestFilterAndScoreFuzzyMatch_SegmentBased(t *testing.T) {
 
 		assert.Contains(t, labels, "Активы:Альфа:Текущий", "should match even with trailing colon")
 	})
+}
+
+func TestCompletion_SnippetsDisabled(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.Completion.Snippets = false
+	srv.setSettings(settings)
+
+	content := `2024-01-15 grocery store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-16 `
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.StoreDocument(uri, content)
+
+	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: 4, Character: 11},
+		},
+	})
+	require.NoError(t, err)
+
+	for _, item := range result.Items {
+		if item.Label == "grocery store" {
+			assert.NotEqual(t, protocol.InsertTextFormatSnippet, item.InsertTextFormat,
+				"snippets should be disabled")
+			return
+		}
+	}
+}
+
+func TestCompletion_FuzzyMatchingDisabled(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.Completion.FuzzyMatching = false
+	srv.setSettings(settings)
+
+	content := `account assets:checking
+account expenses:food:groceries
+
+2024-01-15 test
+    exp`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.StoreDocument(uri, content)
+
+	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: 4, Character: 7},
+		},
+	})
+	require.NoError(t, err)
+
+	hasNonPrefixMatch := false
+	for _, item := range result.Items {
+		if !strings.HasPrefix(strings.ToLower(item.Label), "exp") {
+			hasNonPrefixMatch = true
+			break
+		}
+	}
+	assert.False(t, hasNonPrefixMatch, "without fuzzy matching, only prefix matches should appear")
+}
+
+func TestCompletion_ShowCountsDisabled(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.Completion.ShowCounts = false
+	srv.setSettings(settings)
+
+	content := `2024-01-15 test
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-16 test
+    expenses:food  $30.00
+    assets:cash
+
+2024-01-17 test
+    `
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.StoreDocument(uri, content)
+
+	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: 9, Character: 4},
+		},
+	})
+	require.NoError(t, err)
+
+	for _, item := range result.Items {
+		if item.Label == "expenses:food" {
+			assert.NotContains(t, item.Detail, "(", "counts should not be shown when disabled")
+			return
+		}
+	}
 }

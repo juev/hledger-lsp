@@ -4,25 +4,85 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
+type featureSettings struct {
+	Hover          bool
+	Completion     bool
+	Formatting     bool
+	Diagnostics    bool
+	SemanticTokens bool
+	CodeActions    bool
+}
+
 type completionSettings struct {
-	MaxResults int
+	MaxResults    int
+	Snippets      bool
+	FuzzyMatching bool
+	ShowCounts    bool
+}
+
+type diagnosticsSettings struct {
+	UndeclaredAccounts     bool
+	UndeclaredCommodities  bool
+	UnbalancedTransactions bool
+}
+
+type formattingSettings struct {
+	IndentSize      int
+	AlignAmounts    bool
+	AlignmentColumn int
+}
+
+type cliSettings struct {
+	Enabled bool
+	Path    string
+	Timeout time.Duration
 }
 
 type serverSettings struct {
-	Completion completionSettings
-	Limits     include.Limits
+	Features    featureSettings
+	Completion  completionSettings
+	Diagnostics diagnosticsSettings
+	Formatting  formattingSettings
+	CLI         cliSettings
+	Limits      include.Limits
 }
 
 func defaultServerSettings() serverSettings {
 	return serverSettings{
+		Features: featureSettings{
+			Hover:          true,
+			Completion:     true,
+			Formatting:     true,
+			Diagnostics:    true,
+			SemanticTokens: true,
+			CodeActions:    true,
+		},
 		Completion: completionSettings{
-			MaxResults: 50,
+			MaxResults:    50,
+			Snippets:      true,
+			FuzzyMatching: true,
+			ShowCounts:    true,
+		},
+		Diagnostics: diagnosticsSettings{
+			UndeclaredAccounts:     true,
+			UndeclaredCommodities:  true,
+			UnbalancedTransactions: true,
+		},
+		Formatting: formattingSettings{
+			IndentSize:   4,
+			AlignAmounts: true,
+		},
+		CLI: cliSettings{
+			Enabled: true,
+			Path:    "hledger",
+			Timeout: 30 * time.Second,
 		},
 		Limits: include.DefaultLimits(),
 	}
@@ -32,6 +92,15 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 	defaults := defaultServerSettings()
 	if settings.Completion.MaxResults <= 0 {
 		settings.Completion.MaxResults = defaults.Completion.MaxResults
+	}
+	if settings.Formatting.IndentSize <= 0 {
+		settings.Formatting.IndentSize = defaults.Formatting.IndentSize
+	}
+	if settings.CLI.Path == "" {
+		settings.CLI.Path = defaults.CLI.Path
+	}
+	if settings.CLI.Timeout <= 0 {
+		settings.CLI.Timeout = defaults.CLI.Timeout
 	}
 	if settings.Limits.MaxFileSizeBytes <= 0 {
 		settings.Limits.MaxFileSizeBytes = defaults.Limits.MaxFileSizeBytes
@@ -45,10 +114,14 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 func (s *Server) setSettings(settings serverSettings) {
 	settings = normalizeServerSettings(settings)
 	s.settingsMu.Lock()
+	oldSettings := s.settings
 	s.settings = settings
 	s.settingsMu.Unlock()
 	if s.loader != nil {
 		s.loader.SetLimits(settings.Limits)
+	}
+	if oldSettings.CLI.Path != settings.CLI.Path || oldSettings.CLI.Timeout != settings.CLI.Timeout {
+		s.reinitCLI(settings.CLI)
 	}
 }
 
@@ -93,15 +166,141 @@ func parseSettingsFromRaw(base serverSettings, raw interface{}) serverSettings {
 }
 
 func applySettingsMap(settings serverSettings, raw map[string]interface{}) serverSettings {
+	// Features
+	if featuresRaw, ok := raw["features"].(map[string]interface{}); ok {
+		if value, ok := toBool(featuresRaw["hover"]); ok {
+			settings.Features.Hover = value
+		}
+		if value, ok := toBool(featuresRaw["completion"]); ok {
+			settings.Features.Completion = value
+		}
+		if value, ok := toBool(featuresRaw["formatting"]); ok {
+			settings.Features.Formatting = value
+		}
+		if value, ok := toBool(featuresRaw["diagnostics"]); ok {
+			settings.Features.Diagnostics = value
+		}
+		if value, ok := toBool(featuresRaw["semanticTokens"]); ok {
+			settings.Features.SemanticTokens = value
+		}
+		if value, ok := toBool(featuresRaw["codeActions"]); ok {
+			settings.Features.CodeActions = value
+		}
+	}
+	if value, ok := toBool(raw["features.hover"]); ok {
+		settings.Features.Hover = value
+	}
+	if value, ok := toBool(raw["features.completion"]); ok {
+		settings.Features.Completion = value
+	}
+	if value, ok := toBool(raw["features.formatting"]); ok {
+		settings.Features.Formatting = value
+	}
+	if value, ok := toBool(raw["features.diagnostics"]); ok {
+		settings.Features.Diagnostics = value
+	}
+	if value, ok := toBool(raw["features.semanticTokens"]); ok {
+		settings.Features.SemanticTokens = value
+	}
+	if value, ok := toBool(raw["features.codeActions"]); ok {
+		settings.Features.CodeActions = value
+	}
+
+	// Completion
 	if completionRaw, ok := raw["completion"].(map[string]interface{}); ok {
 		if value, ok := toInt(completionRaw["maxResults"]); ok {
 			settings.Completion.MaxResults = value
+		}
+		if value, ok := toBool(completionRaw["snippets"]); ok {
+			settings.Completion.Snippets = value
+		}
+		if value, ok := toBool(completionRaw["fuzzyMatching"]); ok {
+			settings.Completion.FuzzyMatching = value
+		}
+		if value, ok := toBool(completionRaw["showCounts"]); ok {
+			settings.Completion.ShowCounts = value
 		}
 	}
 	if value, ok := toInt(raw["completion.maxResults"]); ok {
 		settings.Completion.MaxResults = value
 	}
+	if value, ok := toBool(raw["completion.snippets"]); ok {
+		settings.Completion.Snippets = value
+	}
+	if value, ok := toBool(raw["completion.fuzzyMatching"]); ok {
+		settings.Completion.FuzzyMatching = value
+	}
+	if value, ok := toBool(raw["completion.showCounts"]); ok {
+		settings.Completion.ShowCounts = value
+	}
 
+	// Diagnostics
+	if diagnosticsRaw, ok := raw["diagnostics"].(map[string]interface{}); ok {
+		if value, ok := toBool(diagnosticsRaw["undeclaredAccounts"]); ok {
+			settings.Diagnostics.UndeclaredAccounts = value
+		}
+		if value, ok := toBool(diagnosticsRaw["undeclaredCommodities"]); ok {
+			settings.Diagnostics.UndeclaredCommodities = value
+		}
+		if value, ok := toBool(diagnosticsRaw["unbalancedTransactions"]); ok {
+			settings.Diagnostics.UnbalancedTransactions = value
+		}
+	}
+	if value, ok := toBool(raw["diagnostics.undeclaredAccounts"]); ok {
+		settings.Diagnostics.UndeclaredAccounts = value
+	}
+	if value, ok := toBool(raw["diagnostics.undeclaredCommodities"]); ok {
+		settings.Diagnostics.UndeclaredCommodities = value
+	}
+	if value, ok := toBool(raw["diagnostics.unbalancedTransactions"]); ok {
+		settings.Diagnostics.UnbalancedTransactions = value
+	}
+
+	// Formatting
+	if formattingRaw, ok := raw["formatting"].(map[string]interface{}); ok {
+		if value, ok := toInt(formattingRaw["indentSize"]); ok {
+			settings.Formatting.IndentSize = value
+		}
+		if value, ok := toBool(formattingRaw["alignAmounts"]); ok {
+			settings.Formatting.AlignAmounts = value
+		}
+		if value, ok := toInt(formattingRaw["alignmentColumn"]); ok {
+			settings.Formatting.AlignmentColumn = value
+		}
+	}
+	if value, ok := toInt(raw["formatting.indentSize"]); ok {
+		settings.Formatting.IndentSize = value
+	}
+	if value, ok := toBool(raw["formatting.alignAmounts"]); ok {
+		settings.Formatting.AlignAmounts = value
+	}
+	if value, ok := toInt(raw["formatting.alignmentColumn"]); ok {
+		settings.Formatting.AlignmentColumn = value
+	}
+
+	// CLI
+	if cliRaw, ok := raw["cli"].(map[string]interface{}); ok {
+		if value, ok := toBool(cliRaw["enabled"]); ok {
+			settings.CLI.Enabled = value
+		}
+		if value, ok := toString(cliRaw["path"]); ok {
+			settings.CLI.Path = value
+		}
+		if value, ok := toInt(cliRaw["timeout"]); ok {
+			settings.CLI.Timeout = time.Duration(value) * time.Millisecond
+		}
+	}
+	if value, ok := toBool(raw["cli.enabled"]); ok {
+		settings.CLI.Enabled = value
+	}
+	if value, ok := toString(raw["cli.path"]); ok {
+		settings.CLI.Path = value
+	}
+	if value, ok := toInt(raw["cli.timeout"]); ok {
+		settings.CLI.Timeout = time.Duration(value) * time.Millisecond
+	}
+
+	// Limits
 	if limitsRaw, ok := raw["limits"].(map[string]interface{}); ok {
 		if value, ok := toInt64(limitsRaw["maxFileSizeBytes"]); ok {
 			settings.Limits.MaxFileSizeBytes = value
@@ -176,4 +375,27 @@ func toInt64(value interface{}) (int64, bool) {
 		return parsed, true
 	}
 	return 0, false
+}
+
+func toBool(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		v = strings.TrimSpace(strings.ToLower(v))
+		switch v {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	return false, false
+}
+
+func toString(value interface{}) (string, bool) {
+	if v, ok := value.(string); ok {
+		return v, true
+	}
+	return "", false
 }

@@ -47,9 +47,10 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 		result = s.analyzer.Analyze(journal)
 	}
 
+	settings := s.getSettings()
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	counts := getCountsForContext(completionCtx, result)
-	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts)
+	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts, settings.Completion)
 
 	editRange := calculateTextEditRange(doc, params.Position, completionCtx)
 	if editRange != nil {
@@ -66,10 +67,9 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	}
 
 	query := extractQueryText(doc, params.Position, completionCtx)
-	scored := filterAndScoreFuzzyMatch(items, query)
+	scored := filterAndScoreFuzzyMatch(items, query, settings.Completion.FuzzyMatching)
 	items = rankCompletionItemsByScore(scored, counts, query)
 
-	settings := s.getSettings()
 	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
 		items = items[:settings.Completion.MaxResults]
 	}
@@ -293,7 +293,7 @@ func determineTagContext(line string, pos protocol.Position) CompletionContextTy
 	return ContextTagValue
 }
 
-func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int) []protocol.CompletionItem {
+func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int, settings completionSettings) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 
 	switch ctxType {
@@ -304,7 +304,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: formatDetailWithCount("Account", acc, counts),
+				Detail: formatDetailWithCount("Account", acc, counts, settings.ShowCounts),
 			})
 		}
 
@@ -316,7 +316,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 				Kind:  protocol.CompletionItemKindClass,
 			}
 			if postings, ok := result.PayeeTemplates[payee]; ok && len(postings) > 0 {
-				if s.snippetSupport {
+				if s.snippetSupport && settings.Snippets {
 					item.InsertText = buildPayeeSnippet(payee, postings)
 					item.InsertTextFormat = protocol.InsertTextFormatSnippet
 				} else {
@@ -324,7 +324,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 				}
 				hasTemplate = true
 			}
-			item.Detail = formatPayeeDetailWithCount(payee, counts, hasTemplate)
+			item.Detail = formatPayeeDetailWithCount(payee, counts, hasTemplate, settings.ShowCounts)
 			items = append(items, item)
 		}
 
@@ -333,7 +333,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  commodity,
 				Kind:   protocol.CompletionItemKindEnum,
-				Detail: formatDetailWithCount("Commodity", commodity, counts),
+				Detail: formatDetailWithCount("Commodity", commodity, counts, settings.ShowCounts),
 			})
 		}
 
@@ -342,7 +342,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:      tagName,
 				Kind:       protocol.CompletionItemKindProperty,
-				Detail:     formatDetailWithCount("Tag", tagName, counts),
+				Detail:     formatDetailWithCount("Tag", tagName, counts, settings.ShowCounts),
 				InsertText: tagName + ":",
 			})
 		}
@@ -371,7 +371,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: formatDetailWithCount("Account", acc, counts),
+				Detail: formatDetailWithCount("Account", acc, counts, settings.ShowCounts),
 			})
 		}
 	}
@@ -379,8 +379,8 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 	return items
 }
 
-func formatDetailWithCount(baseDetail, label string, counts map[string]int) string {
-	if counts == nil {
+func formatDetailWithCount(baseDetail, label string, counts map[string]int, showCounts bool) string {
+	if !showCounts || counts == nil {
 		return baseDetail
 	}
 	count := counts[label]
@@ -390,9 +390,9 @@ func formatDetailWithCount(baseDetail, label string, counts map[string]int) stri
 	return baseDetail
 }
 
-func formatPayeeDetailWithCount(payee string, counts map[string]int, hasTemplate bool) string {
+func formatPayeeDetailWithCount(payee string, counts map[string]int, hasTemplate, showCounts bool) string {
 	count := 0
-	if counts != nil {
+	if showCounts && counts != nil {
 		count = counts[payee]
 	}
 
@@ -846,13 +846,17 @@ func fuzzyMatchScoreBySegments(accountName, pattern string) int {
 	return bestScore
 }
 
-func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string) []scoredItem {
+func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string, fuzzyEnabled bool) []scoredItem {
 	if query == "" {
 		result := make([]scoredItem, len(items))
 		for i, item := range items {
 			result[i] = scoredItem{item: item, score: fuzzyScoreEmptyPattern}
 		}
 		return result
+	}
+
+	if !fuzzyEnabled {
+		return filterByPrefix(items, query)
 	}
 
 	queryForSegment := strings.TrimSuffix(query, ":")
@@ -867,6 +871,17 @@ func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string) []s
 		}
 		if score := fuzzyMatchScore(item.Label, query); score > 0 {
 			result = append(result, scoredItem{item: item, score: score})
+		}
+	}
+	return result
+}
+
+func filterByPrefix(items []protocol.CompletionItem, query string) []scoredItem {
+	queryLower := strings.ToLower(query)
+	var result []scoredItem
+	for _, item := range items {
+		if strings.HasPrefix(strings.ToLower(item.Label), queryLower) {
+			result = append(result, scoredItem{item: item, score: fuzzyScoreEmptyPattern})
 		}
 	}
 	return result

@@ -37,7 +37,8 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 }
 
 func (s *Server) getCodeActions() []protocol.CodeAction {
-	if s.cliClient == nil || !s.cliClient.Available() {
+	settings := s.getSettings()
+	if s.cliClient == nil || !s.cliClient.Available() || !settings.CLI.Enabled {
 		return nil
 	}
 

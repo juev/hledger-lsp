@@ -1,6 +1,7 @@
 package formatter
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -414,5 +415,117 @@ func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
 		for i, pos := range positions {
 			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
 		}
+	})
+}
+
+func TestFormatDocumentWithOptions_IndentSize(t *testing.T) {
+	journal, _ := parser.Parse(`2024-01-15 test
+    expenses:food  $50
+    assets:cash`)
+
+	t.Run("custom indent size 2", func(t *testing.T) {
+		opts := Options{IndentSize: 2, AlignAmounts: true}
+		edits := FormatDocumentWithOptions(journal, "", nil, opts)
+
+		require.NotEmpty(t, edits)
+		assert.True(t, strings.HasPrefix(edits[0].NewText, "  "),
+			"should use 2-space indent")
+		assert.False(t, strings.HasPrefix(edits[0].NewText, "    "),
+			"should not use 4-space indent")
+	})
+
+	t.Run("custom indent size 8", func(t *testing.T) {
+		opts := Options{IndentSize: 8, AlignAmounts: true}
+		edits := FormatDocumentWithOptions(journal, "", nil, opts)
+
+		require.NotEmpty(t, edits)
+		assert.True(t, strings.HasPrefix(edits[0].NewText, "        "),
+			"should use 8-space indent")
+	})
+}
+
+func TestFormatDocumentWithOptions_AlignAmounts(t *testing.T) {
+	input := `2024-01-15 test
+    short:a  100 RUB
+    very:long:account:name  500 RUB`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	t.Run("align amounts enabled", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+		require.Len(t, edits, 2)
+
+		pos1 := findAmountPosition(edits[0].NewText)
+		pos2 := findAmountPosition(edits[1].NewText)
+
+		require.NotEqual(t, -1, pos1)
+		require.NotEqual(t, -1, pos2)
+		assert.Equal(t, pos1, pos2, "amounts should be aligned at same column")
+	})
+
+	t.Run("align amounts disabled", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: false}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+		require.Len(t, edits, 2)
+
+		pos1 := findAmountPosition(edits[0].NewText)
+		pos2 := findAmountPosition(edits[1].NewText)
+
+		require.NotEqual(t, -1, pos1)
+		require.NotEqual(t, -1, pos2)
+		assert.NotEqual(t, pos1, pos2, "amounts should NOT be aligned when disabled")
+
+		assert.Contains(t, edits[0].NewText, "short:a  100",
+			"short account should have only 2 spaces before amount")
+		assert.Contains(t, edits[1].NewText, "very:long:account:name  500",
+			"long account should have only 2 spaces before amount")
+	})
+}
+
+func TestFormatDocumentWithOptions_AlignmentColumn(t *testing.T) {
+	input := `2024-01-15 test
+    short:a  100 RUB
+    very:long:account:name  500 RUB`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	t.Run("alignment column 0 uses auto calculation", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 0}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+		require.Len(t, edits, 2)
+
+		pos1 := findAmountPosition(edits[0].NewText)
+		pos2 := findAmountPosition(edits[1].NewText)
+
+		assert.Equal(t, pos1, pos2, "amounts should be aligned")
+	})
+
+	t.Run("fixed alignment column 40", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 40}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+		require.Len(t, edits, 2)
+
+		pos1 := findAmountPosition(edits[0].NewText)
+		pos2 := findAmountPosition(edits[1].NewText)
+
+		assert.Equal(t, 40, pos1, "short account amount should be at column 40")
+		assert.Equal(t, 40, pos2, "long account amount should be at column 40")
+	})
+
+	t.Run("alignment column smaller than account uses minSpaces", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 10}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+		require.Len(t, edits, 2)
+
+		assert.Contains(t, edits[1].NewText, "very:long:account:name  500",
+			"long account should use minSpaces when column is too small")
 	})
 }

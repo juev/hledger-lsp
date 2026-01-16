@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -37,12 +36,17 @@ type Server struct {
 
 func NewServer() *Server {
 	srv := &Server{
-		analyzer:  analyzer.New(),
-		loader:    include.NewLoader(),
-		cliClient: cli.NewClient("hledger", 30*time.Second),
+		analyzer: analyzer.New(),
+		loader:   include.NewLoader(),
 	}
-	srv.setSettings(defaultServerSettings())
+	defaults := defaultServerSettings()
+	srv.cliClient = cli.NewClient(defaults.CLI.Path, defaults.CLI.Timeout)
+	srv.setSettings(defaults)
 	return srv
+}
+
+func (s *Server) reinitCLI(cfg cliSettings) {
+	s.cliClient = cli.NewClient(cfg.Path, cfg.Timeout)
 }
 
 func (s *Server) SetClient(client protocol.Client) {
@@ -79,37 +83,52 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		s.workspace = workspace.NewWorkspace(s.rootURI, s.loader)
 	}
 
-	return &protocol.InitializeResult{
-		Capabilities: protocol.ServerCapabilities{
-			TextDocumentSync: protocol.TextDocumentSyncOptions{
-				OpenClose: true,
-				Change:    protocol.TextDocumentSyncKindIncremental,
-				Save: &protocol.SaveOptions{
-					IncludeText: false,
-				},
-			},
-			CompletionProvider: &protocol.CompletionOptions{
-				TriggerCharacters: []string{":", "@", "="},
-				ResolveProvider:   true,
-			},
-			HoverProvider:              true,
-			DocumentFormattingProvider: true,
-			DocumentSymbolProvider:     true,
-			DefinitionProvider:         true,
-			ReferencesProvider:         true,
-			RenameProvider: &protocol.RenameOptions{
-				PrepareProvider: true,
-			},
-			SemanticTokensProvider: true,
-			CodeActionProvider: &protocol.CodeActionOptions{
-				CodeActionKinds: []protocol.CodeActionKind{
-					"source.hledger",
-				},
-			},
-			ExecuteCommandProvider: &protocol.ExecuteCommandOptions{
-				Commands: []string{"hledger.run"},
+	settings := s.getSettings()
+
+	caps := protocol.ServerCapabilities{
+		TextDocumentSync: protocol.TextDocumentSyncOptions{
+			OpenClose: true,
+			Change:    protocol.TextDocumentSyncKindIncremental,
+			Save: &protocol.SaveOptions{
+				IncludeText: false,
 			},
 		},
+		DocumentSymbolProvider: true,
+		DefinitionProvider:     true,
+		ReferencesProvider:     true,
+		RenameProvider: &protocol.RenameOptions{
+			PrepareProvider: true,
+		},
+	}
+
+	if settings.Features.Completion {
+		caps.CompletionProvider = &protocol.CompletionOptions{
+			TriggerCharacters: []string{":", "@", "="},
+			ResolveProvider:   true,
+		}
+	}
+	if settings.Features.Hover {
+		caps.HoverProvider = true
+	}
+	if settings.Features.Formatting {
+		caps.DocumentFormattingProvider = true
+	}
+	if settings.Features.SemanticTokens {
+		caps.SemanticTokensProvider = true
+	}
+	if settings.Features.CodeActions {
+		caps.CodeActionProvider = &protocol.CodeActionOptions{
+			CodeActionKinds: []protocol.CodeActionKind{
+				"source.hledger",
+			},
+		}
+		caps.ExecuteCommandProvider = &protocol.ExecuteCommandOptions{
+			Commands: []string{"hledger.run"},
+		}
+	}
+
+	return &protocol.InitializeResult{
+		Capabilities: caps,
 		ServerInfo: &protocol.ServerInfo{
 			Name:    "hledger-lsp",
 			Version: "0.1.0",
@@ -198,6 +217,15 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 		return
 	}
 
+	settings := s.getSettings()
+	if !settings.Features.Diagnostics {
+		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
+			URI:         docURI,
+			Diagnostics: []protocol.Diagnostic{},
+		})
+		return
+	}
+
 	path := uriToPath(docURI)
 	if path == "" {
 		return
@@ -270,7 +298,11 @@ func (s *Server) analyze(content string) []protocol.Diagnostic {
 		result = s.analyzer.Analyze(journal)
 	}
 
+	settings := s.getSettings()
 	for _, diag := range result.Diagnostics {
+		if !s.shouldIncludeDiagnostic(diag.Code, settings.Diagnostics) {
+			continue
+		}
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{
 				Start: protocol.Position{
@@ -290,6 +322,19 @@ func (s *Server) analyze(content string) []protocol.Diagnostic {
 	}
 
 	return diagnostics
+}
+
+func (s *Server) shouldIncludeDiagnostic(code string, settings diagnosticsSettings) bool {
+	switch code {
+	case "UNDECLARED_ACCOUNT":
+		return settings.UndeclaredAccounts
+	case "UNDECLARED_COMMODITY":
+		return settings.UndeclaredCommodities
+	case "UNBALANCED", "MULTIPLE_INFERRED":
+		return settings.UnbalancedTransactions
+	default:
+		return true
+	}
 }
 
 func toProtocolSeverity(s analyzer.DiagnosticSeverity) protocol.DiagnosticSeverity {
@@ -329,7 +374,14 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 		commodityFormats = s.workspace.GetCommodityFormats()
 	}
 
-	return formatter.FormatDocumentWithFormats(journal, doc, commodityFormats), nil
+	settings := s.getSettings()
+	opts := formatter.Options{
+		IndentSize:      settings.Formatting.IndentSize,
+		AlignAmounts:    settings.Formatting.AlignAmounts,
+		AlignmentColumn: settings.Formatting.AlignmentColumn,
+	}
+
+	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
 }
 
 func applyChange(content string, r protocol.Range, text string) string {
