@@ -1109,3 +1109,237 @@ func TestParser_ThousandSeparatorSingleDot(t *testing.T) {
 		})
 	}
 }
+
+func TestParser_SubdirectivesEdgeCases(t *testing.T) {
+	t.Run("subdirective without value", func(t *testing.T) {
+		input := `account expenses:food
+  hidden`
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.AccountDirective)
+		require.True(t, ok)
+		assert.Equal(t, "", dir.Subdirs["hidden"])
+	})
+
+	t.Run("comment between subdirectives", func(t *testing.T) {
+		input := `account expenses:food
+  alias food
+  ; this is a comment
+  note Food expenses`
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.AccountDirective)
+		require.True(t, ok)
+		assert.Equal(t, "food", dir.Subdirs["alias"])
+		assert.Equal(t, "Food expenses", dir.Subdirs["note"])
+	})
+
+	t.Run("subdirective at EOF without newline", func(t *testing.T) {
+		input := "account expenses:food\n  alias food"
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.AccountDirective)
+		require.True(t, ok)
+		assert.Equal(t, "food", dir.Subdirs["alias"])
+	})
+
+	t.Run("empty line between subdirectives ends parsing", func(t *testing.T) {
+		input := `account expenses:food
+  alias food
+
+  note Should not be parsed`
+
+		journal, errs := Parse(input)
+		// Parser produces error for orphan indent after blank line
+		require.NotEmpty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.AccountDirective)
+		require.True(t, ok)
+		assert.Equal(t, "food", dir.Subdirs["alias"])
+		_, hasNote := dir.Subdirs["note"]
+		assert.False(t, hasNote)
+	})
+
+	t.Run("commodity with multiple subdirectives", func(t *testing.T) {
+		input := `commodity EUR
+  format 1.000,00 EUR
+  alias €
+  note European currency
+  nomarket`
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.CommodityDirective)
+		require.True(t, ok)
+		assert.Equal(t, "EUR", dir.Commodity.Symbol)
+		assert.Equal(t, "1.000,00 EUR", dir.Format)
+	})
+
+	t.Run("subdirective with special characters in value", func(t *testing.T) {
+		input := `account assets:bank
+  note Account @ Bank & Trust (savings)`
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Directives, 1)
+
+		dir, ok := journal.Directives[0].(ast.AccountDirective)
+		require.True(t, ok)
+		assert.Equal(t, "Account @ Bank & Trust (savings)", dir.Subdirs["note"])
+	})
+}
+
+func TestParser_DateEdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		year      int
+		month     int
+		day       int
+		expectErr bool
+	}{
+		{
+			name: "month 13 parsed without validation",
+			input: `2024-13-01 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 13, day: 1,
+			expectErr: false,
+		},
+		{
+			name: "day 32 parsed without validation",
+			input: `2024-01-32 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 1, day: 32,
+			expectErr: false,
+		},
+		{
+			name: "february 30 parsed without validation",
+			input: `2024-02-30 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 2, day: 30,
+			expectErr: false,
+		},
+		{
+			name: "month 0 parsed without validation",
+			input: `2024-00-15 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 0, day: 15,
+			expectErr: false,
+		},
+		{
+			name: "day 0 parsed without validation",
+			input: `2024-01-00 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 1, day: 0,
+			expectErr: false,
+		},
+		{
+			name: "leap year feb 29 valid",
+			input: `2024-02-29 test
+    e:f  $1
+    a:c`,
+			year: 2024, month: 2, day: 29,
+			expectErr: false,
+		},
+		{
+			name: "large year",
+			input: `99999-01-15 test
+    e:f  $1
+    a:c`,
+			year: 99999, month: 1, day: 15,
+			expectErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			if tt.expectErr {
+				require.NotEmpty(t, errs)
+				return
+			}
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+			assert.Equal(t, tt.year, journal.Transactions[0].Date.Year)
+			assert.Equal(t, tt.month, journal.Transactions[0].Date.Month)
+			assert.Equal(t, tt.day, journal.Transactions[0].Date.Day)
+		})
+	}
+}
+
+func Test_normalizeNumber(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// No separators
+		{name: "plain integer", input: "1234", expected: "1234"},
+		{name: "plain decimal", input: "12.34", expected: "12.34"},
+
+		// Single comma - decimal separator (European)
+		{name: "comma as decimal separator", input: "1234,56", expected: "1234.56"},
+		{name: "comma with 2 decimals", input: "12,34", expected: "12.34"},
+
+		// Single comma - thousands separator (when followed by exactly 3 digits)
+		{name: "comma as thousands with 4 digits before", input: "1,234", expected: "1234"},
+		{name: "comma as thousands with more digits", input: "12,345", expected: "12345"},
+
+		// Leading zeros edge case
+		{name: "leading zeros comma decimal", input: "000,50", expected: "000.50"},
+		{name: "zero comma three digits", input: "0,123", expected: "0.123"},
+
+		// Dot and comma together - European format (1.234,56)
+		{name: "european format", input: "1.234,56", expected: "1234.56"},
+		{name: "european with multiple dots", input: "1.234.567,89", expected: "1234567.89"},
+
+		// Dot and comma together - US format (1,234.56)
+		{name: "us format", input: "1,234.56", expected: "1234.56"},
+		{name: "us with multiple commas", input: "1,234,567.89", expected: "1234567.89"},
+
+		// Multiple commas only (thousands separators)
+		{name: "multiple commas no dot", input: "1,234,567", expected: "1234567"},
+
+		// Multiple dots only (thousands separators, European)
+		{name: "multiple dots no comma", input: "1.234.567", expected: "1234567"},
+
+		// Dot as thousands separator (when followed by exactly 3 digits)
+		{name: "dot as thousands", input: "1.234", expected: "1234"},
+
+		// Edge cases - trailing separators
+		{name: "trailing comma", input: "123,", expected: "123."},
+		{name: "trailing dot", input: "123.", expected: "123."},
+
+		// Edge cases - leading decimal
+		{name: "leading dot", input: ".50", expected: ".50"},
+		{name: "leading comma", input: ",50", expected: ".50"},
+
+		// Scientific notation should pass through
+		{name: "scientific notation", input: "1E+10", expected: "1E+10"},
+		{name: "scientific lowercase", input: "1e-5", expected: "1e-5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeNumber(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

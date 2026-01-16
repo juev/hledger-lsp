@@ -489,6 +489,15 @@ func collectTokens(l *Lexer) []Token {
 	return tokens
 }
 
+func findToken(tokens []Token, tokenType TokenType) *Token {
+	for i := range tokens {
+		if tokens[i].Type == tokenType {
+			return &tokens[i]
+		}
+	}
+	return nil
+}
+
 func assertTokensEqual(t *testing.T, expected, actual []Token) {
 	t.Helper()
 	require.Len(t, actual, len(expected), "token count mismatch")
@@ -928,15 +937,10 @@ func TestLexer_InvalidScientificNotation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lexer := NewLexer(tt.input)
 			tokens := collectTokens(lexer)
-			var numberToken *Token
-			for i := range tokens {
-				if tokens[i].Type == TokenNumber {
-					numberToken = &tokens[i]
-					break
-				}
-			}
-			require.NotNil(t, numberToken, "expected a Number token")
-			assert.Equal(t, tt.wantNumber, numberToken.Value, "E without digits should not be included in number")
+
+			tok := findToken(tokens, TokenNumber)
+			require.NotNil(t, tok, "expected a Number token")
+			assert.Equal(t, tt.wantNumber, tok.Value, "E without digits should not be included in number")
 		})
 	}
 }
@@ -978,15 +982,128 @@ func TestLexer_ScientificNotationConsumesExponent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lexer := NewLexer(tt.input)
 			tokens := collectTokens(lexer)
-			var numberToken *Token
-			for i := range tokens {
-				if tokens[i].Type == TokenNumber {
-					numberToken = &tokens[i]
-					break
-				}
-			}
-			require.NotNil(t, numberToken, "expected a Number token")
-			assert.Equal(t, tt.wantNumber, numberToken.Value, "scientific notation should include full exponent")
+
+			tok := findToken(tokens, TokenNumber)
+			require.NotNil(t, tok, "expected a Number token")
+			assert.Equal(t, tt.wantNumber, tok.Value, "scientific notation should include full exponent")
+		})
+	}
+}
+
+func TestLexer_UnterminatedTokens(t *testing.T) {
+	t.Run("unterminated quoted commodity", func(t *testing.T) {
+		input := `    a:b  3 "USD`
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenCommodity)
+		require.NotNil(t, tok)
+		assert.Equal(t, "USD", tok.Value)
+	})
+
+	t.Run("unterminated quoted commodity at newline", func(t *testing.T) {
+		input := "    a:b  3 \"USD\n    c:d"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenCommodity)
+		require.NotNil(t, tok)
+		assert.Equal(t, "USD", tok.Value)
+	})
+
+	t.Run("unterminated code parenthesis", func(t *testing.T) {
+		input := "2024-01-15 * (123"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenCode)
+		require.NotNil(t, tok)
+		assert.Equal(t, "123", tok.Value)
+	})
+
+	t.Run("unterminated code at newline", func(t *testing.T) {
+		input := "2024-01-15 * (123\n    a:b"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenCode)
+		require.NotNil(t, tok)
+		assert.Equal(t, "123", tok.Value)
+	})
+
+	t.Run("incomplete scientific notation E+ stops at number", func(t *testing.T) {
+		input := "    a:b  1E+"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenNumber)
+		require.NotNil(t, tok)
+		assert.Equal(t, "1", tok.Value)
+	})
+
+	t.Run("incomplete scientific notation E only stops at number", func(t *testing.T) {
+		input := "    a:b  1E"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenNumber)
+		require.NotNil(t, tok)
+		assert.Equal(t, "1", tok.Value)
+	})
+
+	t.Run("partial date at EOF", func(t *testing.T) {
+		input := "2024-01"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		tok := findToken(tokens, TokenDate)
+		require.NotNil(t, tok)
+		assert.Equal(t, "2024-01", tok.Value)
+	})
+}
+
+func TestLexer_DateBoundaryConditions(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Valid dates
+		{name: "standard date", input: "2024-01-15", expected: "2024-01-15"},
+		{name: "date with slashes", input: "2024/01/15", expected: "2024/01/15"},
+		{name: "date with dots", input: "2024.01.15", expected: "2024.01.15"},
+
+		// Partial dates (month/day only)
+		{name: "partial date month-day", input: "2024-01", expected: "2024-01"},
+
+		// Invalid month/day values still recognized as date tokens
+		{name: "month 99", input: "2024-99-01", expected: "2024-99-01"},
+		{name: "day 99", input: "2024-01-99", expected: "2024-01-99"},
+		{name: "all 99s", input: "9999-99-99", expected: "9999-99-99"},
+
+		// Large years
+		{name: "year 10000", input: "10000-01-15", expected: "10000-01-15"},
+
+		// Boundary at exactly 8 chars (minimum for date detection)
+		{name: "exactly 8 chars", input: "2024-0-1", expected: "2024-0-1"},
+
+		// Partial years/dates still tokenized as dates (tolerant lexer)
+		{name: "only year", input: "2024", expected: "2024"},
+		{name: "year and sep", input: "2024-", expected: "2024-"},
+
+		// These are still recognized as date tokens (tolerant lexer behavior)
+		{name: "text starts like date", input: "2024abc", expected: "2024"},
+		{name: "compact date no separator", input: "20240115", expected: "20240115"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+
+			tok := findToken(tokens, TokenDate)
+			require.NotNil(t, tok, "expected a Date token for input: %s", tt.input)
+			assert.Equal(t, tt.expected, tok.Value)
 		})
 	}
 }
