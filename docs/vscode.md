@@ -41,6 +41,23 @@ Settings example:
 }
 ```
 
+### Enable Format on Type
+
+To enable auto-indentation after Enter and Tab alignment for amounts, add:
+
+```json
+{
+  "editor.formatOnType": true
+}
+```
+
+Features enabled:
+- **Enter after transaction header**: auto-indents new posting line
+- **Enter after posting**: auto-indents next posting line
+- **Tab after account name**: aligns cursor to amount column
+
+Note: Tab alignment works only outside snippet mode. When editing a template snippet, Tab navigates between tabstops.
+
 ## Alternative: hledger-vscode Extension
 
 For a more integrated experience, consider using [hledger-vscode](https://github.com/juev/hledger-vscode) extension which provides additional features specific to VS Code.
@@ -60,3 +77,7 @@ For a more integrated experience, consider using [hledger-vscode](https://github
 **No completions:**
 - Ensure the file has `.journal` or `.hledger` extension
 - Check that the LSP client is configured for these extensions
+
+**Enter/Tab formatting not working:**
+- Enable `"editor.formatOnType": true` in VS Code settings
+- Check that the LSP server is running (Output panel → select hledger-lsp)
