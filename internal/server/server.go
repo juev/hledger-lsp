@@ -49,6 +49,10 @@ func (s *Server) SetClient(client protocol.Client) {
 	s.client = client
 }
 
+func (s *Server) StoreDocument(uri protocol.DocumentURI, content string) {
+	s.documents.Store(uri, content)
+}
+
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
 	if params != nil && params.Capabilities.Workspace != nil {
 		s.supportsConfiguration = params.Capabilities.Workspace.Configuration
