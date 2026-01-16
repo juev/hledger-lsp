@@ -9,13 +9,27 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 
 ## 🎯 Features
 
-- **Completions** — Account names, payees, commodities with context-aware suggestions
-- **Diagnostics** — Real-time error detection for unbalanced transactions, syntax errors
-- **Formatting** — Automatic alignment of amounts and consistent indentation
-- **Hover** — Account balances and transaction details on hover
-- **Semantic Tokens** — Syntax highlighting for dates, accounts, amounts, comments
-- **Document Symbols** — Navigate transactions and directives with outline view
-- **Include Support** — Full support for `include` directives with cycle detection
+### Completions
+- **Accounts** — Fuzzy matching with frequency-based ranking
+- **Payees** — With transaction templates (auto-inserts postings)
+- **Commodities** — From directives and usage
+- **Tags** — Name and value completion from existing tags
+- **Dates** — today/yesterday/tomorrow + historical dates from file
+
+### Navigation
+- **Go to Definition** — Jump to account/commodity/payee declaration
+- **Find References** — Find all usages across workspace
+
+### Diagnostics
+- Real-time validation of transactions
+- Balance checks and syntax errors
+
+### Other
+- **Formatting** — Automatic alignment of amounts
+- **Hover** — Account balances on hover
+- **Semantic Tokens** — Syntax highlighting
+- **Document Symbols** — Outline navigation
+- **Include Support** — Multi-file journals with cycle detection
 
 ## 📦 Installation
 
