@@ -53,8 +53,15 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	counts := getCountsForContext(completionCtx, result)
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts)
 
+	query := extractQueryText(doc, params.Position, completionCtx)
+	items = filterByFuzzyMatch(items, query)
+
 	if counts != nil {
-		rankCompletionItems(items, counts)
+		rankCompletionItems(items, counts, query)
+	} else {
+		for i := range items {
+			items[i].FilterText = query
+		}
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -62,14 +69,12 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	})
 
 	settings := s.getSettings()
-	isIncomplete := false
 	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
 		items = items[:settings.Completion.MaxResults]
-		isIncomplete = true
 	}
 
 	return &protocol.CompletionList{
-		IsIncomplete: isIncomplete,
+		IsIncomplete: true, // prevents VSCode from caching and re-sorting by fuzzy matching
 		Items:        items,
 	}, nil
 }
@@ -89,10 +94,11 @@ func getCountsForContext(ctxType CompletionContextType, result *analyzer.Analysi
 	}
 }
 
-func rankCompletionItems(items []protocol.CompletionItem, counts map[string]int) {
+func rankCompletionItems(items []protocol.CompletionItem, counts map[string]int, query string) {
 	for i := range items {
 		count := counts[items[i].Label]
 		items[i].SortText = fmt.Sprintf("%06d_%s", 999999-count, items[i].Label)
+		items[i].FilterText = query
 	}
 }
 
@@ -532,6 +538,71 @@ func escapeSnippetText(s string) string {
 		"}", "\\}",
 	)
 	return replacer.Replace(s)
+}
+
+func extractQueryText(content string, pos protocol.Position, ctxType CompletionContextType) string {
+	lines := strings.Split(content, "\n")
+	if int(pos.Line) >= len(lines) {
+		return ""
+	}
+
+	line := lines[pos.Line]
+	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+
+	beforeCursor := line[:byteCol]
+
+	switch ctxType {
+	case ContextAccount:
+		trimmed := strings.TrimLeft(beforeCursor, " \t")
+		return trimmed
+
+	case ContextPayee:
+		spaceIdx := strings.Index(beforeCursor, " ")
+		if spaceIdx == -1 {
+			return ""
+		}
+		return strings.TrimLeft(beforeCursor[spaceIdx+1:], " ")
+
+	default:
+		return ""
+	}
+}
+
+func fuzzyMatch(text, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+
+	text = strings.ToLower(text)
+	pattern = strings.ToLower(pattern)
+
+	j := 0
+	textRunes := []rune(text)
+	patternRunes := []rune(pattern)
+
+	for i := 0; i < len(textRunes) && j < len(patternRunes); i++ {
+		if textRunes[i] == patternRunes[j] {
+			j++
+		}
+	}
+	return j == len(patternRunes)
+}
+
+func filterByFuzzyMatch(items []protocol.CompletionItem, query string) []protocol.CompletionItem {
+	if query == "" {
+		return items
+	}
+
+	var filtered []protocol.CompletionItem
+	for _, item := range items {
+		if fuzzyMatch(item.Label, query) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string {

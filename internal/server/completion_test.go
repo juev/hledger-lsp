@@ -1240,3 +1240,247 @@ func TestCompletion_PayeeSnippetWithTabstops(t *testing.T) {
 	assert.Contains(t, groceryItem.InsertText, "$0",
 		"Snippet should end with $0 for final cursor position")
 }
+
+func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 2, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, result.IsIncomplete, "IsIncomplete should always be true to prevent VSCode from re-sorting")
+}
+
+func TestCompletion_FilterTextSameForAllItems(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    expenses:rent  $100
+    assets:cash
+
+2024-01-16 another
+    exp`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 6, Character: 7},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, len(result.Items) >= 2, "should have multiple completion items matching 'exp'")
+
+	firstFilterText := result.Items[0].FilterText
+	require.NotEmpty(t, firstFilterText, "FilterText should be set")
+
+	for _, item := range result.Items {
+		assert.Equal(t, firstFilterText, item.FilterText,
+			"All items should have the same FilterText to make VSCode fuzzy scores equal")
+	}
+}
+
+func TestExtractQueryText_Account(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		line     uint32
+		char     uint32
+		expected string
+	}{
+		{
+			name:     "partial account name",
+			content:  "2024-01-15 test\n    exp",
+			line:     1,
+			char:     7,
+			expected: "exp",
+		},
+		{
+			name:     "empty posting line",
+			content:  "2024-01-15 test\n    ",
+			line:     1,
+			char:     4,
+			expected: "",
+		},
+		{
+			name:     "cyrillic partial",
+			content:  "2024-01-15 test\n    альа",
+			line:     1,
+			char:     8,
+			expected: "альа",
+		},
+		{
+			name:     "after colon prefix",
+			content:  "2024-01-15 test\n    expenses:fo",
+			line:     1,
+			char:     15,
+			expected: "expenses:fo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pos := protocol.Position{Line: tt.line, Character: tt.char}
+			result := extractQueryText(tt.content, pos, ContextAccount)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestExtractQueryText_Payee(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		line     uint32
+		char     uint32
+		expected string
+	}{
+		{
+			name:     "partial payee name",
+			content:  "2024-01-15 Groc",
+			line:     0,
+			char:     15,
+			expected: "Groc",
+		},
+		{
+			name:     "after date only",
+			content:  "2024-01-15 ",
+			line:     0,
+			char:     11,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pos := protocol.Position{Line: tt.line, Character: tt.char}
+			result := extractQueryText(tt.content, pos, ContextPayee)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFuzzyMatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		pattern  string
+		expected bool
+	}{
+		{"exact match", "expenses:food", "expenses:food", true},
+		{"prefix match", "expenses:food", "exp", true},
+		{"fuzzy match latin", "expenses:food", "exfood", true},
+		{"fuzzy match cyrillic", "активы:альфа:текущий", "альа", true},
+		{"no match", "expenses:food", "xyz", false},
+		{"empty pattern matches all", "anything", "", true},
+		{"case insensitive", "Expenses:Food", "exp", true},
+		{"partial fuzzy", "активы:тинькофф:текущий", "тинт", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := fuzzyMatch(tt.text, tt.pattern)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestFilterByFuzzyMatch(t *testing.T) {
+	items := []protocol.CompletionItem{
+		{Label: "Активы:Альфа:Текущий"},
+		{Label: "Активы:Альфа:Альфа-Счет"},
+		{Label: "Активы:Тинькофф:Текущий"},
+		{Label: "Расходы:Продукты"},
+	}
+
+	t.Run("filters by cyrillic query", func(t *testing.T) {
+		filtered := filterByFuzzyMatch(items, "альа")
+		labels := extractLabels(filtered)
+
+		assert.Len(t, filtered, 2)
+		assert.Contains(t, labels, "Активы:Альфа:Текущий")
+		assert.Contains(t, labels, "Активы:Альфа:Альфа-Счет")
+	})
+
+	t.Run("empty query returns all", func(t *testing.T) {
+		filtered := filterByFuzzyMatch(items, "")
+		assert.Len(t, filtered, len(items))
+	})
+
+	t.Run("no matches returns empty", func(t *testing.T) {
+		filtered := filterByFuzzyMatch(items, "xyz")
+		assert.Empty(t, filtered)
+	})
+}
+
+func TestCompletion_FiltersAndSortsByFrequency(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Test1
+    Активы:Альфа:Текущий  100
+    Расходы:Продукты
+
+2024-01-02 Test2
+    Активы:Альфа:Текущий  200
+    Расходы:Продукты
+
+2024-01-03 Test3
+    Активы:Альфа:Альфа-Счет  50
+    Расходы:Продукты
+
+2024-01-04 Test4
+    альа`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 13, Character: 8},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+
+	assert.True(t, len(labels) >= 2, "should have at least 2 filtered results")
+	assert.Contains(t, labels, "Активы:Альфа:Текущий")
+	assert.Contains(t, labels, "Активы:Альфа:Альфа-Счет")
+	assert.NotContains(t, labels, "Расходы:Продукты", "should be filtered out")
+
+	var tekushchiyIdx, schetIdx int
+	for i, label := range labels {
+		if label == "Активы:Альфа:Текущий" {
+			tekushchiyIdx = i
+		}
+		if label == "Активы:Альфа:Альфа-Счет" {
+			schetIdx = i
+		}
+	}
+	assert.True(t, tekushchiyIdx < schetIdx,
+		"Активы:Альфа:Текущий (2 uses) should come before Активы:Альфа:Альфа-Счет (1 use)")
+}
