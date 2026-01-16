@@ -172,9 +172,9 @@ func TestParseSettingsFromRaw_Formatting(t *testing.T) {
 
 	raw := map[string]interface{}{
 		"formatting": map[string]interface{}{
-			"indentSize":      2,
-			"alignAmounts":    false,
-			"alignmentColumn": 50,
+			"indentSize":         2,
+			"alignAmounts":       false,
+			"minAlignmentColumn": 50,
 		},
 	}
 
@@ -186,8 +186,8 @@ func TestParseSettingsFromRaw_Formatting(t *testing.T) {
 	if result.Formatting.AlignAmounts {
 		t.Error("Formatting.AlignAmounts should be false")
 	}
-	if result.Formatting.AlignmentColumn != 50 {
-		t.Errorf("Formatting.AlignmentColumn = %d, want 50", result.Formatting.AlignmentColumn)
+	if result.Formatting.MinAlignmentColumn != 50 {
+		t.Errorf("Formatting.MinAlignmentColumn = %d, want 50", result.Formatting.MinAlignmentColumn)
 	}
 }
 
@@ -223,7 +223,7 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 		"completion.snippets":            false,
 		"diagnostics.undeclaredAccounts": false,
 		"formatting.indentSize":          8,
-		"formatting.alignmentColumn":     40,
+		"formatting.minAlignmentColumn":  40,
 		"cli.path":                       "/opt/hledger",
 	}
 
@@ -241,8 +241,8 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 	if result.Formatting.IndentSize != 8 {
 		t.Errorf("Formatting.IndentSize = %d, want 8", result.Formatting.IndentSize)
 	}
-	if result.Formatting.AlignmentColumn != 40 {
-		t.Errorf("Formatting.AlignmentColumn = %d, want 40", result.Formatting.AlignmentColumn)
+	if result.Formatting.MinAlignmentColumn != 40 {
+		t.Errorf("Formatting.MinAlignmentColumn = %d, want 40", result.Formatting.MinAlignmentColumn)
 	}
 	if result.CLI.Path != "/opt/hledger" {
 		t.Errorf("CLI.Path = %q, want %q", result.CLI.Path, "/opt/hledger")

@@ -34,9 +34,9 @@ type diagnosticsSettings struct {
 }
 
 type formattingSettings struct {
-	IndentSize      int
-	AlignAmounts    bool
-	AlignmentColumn int
+	IndentSize         int
+	AlignAmounts       bool
+	MinAlignmentColumn int
 }
 
 type cliSettings struct {
@@ -264,8 +264,8 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(formattingRaw["alignAmounts"]); ok {
 			settings.Formatting.AlignAmounts = value
 		}
-		if value, ok := toInt(formattingRaw["alignmentColumn"]); ok {
-			settings.Formatting.AlignmentColumn = value
+		if value, ok := toInt(formattingRaw["minAlignmentColumn"]); ok {
+			settings.Formatting.MinAlignmentColumn = value
 		}
 	}
 	if value, ok := toInt(raw["formatting.indentSize"]); ok {
@@ -274,8 +274,8 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	if value, ok := toBool(raw["formatting.alignAmounts"]); ok {
 		settings.Formatting.AlignAmounts = value
 	}
-	if value, ok := toInt(raw["formatting.alignmentColumn"]); ok {
-		settings.Formatting.AlignmentColumn = value
+	if value, ok := toInt(raw["formatting.minAlignmentColumn"]); ok {
+		settings.Formatting.MinAlignmentColumn = value
 	}
 
 	// CLI

@@ -486,7 +486,7 @@ func TestFormatDocumentWithOptions_AlignAmounts(t *testing.T) {
 	})
 }
 
-func TestFormatDocumentWithOptions_AlignmentColumn(t *testing.T) {
+func TestFormatDocumentWithOptions_MinAlignmentColumn(t *testing.T) {
 	input := `2024-01-15 test
     short:a  100 RUB
     very:long:account:name  500 RUB`
@@ -494,8 +494,8 @@ func TestFormatDocumentWithOptions_AlignmentColumn(t *testing.T) {
 	journal, errs := parser.Parse(input)
 	require.Empty(t, errs)
 
-	t.Run("alignment column 0 uses auto calculation", func(t *testing.T) {
-		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 0}
+	t.Run("min alignment column 0 uses pure auto calculation", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 0}
 		edits := FormatDocumentWithOptions(journal, input, nil, opts)
 
 		require.Len(t, edits, 2)
@@ -506,8 +506,8 @@ func TestFormatDocumentWithOptions_AlignmentColumn(t *testing.T) {
 		assert.Equal(t, pos1, pos2, "amounts should be aligned")
 	})
 
-	t.Run("fixed alignment column 40", func(t *testing.T) {
-		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 40}
+	t.Run("min alignment column larger than auto uses minimum", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 50}
 		edits := FormatDocumentWithOptions(journal, input, nil, opts)
 
 		require.Len(t, edits, 2)
@@ -515,17 +515,20 @@ func TestFormatDocumentWithOptions_AlignmentColumn(t *testing.T) {
 		pos1 := findAmountPosition(edits[0].NewText)
 		pos2 := findAmountPosition(edits[1].NewText)
 
-		assert.Equal(t, 40, pos1, "short account amount should be at column 40")
-		assert.Equal(t, 40, pos2, "long account amount should be at column 40")
+		assert.Equal(t, 50, pos1, "amount should be at minimum column 50")
+		assert.Equal(t, 50, pos2, "amount should be at minimum column 50")
 	})
 
-	t.Run("alignment column smaller than account uses minSpaces", func(t *testing.T) {
-		opts := Options{IndentSize: 4, AlignAmounts: true, AlignmentColumn: 10}
+	t.Run("min alignment column smaller than auto uses auto", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 10}
 		edits := FormatDocumentWithOptions(journal, input, nil, opts)
 
 		require.Len(t, edits, 2)
 
-		assert.Contains(t, edits[1].NewText, "very:long:account:name  500",
-			"long account should use minSpaces when column is too small")
+		pos1 := findAmountPosition(edits[0].NewText)
+		pos2 := findAmountPosition(edits[1].NewText)
+
+		assert.Equal(t, pos1, pos2, "amounts should be aligned at auto-calculated column")
+		assert.Greater(t, pos1, 10, "auto-calculated column should be greater than min")
 	})
 }

@@ -376,9 +376,9 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 
 	settings := s.getSettings()
 	opts := formatter.Options{
-		IndentSize:      settings.Formatting.IndentSize,
-		AlignAmounts:    settings.Formatting.AlignAmounts,
-		AlignmentColumn: settings.Formatting.AlignmentColumn,
+		IndentSize:         settings.Formatting.IndentSize,
+		AlignAmounts:       settings.Formatting.AlignAmounts,
+		MinAlignmentColumn: settings.Formatting.MinAlignmentColumn,
 	}
 
 	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil

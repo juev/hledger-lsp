@@ -16,9 +16,9 @@ const minSpaces = 2
 var defaultIndent = strings.Repeat(" ", defaultIndentSize)
 
 type Options struct {
-	IndentSize      int
-	AlignAmounts    bool
-	AlignmentColumn int
+	IndentSize         int
+	AlignAmounts       bool
+	MinAlignmentColumn int
 }
 
 func DefaultOptions() Options {
@@ -54,10 +54,9 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 
 	globalAccountCol := 0
 	if opts.AlignAmounts {
-		if opts.AlignmentColumn > 0 {
-			globalAccountCol = opts.AlignmentColumn
-		} else {
-			globalAccountCol = calculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+		globalAccountCol = calculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+		if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn {
+			globalAccountCol = opts.MinAlignmentColumn
 		}
 	}
 

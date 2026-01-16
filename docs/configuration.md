@@ -38,7 +38,7 @@ Enable or disable specific LSP features.
 |---------|---------|-------------|
 | `hledger.formatting.indentSize` | `4` | Number of spaces for posting indent |
 | `hledger.formatting.alignAmounts` | `true` | Align amounts across postings |
-| `hledger.formatting.alignmentColumn` | `0` | Fixed column for amount alignment (0 = auto) |
+| `hledger.formatting.minAlignmentColumn` | `0` | Minimum column for amount alignment (0 = no minimum) |
 
 ## CLI
 
@@ -71,7 +71,7 @@ Enable or disable specific LSP features.
   "hledger.diagnostics.unbalancedTransactions": true,
   "hledger.formatting.indentSize": 4,
   "hledger.formatting.alignAmounts": true,
-  "hledger.formatting.alignmentColumn": 0,
+  "hledger.formatting.minAlignmentColumn": 0,
   "hledger.cli.path": "hledger",
   "hledger.cli.timeout": 30000,
   "hledger.limits.maxFileSizeBytes": 20971520,
@@ -107,7 +107,7 @@ lspconfig.hledger_lsp.setup({
       formatting = {
         indentSize = 4,
         alignAmounts = true,
-        alignmentColumn = 0,
+        minAlignmentColumn = 0,
       },
       cli = {
         enabled = true,
@@ -133,7 +133,7 @@ lspconfig.hledger_lsp.setup({
      :completion (:maxResults 100 :snippets t :fuzzyMatching t :showCounts t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)
-     :formatting (:indentSize 4 :alignAmounts t :alignmentColumn 0)
+     :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0)
      :cli (:enabled t :path "hledger" :timeout 30000)
      :limits (:maxFileSizeBytes 20971520 :maxIncludeDepth 100))))
 ```
