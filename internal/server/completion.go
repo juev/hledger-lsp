@@ -54,19 +54,8 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts)
 
 	query := extractQueryText(doc, params.Position, completionCtx)
-	items = filterByFuzzyMatch(items, query)
-
-	if counts != nil {
-		rankCompletionItems(items, counts, query)
-	} else {
-		for i := range items {
-			items[i].FilterText = query
-		}
-	}
-
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].SortText < items[j].SortText
-	})
+	scored := filterAndScoreFuzzyMatch(items, query)
+	items = rankCompletionItemsByScore(scored, counts, query)
 
 	settings := s.getSettings()
 	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
@@ -94,12 +83,27 @@ func getCountsForContext(ctxType CompletionContextType, result *analyzer.Analysi
 	}
 }
 
-func rankCompletionItems(items []protocol.CompletionItem, counts map[string]int, query string) {
-	for i := range items {
-		count := counts[items[i].Label]
-		items[i].SortText = fmt.Sprintf("%06d_%s", 999999-count, items[i].Label)
+func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, query string) []protocol.CompletionItem {
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		countI := 0
+		countJ := 0
+		if counts != nil {
+			countI = counts[scored[i].item.Label]
+			countJ = counts[scored[j].item.Label]
+		}
+		return countI > countJ
+	})
+
+	items := make([]protocol.CompletionItem, len(scored))
+	for i, s := range scored {
+		items[i] = s.item
+		items[i].SortText = fmt.Sprintf("%06d_%s", i, s.item.Label)
 		items[i].FilterText = query
 	}
+	return items
 }
 
 func determineCompletionContext(content string, pos protocol.Position, ctx *protocol.CompletionContext) CompletionContextType {
@@ -572,37 +576,80 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 }
 
 func fuzzyMatch(text, pattern string) bool {
+	return fuzzyMatchScore(text, pattern) > 0
+}
+
+const (
+	fuzzyScoreEmptyPattern     = 1000 // score when pattern is empty (all items match)
+	fuzzyScoreBaseMatch        = 10   // base score per matched character
+	fuzzyScoreConsecutiveBonus = 5    // bonus increment for consecutive matches
+	fuzzyScoreWordBoundary     = 15   // bonus for match at word boundary (after ':' or start)
+)
+
+func fuzzyMatchScore(text, pattern string) int {
 	if pattern == "" {
-		return true
+		return fuzzyScoreEmptyPattern
 	}
 
 	text = strings.ToLower(text)
 	pattern = strings.ToLower(pattern)
 
-	j := 0
 	textRunes := []rune(text)
 	patternRunes := []rune(pattern)
 
+	j := 0
+	score := 0
+	lastMatchIdx := -1
+	consecutiveBonus := 0
+
 	for i := 0; i < len(textRunes) && j < len(patternRunes); i++ {
 		if textRunes[i] == patternRunes[j] {
+			score += fuzzyScoreBaseMatch
+
+			if lastMatchIdx == i-1 {
+				consecutiveBonus += fuzzyScoreConsecutiveBonus
+				score += consecutiveBonus
+			} else {
+				consecutiveBonus = 0
+			}
+
+			if i == 0 || textRunes[i-1] == ':' {
+				score += fuzzyScoreWordBoundary
+			}
+
+			lastMatchIdx = i
 			j++
 		}
 	}
-	return j == len(patternRunes)
+
+	if j < len(patternRunes) {
+		return 0
+	}
+
+	return score
 }
 
-func filterByFuzzyMatch(items []protocol.CompletionItem, query string) []protocol.CompletionItem {
+type scoredItem struct {
+	item  protocol.CompletionItem
+	score int
+}
+
+func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string) []scoredItem {
 	if query == "" {
-		return items
+		result := make([]scoredItem, len(items))
+		for i, item := range items {
+			result[i] = scoredItem{item: item, score: fuzzyScoreEmptyPattern}
+		}
+		return result
 	}
 
-	var filtered []protocol.CompletionItem
+	var result []scoredItem
 	for _, item := range items {
-		if fuzzyMatch(item.Label, query) {
-			filtered = append(filtered, item)
+		if score := fuzzyMatchScore(item.Label, query); score > 0 {
+			result = append(result, scoredItem{item: item, score: score})
 		}
 	}
-	return filtered
+	return result
 }
 
 func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string {

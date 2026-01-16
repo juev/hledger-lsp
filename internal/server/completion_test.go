@@ -1380,6 +1380,46 @@ func TestExtractQueryText_Payee(t *testing.T) {
 	}
 }
 
+func TestFuzzyMatchScore(t *testing.T) {
+	t.Run("returns 0 for no match", func(t *testing.T) {
+		score := fuzzyMatchScore("expenses:food", "xyz")
+		assert.Equal(t, 0, score)
+	})
+
+	t.Run("returns positive for match", func(t *testing.T) {
+		score := fuzzyMatchScore("expenses:food", "exp")
+		assert.True(t, score > 0)
+	})
+
+	t.Run("empty pattern returns high score", func(t *testing.T) {
+		score := fuzzyMatchScore("anything", "")
+		assert.True(t, score > 0)
+	})
+
+	t.Run("consecutive match scores higher than sparse", func(t *testing.T) {
+		consecutiveScore := fuzzyMatchScore("Активы:Альфа:Текущий", "альф")
+		sparseScore := fuzzyMatchScore("Расходы:Мобильный телефон", "альф")
+
+		assert.True(t, consecutiveScore > sparseScore,
+			"consecutive match (%d) should score higher than sparse (%d)",
+			consecutiveScore, sparseScore)
+	})
+
+	t.Run("word boundary bonus", func(t *testing.T) {
+		withBoundary := fuzzyMatchScore("expenses:food", "food")
+		withoutBoundary := fuzzyMatchScore("expensesfood", "food")
+
+		assert.True(t, withBoundary > withoutBoundary,
+			"word boundary match (%d) should score higher than mid-word (%d)",
+			withBoundary, withoutBoundary)
+	})
+
+	t.Run("case insensitive", func(t *testing.T) {
+		score := fuzzyMatchScore("Expenses:Food", "exp")
+		assert.True(t, score > 0)
+	})
+}
+
 func TestFuzzyMatch(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1405,7 +1445,7 @@ func TestFuzzyMatch(t *testing.T) {
 	}
 }
 
-func TestFilterByFuzzyMatch(t *testing.T) {
+func TestFilterAndScoreFuzzyMatch(t *testing.T) {
 	items := []protocol.CompletionItem{
 		{Label: "Активы:Альфа:Текущий"},
 		{Label: "Активы:Альфа:Альфа-Счет"},
@@ -1414,7 +1454,11 @@ func TestFilterByFuzzyMatch(t *testing.T) {
 	}
 
 	t.Run("filters by cyrillic query", func(t *testing.T) {
-		filtered := filterByFuzzyMatch(items, "альа")
+		scored := filterAndScoreFuzzyMatch(items, "альа")
+		filtered := make([]protocol.CompletionItem, len(scored))
+		for i, s := range scored {
+			filtered[i] = s.item
+		}
 		labels := extractLabels(filtered)
 
 		assert.Len(t, filtered, 2)
@@ -1423,13 +1467,13 @@ func TestFilterByFuzzyMatch(t *testing.T) {
 	})
 
 	t.Run("empty query returns all", func(t *testing.T) {
-		filtered := filterByFuzzyMatch(items, "")
-		assert.Len(t, filtered, len(items))
+		scored := filterAndScoreFuzzyMatch(items, "")
+		assert.Len(t, scored, len(items))
 	})
 
 	t.Run("no matches returns empty", func(t *testing.T) {
-		filtered := filterByFuzzyMatch(items, "xyz")
-		assert.Empty(t, filtered)
+		scored := filterAndScoreFuzzyMatch(items, "xyz")
+		assert.Empty(t, scored)
 	})
 }
 
@@ -1483,4 +1527,60 @@ func TestCompletion_FiltersAndSortsByFrequency(t *testing.T) {
 	}
 	assert.True(t, tekushchiyIdx < schetIdx,
 		"Активы:Альфа:Текущий (2 uses) should come before Активы:Альфа:Альфа-Счет (1 use)")
+}
+
+func TestCompletion_ConsecutiveMatchBeforeSparse(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Test1
+    Расходы:Мобильный телефон  100
+    Активы:Банк
+
+2024-01-02 Test2
+    Расходы:Мобильный телефон  200
+    Активы:Банк
+
+2024-01-03 Test3
+    Расходы:Мобильный телефон  300
+    Активы:Банк
+
+2024-01-04 Test4
+    Активы:Альфа:Текущий  50
+    Расходы:Продукты
+
+2024-01-05 Test5
+    альф`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 17, Character: 8},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	require.True(t, len(labels) >= 2, "should have at least 2 results")
+
+	alfaIdx, mobileIdx := -1, -1
+	for i, label := range labels {
+		if label == "Активы:Альфа:Текущий" {
+			alfaIdx = i
+		}
+		if label == "Расходы:Мобильный телефон" {
+			mobileIdx = i
+		}
+	}
+
+	require.NotEqual(t, -1, alfaIdx, "Активы:Альфа:Текущий should be in results")
+	require.NotEqual(t, -1, mobileIdx, "Расходы:Мобильный телефон should be in results")
+
+	assert.True(t, alfaIdx < mobileIdx,
+		"Активы:Альфа:Текущий (consecutive 'альф') should come before Расходы:Мобильный телефон (sparse match, even with 3x frequency)")
 }
