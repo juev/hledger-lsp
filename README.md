@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/juev/hledger-lsp)](https://go.dev/)
 [![License](https://img.shields.io/github/license/juev/hledger-lsp)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/juev/hledger-lsp)](https://github.com/juev/hledger-lsp/releases)
-[![codecov](https://codecov.io/gh/juev/hledger-lsp/branch/main/graph/badge.svg)](https://codecov.io/gh/juev/hledger-lsp)
+[![coverage](https://raw.githubusercontent.com/juev/hledger-lsp/badges/.badges/main/coverage.svg)](https://github.com/juev/hledger-lsp/actions)
 
 A Language Server Protocol (LSP) implementation for [hledger](https://hledger.org/) journal files. Provides IDE features like completions, diagnostics, formatting, and more for any LSP-compatible editor.
 

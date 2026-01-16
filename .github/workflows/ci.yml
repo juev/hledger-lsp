@@ -27,11 +27,13 @@ jobs:
           go-version: '1.24'
       - name: Run tests with coverage
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
-      - name: Upload coverage
-        uses: codecov/codecov-action@v5
+      - name: Check test coverage
+        uses: vladopajic/go-test-coverage@v2
         with:
-          file: coverage.out
-          fail_ci_if_error: false
+          profile: coverage.out
+          threshold-total: 70
+          git-token: ${{ github.ref_name == 'main' && secrets.GITHUB_TOKEN || '' }}
+          git-branch: badges
 
   build:
     runs-on: ubuntu-latest
