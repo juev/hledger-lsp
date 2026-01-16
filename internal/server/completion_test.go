@@ -686,6 +686,109 @@ func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
 	assert.Regexp(t, `^\d{4}/\d{2}/\d{2}$`, todayItem.Label, "today should use YYYY/MM/DD format from file")
 }
 
+func TestCompletion_Date_DefaultFormatWhenNoValidDates(t *testing.T) {
+	srv := NewServer()
+	content := `; Just a comment
+account expenses:food
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 2, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, todayItem.Label, "should use default YYYY-MM-DD format when no dates in file")
+}
+
+func TestCompletion_Date_UsesDotSeparator(t *testing.T) {
+	srv := NewServer()
+	content := `2024.01.10 transaction
+    expenses:food  $50
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{4}\.\d{2}\.\d{2}$`, todayItem.Label, "today should use YYYY.MM.DD format from file")
+}
+
+func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
+	srv := NewServer()
+	content := `2024-1-5 transaction
+    expenses:food  $50
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{4}-\d{1,2}-\d{1,2}$`, todayItem.Label, "should allow single digit month/day when file uses them")
+}
+
 func extractDetails(items []protocol.CompletionItem) []string {
 	details := make([]string, len(items))
 	for i, item := range items {

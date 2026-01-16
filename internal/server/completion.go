@@ -410,7 +410,11 @@ var defaultDateFormat = DateFormat{Separator: "-", HasYear: true, LeadingZeros: 
 
 func detectDateFormat(content string) DateFormat {
 	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	maxLinesToCheck := 100
+	for i, line := range lines {
+		if i >= maxLinesToCheck {
+			break
+		}
 		trimmed := strings.TrimSpace(line)
 		if len(trimmed) < 5 {
 			continue
@@ -447,7 +451,7 @@ func tryParseDateWithSep(line string, sep string) (DateFormat, bool) {
 		if len(parts) >= 3 && isAllDigits(parts[1]) && len(parts[2]) >= 2 {
 			dayPart := strings.SplitN(parts[2], " ", 2)[0]
 			if isAllDigits(dayPart) {
-				leadingZeros := len(parts[1]) == 2 && parts[1][0] == '0'
+				leadingZeros := len(parts[1]) == 2 && len(dayPart) == 2
 				return DateFormat{Separator: sep, HasYear: true, LeadingZeros: leadingZeros}, true
 			}
 		}
@@ -457,7 +461,7 @@ func tryParseDateWithSep(line string, sep string) (DateFormat, bool) {
 		if len(parts) >= 2 && len(parts[1]) >= 2 {
 			dayPart := strings.SplitN(parts[1], " ", 2)[0]
 			if isAllDigits(dayPart) {
-				leadingZeros := len(first) == 2 && first[0] == '0'
+				leadingZeros := len(first) == 2 && len(dayPart) == 2
 				return DateFormat{Separator: sep, HasYear: false, LeadingZeros: leadingZeros}, true
 			}
 		}
@@ -521,6 +525,15 @@ func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) strin
 	return sb.String()
 }
 
+func escapeSnippetText(s string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"$", "\\$",
+		"}", "\\}",
+	)
+	return replacer.Replace(s)
+}
+
 func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string {
 	var sb strings.Builder
 	sb.WriteString(payee)
@@ -529,7 +542,7 @@ func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string
 	tabstop := 1
 	for _, p := range postings {
 		sb.WriteString("    ")
-		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, p.Account))
+		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, escapeSnippetText(p.Account)))
 		tabstop++
 		if p.Amount != "" || p.Commodity != "" {
 			sb.WriteString("  ")
@@ -542,7 +555,7 @@ func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string
 					amountStr += " " + p.Commodity
 				}
 			}
-			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, amountStr))
+			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, escapeSnippetText(amountStr)))
 			tabstop++
 		}
 		sb.WriteString("\n")

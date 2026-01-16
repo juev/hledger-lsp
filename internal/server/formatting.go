@@ -20,15 +20,15 @@ func (s *Server) OnTypeFormatting(ctx context.Context, params *protocol.Document
 	lines := strings.Split(doc, "\n")
 	lineNum := int(params.Position.Line)
 
-	if lineNum == 0 {
+	if lineNum == 0 || lineNum-1 >= len(lines) {
 		return nil, nil
 	}
 
 	prevLine := lines[lineNum-1]
 
-	ctx_ := analyzeLineContext(prevLine)
+	lineCtx := analyzeLineContext(prevLine)
 
-	switch ctx_ {
+	switch lineCtx {
 	case lineIsTransactionHeader, lineIsPosting:
 		return indentEdit(params.Position, params.Options), nil
 	default:
@@ -60,7 +60,7 @@ func analyzeLineContext(line string) lineContext {
 }
 
 func startsWithDate(line string) bool {
-	if len(line) < 8 {
+	if len(line) < 5 {
 		return false
 	}
 	for i := range 4 {
