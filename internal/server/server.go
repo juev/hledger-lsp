@@ -85,7 +85,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				},
 			},
 			CompletionProvider: &protocol.CompletionOptions{
-				TriggerCharacters: []string{":", " ", "@", "="},
+				TriggerCharacters: []string{":", "@", "="},
 				ResolveProvider:   true,
 			},
 			HoverProvider:              true,

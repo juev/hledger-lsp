@@ -1584,3 +1584,235 @@ func TestCompletion_ConsecutiveMatchBeforeSparse(t *testing.T) {
 	assert.True(t, alfaIdx < mobileIdx,
 		"Активы:Альфа:Текущий (consecutive 'альф') should come before Расходы:Мобильный телефон (sparse match, even with 3x frequency)")
 }
+
+// === NEW TESTS FOR COMPLETION FIXES ===
+
+func TestDetermineContext_CommodityInPosting(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		line     uint32
+		char     uint32
+		expected CompletionContextType
+	}{
+		{
+			name:     "cursor after amount - should be commodity",
+			content:  "2024-01-15 test\n    expenses:food  100 ",
+			line:     1,
+			char:     24,
+			expected: ContextCommodity,
+		},
+		{
+			name:     "cursor in commodity",
+			content:  "2024-01-15 test\n    expenses:food  100 US",
+			line:     1,
+			char:     26,
+			expected: ContextCommodity,
+		},
+		{
+			name:     "cursor in account - should be account",
+			content:  "2024-01-15 test\n    expenses:fo",
+			line:     1,
+			char:     15,
+			expected: ContextAccount,
+		},
+		{
+			name:     "cursor at start of posting - should be account",
+			content:  "2024-01-15 test\n    ",
+			line:     1,
+			char:     4,
+			expected: ContextAccount,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pos := protocol.Position{Line: tt.line, Character: tt.char}
+			ctx := determineCompletionContext(tt.content, pos, nil)
+			assert.Equal(t, tt.expected, ctx, "context should be %v but got %v", tt.expected, ctx)
+		})
+	}
+}
+
+func TestDetermineContext_Directive_Account(t *testing.T) {
+	content := `account assets:b`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 16}, nil)
+	assert.Equal(t, ContextAccount, ctx, "directive 'account' should return ContextAccount")
+}
+
+func TestDetermineContext_Directive_Commodity(t *testing.T) {
+	content := `commodity U`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 11}, nil)
+	assert.Equal(t, ContextCommodity, ctx, "directive 'commodity' should return ContextCommodity")
+}
+
+func TestDetermineContext_Directive_ApplyAccount(t *testing.T) {
+	content := `apply account expenses:`
+
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 23}, nil)
+	assert.Equal(t, ContextAccount, ctx, "directive 'apply account' should return ContextAccount")
+}
+
+func TestCompletion_CommodityAfterAmount(t *testing.T) {
+	srv := NewServer()
+	content := `commodity USD
+commodity EUR
+commodity RUB
+
+2024-01-15 test
+    expenses:food  100 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 5, Character: 23},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+
+	assert.Contains(t, labels, "USD", "should suggest commodities")
+	assert.Contains(t, labels, "EUR", "should suggest commodities")
+	assert.Contains(t, labels, "RUB", "should suggest commodities")
+	assert.NotContains(t, labels, "expenses:food", "should NOT suggest accounts when in commodity position")
+}
+
+func TestCompletion_DirectiveAccount(t *testing.T) {
+	srv := NewServer()
+	content := `account assets:cash
+account expenses:food
+
+account `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 3, Character: 8},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "assets:cash", "directive 'account' should suggest accounts")
+	assert.Contains(t, labels, "expenses:food", "directive 'account' should suggest accounts")
+}
+
+func TestCompletion_DirectiveCommodity(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  100 USD
+    assets:cash
+
+commodity U`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	labels := extractLabels(result.Items)
+	assert.Contains(t, labels, "USD", "directive 'commodity' should suggest commodities")
+}
+
+func TestExtractQueryText_Commodity(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		line     uint32
+		char     uint32
+		expected string
+	}{
+		{
+			name:     "partial commodity after amount",
+			content:  "2024-01-15 test\n    expenses:food  100 US",
+			line:     1,
+			char:     26,
+			expected: "US",
+		},
+		{
+			name:     "empty after amount",
+			content:  "2024-01-15 test\n    expenses:food  100 ",
+			line:     1,
+			char:     24,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pos := protocol.Position{Line: tt.line, Character: tt.char}
+			result := extractQueryText(tt.content, pos, ContextCommodity)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestCompletion_TextEditForAccount(t *testing.T) {
+	srv := NewServer()
+	content := `account assets:cash
+account expenses:food
+
+2024-01-15 test
+    exp`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 7},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.True(t, len(result.Items) > 0, "should have completion items")
+
+	var foodItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "expenses:food" {
+			foodItem = &result.Items[i]
+			break
+		}
+	}
+
+	require.NotNil(t, foodItem, "expenses:food should be in completion items")
+	require.NotNil(t, foodItem.TextEdit, "TextEdit should be set for proper replacement")
+
+	textEdit := foodItem.TextEdit
+
+	assert.Equal(t, uint32(4), textEdit.Range.Start.Line)
+	assert.Equal(t, uint32(4), textEdit.Range.Start.Character, "TextEdit should start at column 4 (after indent)")
+	assert.Equal(t, uint32(4), textEdit.Range.End.Line)
+	assert.Equal(t, uint32(7), textEdit.Range.End.Character, "TextEdit should end at cursor position")
+}

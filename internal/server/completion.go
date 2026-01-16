@@ -53,6 +53,20 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	counts := getCountsForContext(completionCtx, result)
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts)
 
+	editRange := calculateTextEditRange(doc, params.Position, completionCtx)
+	if editRange != nil {
+		for i := range items {
+			text := items[i].Label
+			if items[i].InsertText != "" {
+				text = items[i].InsertText
+			}
+			items[i].TextEdit = &protocol.TextEdit{
+				Range:   *editRange,
+				NewText: text,
+			}
+		}
+	}
+
 	query := extractQueryText(doc, params.Position, completionCtx)
 	scored := filterAndScoreFuzzyMatch(items, query)
 	items = rankCompletionItemsByScore(scored, counts, query)
@@ -130,8 +144,18 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return ContextDate
 	}
 
-	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+	if strings.HasPrefix(line, "account ") {
 		return ContextAccount
+	}
+	if strings.HasPrefix(line, "commodity ") {
+		return ContextCommodity
+	}
+	if strings.HasPrefix(line, "apply account ") {
+		return ContextAccount
+	}
+
+	if strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t") {
+		return determinePostingContext(line, pos)
 	}
 
 	if len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
@@ -139,6 +163,68 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 	}
 
 	return ContextDate
+}
+
+func determinePostingContext(line string, pos protocol.Position) CompletionContextType {
+	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := len(line) - len(trimmed)
+
+	posInContent := byteCol - indent
+	if posInContent < 0 {
+		return ContextAccount
+	}
+
+	separatorIdx := findDoublespace(trimmed)
+	if separatorIdx == -1 {
+		return ContextAccount
+	}
+
+	if posInContent <= separatorIdx {
+		return ContextAccount
+	}
+
+	afterSeparator := trimmed[separatorIdx:]
+	afterAccount := strings.TrimLeft(afterSeparator, " ")
+	skipSpaces := len(afterSeparator) - len(afterAccount)
+
+	amountEnd := findAmountEnd(afterAccount)
+	relativePos := posInContent - separatorIdx - skipSpaces
+
+	if relativePos <= amountEnd {
+		return ContextAccount
+	}
+
+	return ContextCommodity
+}
+
+func findDoublespace(s string) int {
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] == ' ' && s[i+1] == ' ' {
+			return i
+		}
+	}
+	return -1
+}
+
+func findAmountEnd(s string) int {
+	i := 0
+	if i < len(s) && !isDigitOrSign(s[i]) {
+		for i < len(s) && !isDigitOrSign(s[i]) && s[i] != ' ' {
+			i++
+		}
+	}
+	for i < len(s) && (s[i] == '-' || s[i] == '+') {
+		i++
+	}
+	for i < len(s) && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.' || s[i] == ',' || s[i] == '_') {
+		i++
+	}
+	return i
+}
+
+func isDigitOrSign(c byte) bool {
+	return (c >= '0' && c <= '9') || c == '-' || c == '+'
 }
 
 func determineTagContext(line string, pos protocol.Position) CompletionContextType {
@@ -544,6 +630,76 @@ func escapeSnippetText(s string) string {
 	return replacer.Replace(s)
 }
 
+func calculateTextEditRange(content string, pos protocol.Position, ctxType CompletionContextType) *protocol.Range {
+	lines := strings.Split(content, "\n")
+	if int(pos.Line) >= len(lines) {
+		return nil
+	}
+	line := lines[pos.Line]
+	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+
+	var startByte int
+	switch ctxType {
+	case ContextAccount:
+		if strings.HasPrefix(line, "account ") {
+			startByte = 8
+		} else if strings.HasPrefix(line, "apply account ") {
+			startByte = 14
+		} else {
+			trimmed := strings.TrimLeft(line[:byteCol], " \t")
+			startByte = byteCol - len(trimmed)
+		}
+	case ContextCommodity:
+		if strings.HasPrefix(line, "commodity ") {
+			startByte = 10
+		} else {
+			startByte = findCommodityStart(line, byteCol)
+		}
+	case ContextPayee:
+		spaceIdx := strings.Index(line[:byteCol], " ")
+		if spaceIdx != -1 {
+			startByte = spaceIdx + 1
+			for startByte < byteCol && (line[startByte] == ' ' || line[startByte] == '*' || line[startByte] == '!') {
+				startByte++
+			}
+		}
+	default:
+		return nil
+	}
+
+	startChar := lsputil.ByteOffsetToUTF16(line, startByte)
+	return &protocol.Range{
+		Start: protocol.Position{Line: pos.Line, Character: uint32(startChar)},
+		End:   pos,
+	}
+}
+
+func findCommodityStart(line string, byteCol int) int {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := len(line) - len(trimmed)
+
+	separatorIdx := findDoublespace(trimmed)
+	if separatorIdx == -1 {
+		return byteCol
+	}
+
+	afterSeparator := trimmed[separatorIdx:]
+	afterAccount := strings.TrimLeft(afterSeparator, " ")
+	skipSpaces := len(afterSeparator) - len(afterAccount)
+
+	amountEnd := findAmountEnd(afterAccount)
+	commodityStart := indent + separatorIdx + skipSpaces + amountEnd
+
+	for commodityStart < len(line) && line[commodityStart] == ' ' {
+		commodityStart++
+	}
+
+	return commodityStart
+}
+
 func extractQueryText(content string, pos protocol.Position, ctxType CompletionContextType) string {
 	lines := strings.Split(content, "\n")
 	if int(pos.Line) >= len(lines) {
@@ -560,6 +716,12 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 
 	switch ctxType {
 	case ContextAccount:
+		if strings.HasPrefix(beforeCursor, "account ") {
+			return strings.TrimPrefix(beforeCursor, "account ")
+		}
+		if strings.HasPrefix(beforeCursor, "apply account ") {
+			return strings.TrimPrefix(beforeCursor, "apply account ")
+		}
 		trimmed := strings.TrimLeft(beforeCursor, " \t")
 		return trimmed
 
@@ -569,6 +731,22 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 			return ""
 		}
 		return strings.TrimLeft(beforeCursor[spaceIdx+1:], " ")
+
+	case ContextCommodity:
+		if strings.HasPrefix(beforeCursor, "commodity ") {
+			return strings.TrimPrefix(beforeCursor, "commodity ")
+		}
+		trimmed := strings.TrimLeft(beforeCursor, " \t")
+		separatorIdx := findDoublespace(trimmed)
+		if separatorIdx == -1 {
+			return ""
+		}
+		afterAccount := strings.TrimLeft(trimmed[separatorIdx:], " ")
+		amountEnd := findAmountEnd(afterAccount)
+		if amountEnd >= len(afterAccount) {
+			return ""
+		}
+		return strings.TrimLeft(afterAccount[amountEnd:], " ")
 
 	default:
 		return ""
