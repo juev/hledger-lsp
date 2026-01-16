@@ -1420,12 +1420,12 @@ func TestFuzzyMatchScore(t *testing.T) {
 	})
 }
 
-func TestFuzzyMatch(t *testing.T) {
+func TestFuzzyMatch_ViaScore(t *testing.T) {
 	tests := []struct {
-		name     string
-		text     string
-		pattern  string
-		expected bool
+		name        string
+		text        string
+		pattern     string
+		shouldMatch bool
 	}{
 		{"exact match", "expenses:food", "expenses:food", true},
 		{"prefix match", "expenses:food", "exp", true},
@@ -1439,8 +1439,12 @@ func TestFuzzyMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := fuzzyMatch(tt.text, tt.pattern)
-			assert.Equal(t, tt.expected, result)
+			score := fuzzyMatchScore(tt.text, tt.pattern)
+			if tt.shouldMatch {
+				assert.True(t, score > 0, "expected match for %q with pattern %q", tt.text, tt.pattern)
+			} else {
+				assert.Equal(t, 0, score, "expected no match for %q with pattern %q", tt.text, tt.pattern)
+			}
 		})
 	}
 }
@@ -1815,4 +1819,158 @@ account expenses:food
 	assert.Equal(t, uint32(4), textEdit.Range.Start.Character, "TextEdit should start at column 4 (after indent)")
 	assert.Equal(t, uint32(4), textEdit.Range.End.Line)
 	assert.Equal(t, uint32(7), textEdit.Range.End.Character, "TextEdit should end at cursor position")
+}
+
+// === REFACTORING TESTS ===
+
+func TestFindAmountEnd_Parentheses(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{"simple number", "100", 3},
+		{"negative in parentheses", "(-50)", 5},
+		{"currency prefix with parens", "$(-50)", 6},
+		{"positive with currency", "$100", 4},
+		{"number with decimals", "100.50", 6},
+		{"number with comma", "1,000", 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := findAmountEnd(tt.input)
+			assert.Equal(t, tt.expected, result, "findAmountEnd(%q) should return %d", tt.input, tt.expected)
+		})
+	}
+}
+
+func TestParsePosting(t *testing.T) {
+	tests := []struct {
+		name            string
+		line            string
+		expectedIndent  int
+		expectedAccount string
+		expectedSepIdx  int
+		expectedAmount  string
+	}{
+		{
+			name:            "simple posting with amount",
+			line:            "    expenses:food  100 USD",
+			expectedIndent:  4,
+			expectedAccount: "expenses:food",
+			expectedSepIdx:  13,
+			expectedAmount:  "100 USD",
+		},
+		{
+			name:            "posting without amount",
+			line:            "    assets:cash",
+			expectedIndent:  4,
+			expectedAccount: "assets:cash",
+			expectedSepIdx:  -1,
+			expectedAmount:  "",
+		},
+		{
+			name:            "tab indent",
+			line:            "\texpenses:rent  500",
+			expectedIndent:  1,
+			expectedAccount: "expenses:rent",
+			expectedSepIdx:  13,
+			expectedAmount:  "500",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parts := parsePosting(tt.line)
+			assert.Equal(t, tt.expectedIndent, parts.indent)
+			assert.Equal(t, tt.expectedAccount, parts.account)
+			assert.Equal(t, tt.expectedSepIdx, parts.separatorIdx)
+			if tt.expectedSepIdx != -1 {
+				assert.NotEmpty(t, parts.afterAccount, "afterAccount should be set when separator found")
+			}
+		})
+	}
+}
+
+func TestFuzzyMatchScoreBySegments(t *testing.T) {
+	tests := []struct {
+		name        string
+		accountName string
+		pattern     string
+		shouldMatch bool
+	}{
+		{
+			name:        "matches segment exactly",
+			accountName: "Активы:Альфа:Текущий",
+			pattern:     "Альфа",
+			shouldMatch: true,
+		},
+		{
+			name:        "matches segment fuzzy",
+			accountName: "Активы:Альфа:Текущий",
+			pattern:     "ал",
+			shouldMatch: true,
+		},
+		{
+			name:        "no segment matches",
+			accountName: "Расходы:Транспорт",
+			pattern:     "ал",
+			shouldMatch: false,
+		},
+		{
+			name:        "empty pattern matches all",
+			accountName: "anything:here",
+			pattern:     "",
+			shouldMatch: true,
+		},
+		{
+			name:        "matches in middle segment",
+			accountName: "expenses:food:groceries",
+			pattern:     "foo",
+			shouldMatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			score := fuzzyMatchScoreBySegments(tt.accountName, tt.pattern)
+			if tt.shouldMatch {
+				assert.True(t, score > 0, "should match: fuzzyMatchScoreBySegments(%q, %q)", tt.accountName, tt.pattern)
+			} else {
+				assert.Equal(t, 0, score, "should not match: fuzzyMatchScoreBySegments(%q, %q)", tt.accountName, tt.pattern)
+			}
+		})
+	}
+}
+
+func TestFilterAndScoreFuzzyMatch_SegmentBased(t *testing.T) {
+	items := []protocol.CompletionItem{
+		{Label: "Активы:Альфа:Текущий"},
+		{Label: "Расходы:Налоги"},
+		{Label: "Расходы:Транспорт"},
+		{Label: "expenses:food"},
+	}
+
+	t.Run("filters by segment matching cyrillic", func(t *testing.T) {
+		scored := filterAndScoreFuzzyMatch(items, "ал")
+		labels := make([]string, len(scored))
+		for i, s := range scored {
+			labels[i] = s.item.Label
+		}
+
+		assert.Contains(t, labels, "Активы:Альфа:Текущий", "should match segment 'Альфа'")
+		assert.Contains(t, labels, "Расходы:Налоги", "should match segment 'Налоги'")
+		assert.NotContains(t, labels, "Расходы:Транспорт", "no segment matches 'ал'")
+	})
+
+	t.Run("handles query with trailing colon", func(t *testing.T) {
+		scored := filterAndScoreFuzzyMatch(items, "Альфа:")
+		labels := make([]string, len(scored))
+		for i, s := range scored {
+			labels[i] = s.item.Label
+		}
+
+		assert.Contains(t, labels, "Активы:Альфа:Текущий", "should match even with trailing colon")
+	})
 }

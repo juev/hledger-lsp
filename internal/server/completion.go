@@ -26,6 +26,12 @@ const (
 	ContextDate
 )
 
+const (
+	directiveAccount      = "account "
+	directiveApplyAccount = "apply account "
+	directiveCommodity    = "commodity "
+)
+
 func (s *Server) Completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
@@ -144,13 +150,13 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return ContextDate
 	}
 
-	if strings.HasPrefix(line, "account ") {
+	if strings.HasPrefix(line, directiveAccount) {
 		return ContextAccount
 	}
-	if strings.HasPrefix(line, "commodity ") {
+	if strings.HasPrefix(line, directiveCommodity) {
 		return ContextCommodity
 	}
-	if strings.HasPrefix(line, "apply account ") {
+	if strings.HasPrefix(line, directiveApplyAccount) {
 		return ContextAccount
 	}
 
@@ -167,31 +173,23 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 
 func determinePostingContext(line string, pos protocol.Position) CompletionContextType {
 	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
-	trimmed := strings.TrimLeft(line, " \t")
-	indent := len(line) - len(trimmed)
+	parts := parsePosting(line)
 
-	posInContent := byteCol - indent
+	posInContent := byteCol - parts.indent
 	if posInContent < 0 {
 		return ContextAccount
 	}
 
-	separatorIdx := findDoublespace(trimmed)
-	if separatorIdx == -1 {
+	if parts.separatorIdx == -1 {
 		return ContextAccount
 	}
 
-	if posInContent <= separatorIdx {
+	if posInContent <= parts.separatorIdx {
 		return ContextAccount
 	}
 
-	afterSeparator := trimmed[separatorIdx:]
-	afterAccount := strings.TrimLeft(afterSeparator, " ")
-	skipSpaces := len(afterSeparator) - len(afterAccount)
-
-	amountEnd := findAmountEnd(afterAccount)
-	relativePos := posInContent - separatorIdx - skipSpaces
-
-	if relativePos <= amountEnd {
+	relativePos := posInContent - parts.separatorIdx - parts.skipSpaces
+	if relativePos <= parts.amountEnd {
 		return ContextAccount
 	}
 
@@ -209,8 +207,11 @@ func findDoublespace(s string) int {
 
 func findAmountEnd(s string) int {
 	i := 0
+	if i < len(s) && s[i] == '(' {
+		i++
+	}
 	if i < len(s) && !isDigitOrSign(s[i]) {
-		for i < len(s) && !isDigitOrSign(s[i]) && s[i] != ' ' {
+		for i < len(s) && !isDigitOrSign(s[i]) && s[i] != ' ' && s[i] != ')' {
 			i++
 		}
 	}
@@ -220,7 +221,43 @@ func findAmountEnd(s string) int {
 	for i < len(s) && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.' || s[i] == ',' || s[i] == '_') {
 		i++
 	}
+	if i < len(s) && s[i] == ')' {
+		i++
+	}
 	return i
+}
+
+type postingParts struct {
+	indent       int
+	account      string
+	separatorIdx int
+	afterAccount string
+	skipSpaces   int
+	amountEnd    int
+}
+
+func parsePosting(line string) postingParts {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := len(line) - len(trimmed)
+
+	parts := postingParts{
+		indent:       indent,
+		separatorIdx: -1,
+	}
+
+	parts.separatorIdx = findDoublespace(trimmed)
+	if parts.separatorIdx == -1 {
+		parts.account = trimmed
+		return parts
+	}
+
+	parts.account = trimmed[:parts.separatorIdx]
+	afterSeparator := trimmed[parts.separatorIdx:]
+	parts.afterAccount = strings.TrimLeft(afterSeparator, " ")
+	parts.skipSpaces = len(afterSeparator) - len(parts.afterAccount)
+	parts.amountEnd = findAmountEnd(parts.afterAccount)
+
+	return parts
 }
 
 func isDigitOrSign(c byte) bool {
@@ -644,17 +681,17 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 	var startByte int
 	switch ctxType {
 	case ContextAccount:
-		if strings.HasPrefix(line, "account ") {
-			startByte = 8
-		} else if strings.HasPrefix(line, "apply account ") {
-			startByte = 14
+		if strings.HasPrefix(line, directiveAccount) {
+			startByte = len(directiveAccount)
+		} else if strings.HasPrefix(line, directiveApplyAccount) {
+			startByte = len(directiveApplyAccount)
 		} else {
 			trimmed := strings.TrimLeft(line[:byteCol], " \t")
 			startByte = byteCol - len(trimmed)
 		}
 	case ContextCommodity:
-		if strings.HasPrefix(line, "commodity ") {
-			startByte = 10
+		if strings.HasPrefix(line, directiveCommodity) {
+			startByte = len(directiveCommodity)
 		} else {
 			startByte = findCommodityStart(line, byteCol)
 		}
@@ -678,20 +715,12 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 }
 
 func findCommodityStart(line string, byteCol int) int {
-	trimmed := strings.TrimLeft(line, " \t")
-	indent := len(line) - len(trimmed)
-
-	separatorIdx := findDoublespace(trimmed)
-	if separatorIdx == -1 {
+	parts := parsePosting(line)
+	if parts.separatorIdx == -1 {
 		return byteCol
 	}
 
-	afterSeparator := trimmed[separatorIdx:]
-	afterAccount := strings.TrimLeft(afterSeparator, " ")
-	skipSpaces := len(afterSeparator) - len(afterAccount)
-
-	amountEnd := findAmountEnd(afterAccount)
-	commodityStart := indent + separatorIdx + skipSpaces + amountEnd
+	commodityStart := parts.indent + parts.separatorIdx + parts.skipSpaces + parts.amountEnd
 
 	for commodityStart < len(line) && line[commodityStart] == ' ' {
 		commodityStart++
@@ -716,25 +745,25 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 
 	switch ctxType {
 	case ContextAccount:
-		if strings.HasPrefix(beforeCursor, "account ") {
-			return strings.TrimPrefix(beforeCursor, "account ")
+		if after, found := strings.CutPrefix(beforeCursor, directiveAccount); found {
+			return after
 		}
-		if strings.HasPrefix(beforeCursor, "apply account ") {
-			return strings.TrimPrefix(beforeCursor, "apply account ")
+		if after, found := strings.CutPrefix(beforeCursor, directiveApplyAccount); found {
+			return after
 		}
 		trimmed := strings.TrimLeft(beforeCursor, " \t")
 		return trimmed
 
 	case ContextPayee:
-		spaceIdx := strings.Index(beforeCursor, " ")
-		if spaceIdx == -1 {
+		_, after, found := strings.Cut(beforeCursor, " ")
+		if !found {
 			return ""
 		}
-		return strings.TrimLeft(beforeCursor[spaceIdx+1:], " ")
+		return strings.TrimLeft(after, " ")
 
 	case ContextCommodity:
-		if strings.HasPrefix(beforeCursor, "commodity ") {
-			return strings.TrimPrefix(beforeCursor, "commodity ")
+		if after, found := strings.CutPrefix(beforeCursor, directiveCommodity); found {
+			return after
 		}
 		trimmed := strings.TrimLeft(beforeCursor, " \t")
 		separatorIdx := findDoublespace(trimmed)
@@ -751,10 +780,6 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 	default:
 		return ""
 	}
-}
-
-func fuzzyMatch(text, pattern string) bool {
-	return fuzzyMatchScore(text, pattern) > 0
 }
 
 const (
@@ -812,6 +837,23 @@ type scoredItem struct {
 	score int
 }
 
+func fuzzyMatchScoreBySegments(accountName, pattern string) int {
+	if pattern == "" {
+		return fuzzyScoreEmptyPattern
+	}
+
+	segments := strings.Split(accountName, ":")
+	bestScore := 0
+
+	for _, segment := range segments {
+		if score := fuzzyMatchScore(segment, pattern); score > bestScore {
+			bestScore = score
+		}
+	}
+
+	return bestScore
+}
+
 func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string) []scoredItem {
 	if query == "" {
 		result := make([]scoredItem, len(items))
@@ -821,8 +863,16 @@ func filterAndScoreFuzzyMatch(items []protocol.CompletionItem, query string) []s
 		return result
 	}
 
+	queryForSegment := strings.TrimSuffix(query, ":")
+
 	var result []scoredItem
 	for _, item := range items {
+		if strings.Contains(item.Label, ":") {
+			if score := fuzzyMatchScoreBySegments(item.Label, queryForSegment); score > 0 {
+				result = append(result, scoredItem{item: item, score: score})
+				continue
+			}
+		}
 		if score := fuzzyMatchScore(item.Label, query); score > 0 {
 			result = append(result, scoredItem{item: item, score: score})
 		}
