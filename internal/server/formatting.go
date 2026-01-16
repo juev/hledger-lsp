@@ -36,12 +36,24 @@ func (s *Server) handleEnterFormatting(params *protocol.DocumentOnTypeFormatting
 	}
 
 	prevLine := lines[lineNum-1]
-
 	lineCtx := analyzeLineContext(prevLine)
 
+	currentLine := ""
+	if lineNum < len(lines) {
+		currentLine = lines[lineNum]
+	}
+
+	currentWhitespaceLen := len(currentLine) - len(strings.TrimLeft(currentLine, " \t"))
+	currentWhitespaceLenUTF16 := lsputil.UTF16Len(currentLine[:currentWhitespaceLen])
+
 	switch lineCtx {
-	case lineIsTransactionHeader, lineIsPosting:
-		return indentEdit(params.Position, params.Options), nil
+	case lineIsTransactionHeader, lineIsPostingWithoutAmount:
+		return replaceIndentEdit(params.Position, params.Options, currentWhitespaceLenUTF16), nil
+	case lineIsPostingWithAmount:
+		if currentWhitespaceLenUTF16 > 0 {
+			return removeIndentEdit(params.Position, currentWhitespaceLenUTF16), nil
+		}
+		return nil, nil
 	default:
 		return nil, nil
 	}
@@ -150,7 +162,8 @@ const (
 	lineIsOther lineContext = iota
 	lineIsEmpty
 	lineIsTransactionHeader
-	lineIsPosting
+	lineIsPostingWithAmount
+	lineIsPostingWithoutAmount
 )
 
 func analyzeLineContext(line string) lineContext {
@@ -162,7 +175,10 @@ func analyzeLineContext(line string) lineContext {
 		return lineIsTransactionHeader
 	}
 	if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-		return lineIsPosting
+		if hasAmount(line) {
+			return lineIsPostingWithAmount
+		}
+		return lineIsPostingWithoutAmount
 	}
 	return lineIsOther
 }
@@ -182,7 +198,7 @@ func startsWithDate(line string) bool {
 	return true
 }
 
-func indentEdit(pos protocol.Position, opts protocol.FormattingOptions) []protocol.TextEdit {
+func replaceIndentEdit(pos protocol.Position, opts protocol.FormattingOptions, existingWhitespaceLen int) []protocol.TextEdit {
 	indent := strings.Repeat(" ", int(opts.TabSize))
 	if !opts.InsertSpaces {
 		indent = "\t"
@@ -190,8 +206,18 @@ func indentEdit(pos protocol.Position, opts protocol.FormattingOptions) []protoc
 	return []protocol.TextEdit{{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: pos.Line, Character: 0},
-			End:   protocol.Position{Line: pos.Line, Character: 0},
+			End:   protocol.Position{Line: pos.Line, Character: uint32(existingWhitespaceLen)},
 		},
 		NewText: indent,
+	}}
+}
+
+func removeIndentEdit(pos protocol.Position, existingWhitespaceLen int) []protocol.TextEdit {
+	return []protocol.TextEdit{{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: pos.Line, Character: 0},
+			End:   protocol.Position{Line: pos.Line, Character: uint32(existingWhitespaceLen)},
+		},
+		NewText: "",
 	}}
 }

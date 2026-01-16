@@ -37,11 +37,9 @@ func TestOnTypeFormatting_IndentAfterTransactionHeader(t *testing.T) {
 	assert.Equal(t, "    ", edits[0].NewText, "Should indent with 4 spaces after transaction header")
 }
 
-func TestOnTypeFormatting_IndentAfterPosting(t *testing.T) {
+func TestOnTypeFormatting_NoIndentAfterPostingWithAmount(t *testing.T) {
 	srv := NewServer()
-	content := `2024-01-15 Grocery Store
-    expenses:food  $50
-`
+	content := "2024-01-15 Grocery Store\n    expenses:food  $50\n    "
 
 	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
 
@@ -49,7 +47,35 @@ func TestOnTypeFormatting_IndentAfterPosting(t *testing.T) {
 		TextDocument: protocol.TextDocumentIdentifier{
 			URI: "file:///test.journal",
 		},
-		Position: protocol.Position{Line: 2, Character: 0},
+		Position: protocol.Position{Line: 2, Character: 4},
+		Ch:       "\n",
+		Options: protocol.FormattingOptions{
+			TabSize:      4,
+			InsertSpaces: true,
+		},
+	}
+
+	edits, err := srv.OnTypeFormatting(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, edits)
+	require.Len(t, edits, 1, "Should return one edit to remove whitespace")
+
+	assert.Equal(t, uint32(0), edits[0].Range.Start.Character)
+	assert.Equal(t, uint32(4), edits[0].Range.End.Character)
+	assert.Equal(t, "", edits[0].NewText, "Should remove whitespace after posting with amount")
+}
+
+func TestOnTypeFormatting_IndentAfterPostingWithoutAmount(t *testing.T) {
+	srv := NewServer()
+	content := "2024-01-15 Grocery Store\n    expenses:food\n    "
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.DocumentOnTypeFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{
+			URI: "file:///test.journal",
+		},
+		Position: protocol.Position{Line: 2, Character: 4},
 		Ch:       "\n",
 		Options: protocol.FormattingOptions{
 			TabSize:      4,
@@ -62,7 +88,9 @@ func TestOnTypeFormatting_IndentAfterPosting(t *testing.T) {
 	require.NotNil(t, edits)
 	require.Len(t, edits, 1, "Should return one edit for indentation")
 
-	assert.Equal(t, "    ", edits[0].NewText, "Should indent with 4 spaces after posting")
+	assert.Equal(t, uint32(0), edits[0].Range.Start.Character)
+	assert.Equal(t, uint32(4), edits[0].Range.End.Character)
+	assert.Equal(t, "    ", edits[0].NewText, "Should replace whitespace with 4 spaces")
 }
 
 func TestOnTypeFormatting_NoIndentAfterEmptyLine(t *testing.T) {
