@@ -30,9 +30,10 @@ type FileSource struct {
 }
 
 type ResolvedJournal struct {
-	Primary *ast.Journal
-	Files   map[string]*ast.Journal
-	Errors  []LoadError
+	Primary   *ast.Journal
+	Files     map[string]*ast.Journal
+	FileOrder []string
+	Errors    []LoadError
 }
 
 func NewResolvedJournal(primary *ast.Journal) *ResolvedJournal {
@@ -47,8 +48,10 @@ func (r *ResolvedJournal) AllTransactions() []ast.Transaction {
 	if r.Primary != nil {
 		result = append(result, r.Primary.Transactions...)
 	}
-	for _, j := range r.Files {
-		result = append(result, j.Transactions...)
+	for _, path := range r.FileOrder {
+		if j, ok := r.Files[path]; ok {
+			result = append(result, j.Transactions...)
+		}
 	}
 	return result
 }
@@ -58,8 +61,10 @@ func (r *ResolvedJournal) AllDirectives() []ast.Directive {
 	if r.Primary != nil {
 		result = append(result, r.Primary.Directives...)
 	}
-	for _, j := range r.Files {
-		result = append(result, j.Directives...)
+	for _, path := range r.FileOrder {
+		if j, ok := r.Files[path]; ok {
+			result = append(result, j.Directives...)
+		}
 	}
 	return result
 }
@@ -69,8 +74,10 @@ func (r *ResolvedJournal) AllIncludes() []ast.Include {
 	if r.Primary != nil {
 		result = append(result, r.Primary.Includes...)
 	}
-	for _, j := range r.Files {
-		result = append(result, j.Includes...)
+	for _, path := range r.FileOrder {
+		if j, ok := r.Files[path]; ok {
+			result = append(result, j.Includes...)
+		}
 	}
 	return result
 }

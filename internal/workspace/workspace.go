@@ -281,9 +281,11 @@ func (w *Workspace) updateResolvedLocked(path string, journal *ast.Journal) {
 	}
 	if journal == nil {
 		delete(w.resolved.Files, path)
+		w.resolved.FileOrder = removeString(w.resolved.FileOrder, path)
 		return
 	}
 	w.resolved.Files[path] = journal
+	w.resolved.FileOrder = addString(w.resolved.FileOrder, path)
 }
 
 func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newIncludes []string) {
@@ -352,6 +354,7 @@ func (w *Workspace) removeUnreachableLocked(reachable map[string]bool) {
 		delete(w.reverseGraph, path)
 		if w.resolved != nil {
 			delete(w.resolved.Files, path)
+			w.resolved.FileOrder = removeString(w.resolved.FileOrder, path)
 		}
 	}
 }

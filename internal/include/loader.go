@@ -201,6 +201,7 @@ func (l *Loader) loadSingleInclude(
 	l.mu.RUnlock()
 	if ok {
 		result.Files[includePath] = cached
+		result.FileOrder = append(result.FileOrder, includePath)
 		return errors
 	}
 
@@ -244,7 +245,9 @@ func (l *Loader) loadSingleInclude(
 		l.cache[includePath] = subResult.Primary
 		l.mu.Unlock()
 		result.Files[includePath] = subResult.Primary
+		result.FileOrder = append(result.FileOrder, includePath)
 		maps.Copy(result.Files, subResult.Files)
+		result.FileOrder = append(result.FileOrder, subResult.FileOrder...)
 	}
 
 	return errors
