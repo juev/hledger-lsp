@@ -310,21 +310,16 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 
 	case ContextPayee:
 		for _, payee := range result.Payees {
-			hasTemplate := false
+			_, hasTemplate := result.PayeeTemplates[payee]
+			if hasTemplate {
+				postings := result.PayeeTemplates[payee]
+				hasTemplate = len(postings) > 0
+			}
 			item := protocol.CompletionItem{
-				Label: payee,
-				Kind:  protocol.CompletionItemKindClass,
+				Label:  payee,
+				Kind:   protocol.CompletionItemKindClass,
+				Detail: formatPayeeDetailWithCount(payee, counts, hasTemplate, settings.ShowCounts),
 			}
-			if postings, ok := result.PayeeTemplates[payee]; ok && len(postings) > 0 {
-				if s.snippetSupport && settings.Snippets {
-					item.InsertText = buildPayeeSnippet(payee, postings)
-					item.InsertTextFormat = protocol.InsertTextFormatSnippet
-				} else {
-					item.InsertText = buildPayeeTemplate(payee, postings)
-				}
-				hasTemplate = true
-			}
-			item.Detail = formatPayeeDetailWithCount(payee, counts, hasTemplate, settings.ShowCounts)
 			items = append(items, item)
 		}
 
@@ -653,42 +648,6 @@ func reformatDateString(dateStr string, f DateFormat) string {
 	return formatDateWithFormat(t, f)
 }
 
-func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) string {
-	var sb strings.Builder
-	sb.WriteString(payee)
-	sb.WriteString("\n")
-
-	for _, p := range postings {
-		sb.WriteString("    ")
-		sb.WriteString(p.Account)
-		if p.Amount != "" || p.Commodity != "" {
-			sb.WriteString("  ")
-			if p.CommodityLeft && p.Commodity != "" {
-				sb.WriteString(p.Commodity)
-				sb.WriteString(p.Amount)
-			} else if p.Amount != "" {
-				sb.WriteString(p.Amount)
-				if p.Commodity != "" {
-					sb.WriteString(" ")
-					sb.WriteString(p.Commodity)
-				}
-			}
-		}
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func escapeSnippetText(s string) string {
-	replacer := strings.NewReplacer(
-		"\\", "\\\\",
-		"$", "\\$",
-		"}", "\\}",
-	)
-	return replacer.Replace(s)
-}
-
 func calculateTextEditRange(content string, pos protocol.Position, ctxType CompletionContextType) *protocol.Range {
 	lines := strings.Split(content, "\n")
 	if int(pos.Line) >= len(lines) {
@@ -915,35 +874,4 @@ func filterByPrefix(items []protocol.CompletionItem, query string) []scoredItem 
 		}
 	}
 	return result
-}
-
-func buildPayeeSnippet(payee string, postings []analyzer.PostingTemplate) string {
-	var sb strings.Builder
-	sb.WriteString(payee)
-	sb.WriteString("\n")
-
-	tabstop := 1
-	for _, p := range postings {
-		sb.WriteString("    ")
-		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, escapeSnippetText(p.Account)))
-		tabstop++
-		if p.Amount != "" || p.Commodity != "" {
-			sb.WriteString("  ")
-			var amountStr string
-			if p.CommodityLeft && p.Commodity != "" {
-				amountStr = p.Commodity + p.Amount
-			} else if p.Amount != "" {
-				amountStr = p.Amount
-				if p.Commodity != "" {
-					amountStr += " " + p.Commodity
-				}
-			}
-			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstop, escapeSnippetText(amountStr)))
-			tabstop++
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("$0")
-
-	return sb.String()
 }

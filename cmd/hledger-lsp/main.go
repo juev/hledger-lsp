@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -299,6 +300,13 @@ func (d *serverDispatcher) OutgoingCalls(ctx context.Context, params *protocol.C
 }
 
 func (d *serverDispatcher) NonstandardRequest(ctx context.Context, method string, params any) (any, error) {
+	if method == "textDocument/inlineCompletion" {
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			return nil, err
+		}
+		return d.srv.InlineCompletion(ctx, paramsJSON)
+	}
 	return nil, nil
 }
 
