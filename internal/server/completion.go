@@ -510,12 +510,13 @@ func generateDateCompletionItems(historicalDates []string, content string) []pro
 
 	seen := map[string]bool{today: true, yesterday: true, tomorrow: true}
 	for i, date := range sortedDates {
-		if seen[date] {
+		reformatted := reformatDateString(date, format)
+		if seen[reformatted] {
 			continue
 		}
-		seen[date] = true
+		seen[reformatted] = true
 		items = append(items, protocol.CompletionItem{
-			Label:    date,
+			Label:    reformatted,
 			Kind:     protocol.CompletionItemKindConstant,
 			Detail:   "from history",
 			SortText: fmt.Sprintf("%04d", 100+i),
@@ -621,6 +622,14 @@ func formatDateWithFormat(t time.Time, f DateFormat) string {
 		return fmt.Sprintf("%04d%s%s%s%s", t.Year(), f.Separator, monthStr, f.Separator, dayStr)
 	}
 	return monthStr + f.Separator + dayStr
+}
+
+func reformatDateString(dateStr string, f DateFormat) string {
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	return formatDateWithFormat(t, f)
 }
 
 func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) string {
