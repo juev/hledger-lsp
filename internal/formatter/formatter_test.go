@@ -1,12 +1,15 @@
 package formatter
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.lsp.dev/protocol"
 
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -531,4 +534,165 @@ func TestFormatDocumentWithOptions_MinAlignmentColumn(t *testing.T) {
 		assert.Equal(t, pos1, pos2, "amounts should be aligned at auto-calculated column")
 		assert.Greater(t, pos1, 10, "auto-calculated column should be greater than min")
 	})
+}
+
+func TestFormatDocument_TrimsTrailingSpaces(t *testing.T) {
+	input := "2024-01-15 test   \n    expenses:food  $50  \n    assets:cash   "
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	for i, line := range lines {
+		assert.Equal(t, strings.TrimRight(line, " \t"), line,
+			"line %d should have no trailing spaces: %q", i, line)
+	}
+}
+
+func TestFormatDocument_TrimsEmptyLinesWithSpaces(t *testing.T) {
+	input := "2024-01-15 test\n    expenses:food  $50\n   \n    assets:cash"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	assert.Equal(t, "", lines[2], "empty line with spaces should become truly empty")
+}
+
+func TestFormatDocument_TrimsTransactionHeader(t *testing.T) {
+	input := "2024-01-15 test with trailing spaces   \n    expenses:food  $50\n    assets:cash"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	assert.Equal(t, "2024-01-15 test with trailing spaces", lines[0],
+		"transaction header should have no trailing spaces")
+}
+
+func TestFormatDocument_TrimsComments(t *testing.T) {
+	input := "; this is a comment   \n2024-01-15 test\n    expenses:food  $50\n    assets:cash"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	assert.Equal(t, "; this is a comment", lines[0],
+		"comment line should have no trailing spaces")
+}
+
+func TestFormatDocument_TrimsDirectives(t *testing.T) {
+	input := "account expenses:food   \n\n2024-01-15 test\n    expenses:food  $50\n    assets:cash"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	assert.Equal(t, "account expenses:food", lines[0],
+		"directive line should have no trailing spaces")
+}
+
+func TestFormatDocument_TrimsNonASCIIText(t *testing.T) {
+	input := "2024-01-15 Покупка в магазине   \n    расходы:еда  100 RUB  \n    активы:наличные"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	for i, line := range lines {
+		assert.Equal(t, strings.TrimRight(line, " \t"), line,
+			"line %d should have no trailing spaces: %q", i, line)
+	}
+
+	assert.Equal(t, "2024-01-15 Покупка в магазине", lines[0],
+		"Cyrillic transaction header should have trailing spaces removed")
+}
+
+func applyEdits(content string, edits []protocol.TextEdit) string {
+	sort.Slice(edits, func(i, j int) bool {
+		if edits[i].Range.Start.Line != edits[j].Range.Start.Line {
+			return edits[i].Range.Start.Line > edits[j].Range.Start.Line
+		}
+		return edits[i].Range.Start.Character > edits[j].Range.Start.Character
+	})
+
+	result := content
+	for _, edit := range edits {
+		lines := strings.Split(result, "\n")
+
+		startLine := int(edit.Range.Start.Line)
+		endLine := int(edit.Range.End.Line)
+
+		if startLine >= len(lines) {
+			continue
+		}
+
+		if startLine == endLine {
+			line := lines[startLine]
+			startByte := lsputil.UTF16OffsetToByteOffset(line, int(edit.Range.Start.Character))
+			endByte := lsputil.UTF16OffsetToByteOffset(line, int(edit.Range.End.Character))
+			if startByte > len(line) {
+				startByte = len(line)
+			}
+			if endByte > len(line) {
+				endByte = len(line)
+			}
+			lines[startLine] = line[:startByte] + edit.NewText + line[endByte:]
+		} else {
+			startLineContent := lines[startLine]
+			startByte := lsputil.UTF16OffsetToByteOffset(startLineContent, int(edit.Range.Start.Character))
+			if startByte > len(startLineContent) {
+				startByte = len(startLineContent)
+			}
+			endLineContent := ""
+			endByte := 0
+			if endLine < len(lines) {
+				endLineContent = lines[endLine]
+				endByte = lsputil.UTF16OffsetToByteOffset(endLineContent, int(edit.Range.End.Character))
+				if endByte > len(endLineContent) {
+					endByte = len(endLineContent)
+				}
+			}
+
+			newLine := startLineContent[:startByte] + edit.NewText + endLineContent[endByte:]
+			newLines := append(lines[:startLine], newLine)
+			if endLine+1 < len(lines) {
+				newLines = append(newLines, lines[endLine+1:]...)
+			}
+			lines = newLines
+		}
+		result = strings.Join(lines, "\n")
+	}
+	return result
 }

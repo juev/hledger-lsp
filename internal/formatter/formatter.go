@@ -40,10 +40,6 @@ func FormatDocumentWithFormats(journal *ast.Journal, content string, commodityFo
 }
 
 func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFormats map[string]NumberFormat, opts Options) []protocol.TextEdit {
-	if len(journal.Transactions) == 0 {
-		return nil
-	}
-
 	if commodityFormats == nil {
 		commodityFormats = extractCommodityFormats(journal)
 	}
@@ -52,21 +48,67 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 		opts.IndentSize = defaultIndentSize
 	}
 
-	globalAccountCol := 0
-	if opts.AlignAmounts {
-		globalAccountCol = calculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
-		if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn {
-			globalAccountCol = opts.MinAlignmentColumn
-		}
-	}
-
 	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
-	for i := range journal.Transactions {
-		tx := &journal.Transactions[i]
-		txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, opts)
-		edits = append(edits, txEdits...)
+	postingLines := make(map[int]bool)
+
+	if len(journal.Transactions) > 0 {
+		globalAccountCol := 0
+		if opts.AlignAmounts {
+			globalAccountCol = calculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+			if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn {
+				globalAccountCol = opts.MinAlignmentColumn
+			}
+		}
+
+		for i := range journal.Transactions {
+			tx := &journal.Transactions[i]
+			for j := range tx.Postings {
+				postingLines[tx.Postings[j].Range.Start.Line-1] = true
+			}
+			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, opts)
+			edits = append(edits, txEdits...)
+		}
+	}
+
+	trimEdits := trimTrailingSpacesEdits(content, mapper, postingLines)
+	edits = append(edits, trimEdits...)
+
+	return edits
+}
+
+func trimTrailingSpacesEdits(content string, mapper *lsputil.PositionMapper, postingLines map[int]bool) []protocol.TextEdit {
+	lines := strings.Split(content, "\n")
+	var edits []protocol.TextEdit
+
+	for lineNum, line := range lines {
+		if postingLines[lineNum] {
+			continue
+		}
+
+		trimmed := strings.TrimRight(line, " \t")
+		if len(trimmed) == len(line) {
+			continue
+		}
+
+		trimmedUTF16Len := lsputil.UTF16Len(trimmed)
+		lineUTF16Len := mapper.LineUTF16Len(lineNum)
+
+		edit := protocol.TextEdit{
+			Range: protocol.Range{
+				Start: protocol.Position{
+					Line:      uint32(lineNum),
+					Character: uint32(trimmedUTF16Len),
+				},
+				End: protocol.Position{
+					Line:      uint32(lineNum),
+					Character: uint32(lineUTF16Len),
+				},
+			},
+			NewText: "",
+		}
+		edits = append(edits, edit)
 	}
 
 	return edits
