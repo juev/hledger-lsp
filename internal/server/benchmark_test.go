@@ -1,12 +1,19 @@
+//go:build !race
+
 package server
 
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
 func generateJournal(numTransactions int) string {
@@ -194,5 +201,169 @@ func BenchmarkApplyChange_Large(b *testing.B) {
 
 	for b.Loop() {
 		applyChange(largeContent, r, "assets:")
+	}
+}
+
+type noopClient struct{}
+
+func (noopClient) Progress(context.Context, *protocol.ProgressParams) error { return nil }
+func (noopClient) WorkDoneProgressCreate(context.Context, *protocol.WorkDoneProgressCreateParams) error {
+	return nil
+}
+func (noopClient) LogMessage(context.Context, *protocol.LogMessageParams) error { return nil }
+func (noopClient) PublishDiagnostics(context.Context, *protocol.PublishDiagnosticsParams) error {
+	return nil
+}
+func (noopClient) ShowMessage(context.Context, *protocol.ShowMessageParams) error { return nil }
+func (noopClient) ShowMessageRequest(context.Context, *protocol.ShowMessageRequestParams) (*protocol.MessageActionItem, error) {
+	return nil, nil
+}
+func (noopClient) Telemetry(context.Context, interface{}) error                           { return nil }
+func (noopClient) RegisterCapability(context.Context, *protocol.RegistrationParams) error { return nil }
+func (noopClient) UnregisterCapability(context.Context, *protocol.UnregistrationParams) error {
+	return nil
+}
+func (noopClient) ApplyEdit(context.Context, *protocol.ApplyWorkspaceEditParams) (bool, error) {
+	return false, nil
+}
+func (noopClient) Configuration(context.Context, *protocol.ConfigurationParams) ([]interface{}, error) {
+	return nil, nil
+}
+func (noopClient) WorkspaceFolders(context.Context) ([]protocol.WorkspaceFolder, error) {
+	return nil, nil
+}
+
+func setupBenchServer(b *testing.B, content string, withClient bool) (*Server, protocol.DocumentURI) {
+	b.Helper()
+	tmpDir := b.TempDir()
+	mainPath := filepath.Join(tmpDir, "bench.journal")
+	if err := os.WriteFile(mainPath, []byte(content), 0644); err != nil {
+		b.Fatal(err)
+	}
+
+	srv := NewServer()
+	if withClient {
+		srv.SetClient(noopClient{})
+	}
+	srv.loader = include.NewLoader()
+	srv.workspace = workspace.NewWorkspace(tmpDir, srv.loader)
+	if err := srv.workspace.Initialize(); err != nil {
+		b.Fatal(err)
+	}
+
+	docURI := protocol.DocumentURI("file://" + mainPath)
+	srv.documents.Store(docURI, content)
+
+	return srv, docURI
+}
+
+func BenchmarkDidChange_Incremental_Small(b *testing.B) {
+	srv, docURI := setupBenchServer(b, smallContent, false)
+	ctx := context.Background()
+
+	change := protocol.TextDocumentContentChangeEvent{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 4},
+			End:   protocol.Position{Line: 1, Character: 10},
+		},
+		Text: "assets:new",
+	}
+
+	params := &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
+		},
+		ContentChanges: []protocol.TextDocumentContentChangeEvent{change},
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = srv.DidChange(ctx, params)
+	}
+}
+
+func BenchmarkDidChange_Incremental_Medium(b *testing.B) {
+	srv, docURI := setupBenchServer(b, mediumContent, false)
+	ctx := context.Background()
+
+	change := protocol.TextDocumentContentChangeEvent{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 50, Character: 4},
+			End:   protocol.Position{Line: 50, Character: 10},
+		},
+		Text: "assets:new",
+	}
+
+	params := &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
+		},
+		ContentChanges: []protocol.TextDocumentContentChangeEvent{change},
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = srv.DidChange(ctx, params)
+	}
+}
+
+func BenchmarkDidChange_Incremental_Large(b *testing.B) {
+	srv, docURI := setupBenchServer(b, largeContent, false)
+	ctx := context.Background()
+
+	change := protocol.TextDocumentContentChangeEvent{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 500, Character: 4},
+			End:   protocol.Position{Line: 500, Character: 10},
+		},
+		Text: "assets:new",
+	}
+
+	params := &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
+		},
+		ContentChanges: []protocol.TextDocumentContentChangeEvent{change},
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = srv.DidChange(ctx, params)
+	}
+}
+
+func BenchmarkPublishDiagnostics_Small(b *testing.B) {
+	srv, docURI := setupBenchServer(b, smallContent, true)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		srv.publishDiagnostics(ctx, docURI, smallContent)
+	}
+}
+
+func BenchmarkPublishDiagnostics_Medium(b *testing.B) {
+	srv, docURI := setupBenchServer(b, mediumContent, true)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		srv.publishDiagnostics(ctx, docURI, mediumContent)
+	}
+}
+
+func BenchmarkPublishDiagnostics_Large(b *testing.B) {
+	srv, docURI := setupBenchServer(b, largeContent, true)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		srv.publishDiagnostics(ctx, docURI, largeContent)
 	}
 }
