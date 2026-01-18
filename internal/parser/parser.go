@@ -319,6 +319,13 @@ func (p *Parser) parseAmount() *ast.Amount {
 		p.advance()
 	}
 
+	if p.current.Type == TokenSign {
+		if sign == "" {
+			sign = p.current.Value
+		}
+		p.advance()
+	}
+
 	if p.current.Type != TokenNumber {
 		p.error("expected number")
 		return nil

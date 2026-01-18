@@ -323,7 +323,8 @@ func TestLexer_NegativeAmount(t *testing.T) {
 		{Type: TokenIndent, Value: "    "},
 		{Type: TokenAccount, Value: "assets:cash"},
 		{Type: TokenCommodity, Value: "$"},
-		{Type: TokenNumber, Value: "-50.00"},
+		{Type: TokenSign, Value: "-"},
+		{Type: TokenNumber, Value: "50.00"},
 		{Type: TokenEOF},
 	}
 	assertTokenTypesAndValues(t, expected, tokens)
@@ -889,8 +890,8 @@ func TestLexer_NumberFormatsExtended(t *testing.T) {
 		{"scientific upper", "    a:b  1E3", "1E3", 2, 4},
 		{"scientific with plus", "    a:b  1E+3", "1E+3", 2, 4},
 		{"scientific with minus", "    a:b  1E-10", "1E-10", 2, 4},
-		{"explicit plus", "    a:b  +100", "+100", 2, 4},
-		{"explicit plus decimal", "    a:b  +100.50", "+100.50", 2, 4},
+		{"explicit plus", "    a:b  +100", "100", 3, 5},
+		{"explicit plus decimal", "    a:b  +100.50", "100.50", 3, 5},
 		{"space grouping with commodity", "    a:b  1 000.00 USD", "1 000.00", 2, 5},
 	}
 
@@ -1060,6 +1061,245 @@ func TestLexer_UnterminatedTokens(t *testing.T) {
 		require.NotNil(t, tok)
 		assert.Equal(t, "2024-01", tok.Value)
 	})
+}
+
+func TestLexer_AmountFormatVariations(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		tokens []Token
+	}{
+		{
+			name:  "-USD222 should split into sign, commodity, number",
+			input: "-USD222",
+			tokens: []Token{
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenNumber, Value: "222"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "USD222 should split into commodity, number (in posting context)",
+			input: "    a:b  USD222",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "a:b"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenNumber, Value: "222"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "USD-222 should split into commodity, sign, number (in posting context)",
+			input: "    a:b  USD-222",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "a:b"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenNumber, Value: "222"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "$-100 should split into commodity, sign, number",
+			input: "$-100",
+			tokens: []Token{
+				{Type: TokenCommodity, Value: "$"},
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "-100 USD should split into sign, number, commodity",
+			input: "-100 USD",
+			tokens: []Token{
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "+USD100 should split into sign, commodity, number",
+			input: "+USD100",
+			tokens: []Token{
+				{Type: TokenSign, Value: "+"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenNumber, Value: "100"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "EUR+50 should split into commodity, sign, number (in posting context)",
+			input: "    a:b  EUR+50",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "a:b"},
+				{Type: TokenCommodity, Value: "EUR"},
+				{Type: TokenSign, Value: "+"},
+				{Type: TokenNumber, Value: "50"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "posting with -USD222",
+			input: "    expenses:food  -USD222",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenNumber, Value: "222"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "posting with USD-222",
+			input: "    expenses:food  USD-222",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "expenses:food"},
+				{Type: TokenCommodity, Value: "USD"},
+				{Type: TokenSign, Value: "-"},
+				{Type: TokenNumber, Value: "222"},
+				{Type: TokenEOF},
+			},
+		},
+		{
+			name:  "10 USD2024 should keep commodity intact (letters+digits after space)",
+			input: "    a:b  10 USD2024",
+			tokens: []Token{
+				{Type: TokenIndent, Value: "    "},
+				{Type: TokenAccount, Value: "a:b"},
+				{Type: TokenNumber, Value: "10"},
+				{Type: TokenCommodity, Value: "USD2024"},
+				{Type: TokenEOF},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+			assertTokenTypesAndValues(t, tt.tokens, tokens)
+		})
+	}
+}
+
+func TestLexer_IncludeWithTransaction(t *testing.T) {
+	input := `include level1.journal
+
+2024-01-15 * main transaction
+    expenses:main  $10.00
+    assets:cash
+`
+	lexer := NewLexer(input)
+	tokens := collectTokens(lexer)
+
+	expected := []Token{
+		{Type: TokenDirective, Value: "include"},
+		{Type: TokenText, Value: "level1.journal"},
+		{Type: TokenNewline},
+		{Type: TokenNewline},
+		{Type: TokenDate, Value: "2024-01-15"},
+		{Type: TokenStatus, Value: "*"},
+		{Type: TokenText, Value: "main transaction"},
+		{Type: TokenNewline},
+		{Type: TokenIndent},
+		{Type: TokenAccount, Value: "expenses:main"},
+		{Type: TokenCommodity, Value: "$"},
+		{Type: TokenNumber, Value: "10.00"},
+		{Type: TokenNewline},
+		{Type: TokenIndent},
+		{Type: TokenAccount, Value: "assets:cash"},
+		{Type: TokenNewline},
+		{Type: TokenEOF},
+	}
+
+	assertTokenTypesAndValues(t, expected, tokens)
+}
+
+func TestParser_AmountFormatVariations(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantQty  string
+		wantComm string
+	}{
+		{
+			name: "-USD222",
+			input: `2024-01-15 test
+    expenses:food  -USD222
+    assets:cash
+`,
+			wantQty:  "-222",
+			wantComm: "USD",
+		},
+		{
+			name: "USD222",
+			input: `2024-01-15 test
+    expenses:food  USD222
+    assets:cash
+`,
+			wantQty:  "222",
+			wantComm: "USD",
+		},
+		{
+			name: "USD-222",
+			input: `2024-01-15 test
+    expenses:food  USD-222
+    assets:cash
+`,
+			wantQty:  "-222",
+			wantComm: "USD",
+		},
+		{
+			name: "$-100",
+			input: `2024-01-15 test
+    expenses:food  $-100
+    assets:cash
+`,
+			wantQty:  "-100",
+			wantComm: "$",
+		},
+		{
+			name: "-100 USD",
+			input: `2024-01-15 test
+    expenses:food  -100 USD
+    assets:cash
+`,
+			wantQty:  "-100",
+			wantComm: "USD",
+		},
+		{
+			name: "-$100",
+			input: `2024-01-15 test
+    expenses:food  -$100
+    assets:cash
+`,
+			wantQty:  "-100",
+			wantComm: "$",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs, "unexpected parse errors: %v", errs)
+			require.Len(t, journal.Transactions, 1)
+			require.Len(t, journal.Transactions[0].Postings, 2)
+
+			posting := journal.Transactions[0].Postings[0]
+			require.NotNil(t, posting.Amount, "amount should not be nil")
+
+			assert.Equal(t, tt.wantQty, posting.Amount.Quantity.String(), "quantity mismatch")
+			assert.Equal(t, tt.wantComm, posting.Amount.Commodity.Symbol, "commodity mismatch")
+		})
+	}
 }
 
 func TestLexer_DateBoundaryConditions(t *testing.T) {

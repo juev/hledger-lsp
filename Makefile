@@ -1,4 +1,4 @@
-.PHONY: all build test lint bench clean install help
+.PHONY: all build test lint bench clean install local help
 
 BINARY := hledger-lsp
 BIN_DIR := ./bin
@@ -14,6 +14,7 @@ help:
 	@echo "  bench    Run benchmarks"
 	@echo "  clean    Remove build artifacts"
 	@echo "  install  Install to GOPATH/bin"
+	@echo "  local    Build binary to ~/Library/Application\ Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)"
 	@echo "  all      Run lint, test, and build"
 
 build:
@@ -33,5 +34,9 @@ clean:
 
 install:
 	go install $(CMD_DIR)
+
+local:
+	go build -o $(BIN_DIR)/$(BINARY) $(CMD_DIR)
+	cp $(BIN_DIR)/$(BINARY) ~/Library/Application\ Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)
 
 all: lint test build

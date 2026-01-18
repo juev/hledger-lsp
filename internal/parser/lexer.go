@@ -102,10 +102,10 @@ func (l *Lexer) scanInLine() Token {
 	case ch == '"':
 		return l.scanQuotedCommodity()
 	case ch == '-' || ch == '+':
-		if l.nextIsCurrencySymbol() {
+		if l.nextIsCurrencySymbol() || l.nextIsLetterCommodity() || l.nextIsDigit() {
 			return l.scanSign()
 		}
-		return l.scanNumber()
+		return l.scanText()
 	case l.isDigit(ch):
 		if l.looksLikeDate() {
 			return l.scanDate()
@@ -246,10 +246,6 @@ func (l *Lexer) scanNumber() Token {
 	start := l.pos
 	startPos := l.position()
 
-	if l.peek() == '-' || l.peek() == '+' {
-		l.advance()
-	}
-
 	hasDigits := false
 
 	for l.pos < len(l.input) {
@@ -369,13 +365,27 @@ func (l *Lexer) scanCommodityOrText() Token {
 	start := l.pos
 	startPos := l.position()
 
-	for l.pos < len(l.input) {
-		ch := l.peek()
-		if l.isLetter(ch) || l.isDigit(ch) {
-			l.advance()
-		} else {
-			break
+	followsAmount := l.followsAmountNumber(start)
+
+	for l.pos < len(l.input) && l.isLetter(l.peek()) {
+		l.advance()
+	}
+
+	if l.pos > start && l.pos < len(l.input) && !followsAmount {
+		letterPart := l.input[start:l.pos]
+		if l.isAllUppercase(letterPart) {
+			ch := l.peek()
+			if l.isDigit(ch) {
+				return Token{Type: TokenCommodity, Value: letterPart, Pos: startPos, End: l.position()}
+			}
+			if (ch == '-' || ch == '+') && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1]) {
+				return Token{Type: TokenCommodity, Value: letterPart, Pos: startPos, End: l.position()}
+			}
 		}
+	}
+
+	for l.pos < len(l.input) && (l.isLetter(l.peek()) || l.isDigit(l.peek())) {
+		l.advance()
 	}
 
 	value := l.input[start:l.pos]
@@ -473,6 +483,61 @@ func (l *Lexer) nextIsCurrencySymbol() bool {
 	}
 	r, _ := utf8.DecodeRuneInString(l.input[l.pos+1:])
 	return l.isCurrencySymbol(r)
+}
+
+func (l *Lexer) nextIsDigit() bool {
+	if l.pos+1 >= len(l.input) {
+		return false
+	}
+	return l.isDigit(l.input[l.pos+1])
+}
+
+func (l *Lexer) nextIsLetterCommodity() bool {
+	pos := l.pos + 1
+	if pos >= len(l.input) {
+		return false
+	}
+	if !l.isLetter(l.input[pos]) {
+		return false
+	}
+	for pos < len(l.input) && l.isLetter(l.input[pos]) {
+		pos++
+	}
+	if pos >= len(l.input) {
+		return false
+	}
+	ch := l.input[pos]
+	if l.isDigit(ch) {
+		return true
+	}
+	if (ch == '-' || ch == '+') && pos+1 < len(l.input) && l.isDigit(l.input[pos+1]) {
+		return true
+	}
+	return false
+}
+
+func (l *Lexer) followsAmountNumber(pos int) bool {
+	if pos == 0 {
+		return false
+	}
+	p := pos - 1
+	for p >= 0 && l.input[p] == ' ' {
+		p--
+	}
+	if p < 0 {
+		return false
+	}
+	return l.isDigit(l.input[p])
+}
+
+func (l *Lexer) isAllUppercase(s string) bool {
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if ch < 'A' || ch > 'Z' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 func (l *Lexer) scanSign() Token {
