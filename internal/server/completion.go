@@ -364,7 +364,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 		}
 
 	case ContextDate:
-		items = generateDateCompletionItems(result.Dates, content)
+		items = generateDateCompletionItems(result.Dates, content, int(pos.Line))
 
 	default:
 		for _, acc := range result.Accounts.All {
@@ -476,11 +476,11 @@ func extractCurrentTagName(line string, pos int) string {
 
 // generateDateCompletionItems creates date suggestions with today/yesterday/tomorrow at top.
 // Tests check detail strings ("today" etc.) not specific dates, making them time-independent.
-func generateDateCompletionItems(historicalDates []string, content string) []protocol.CompletionItem {
+func generateDateCompletionItems(historicalDates []string, content string, cursorLine int) []protocol.CompletionItem {
 	var items []protocol.CompletionItem
 	now := time.Now()
 
-	format := detectDateFormat(content)
+	format := detectDateFormat(content, cursorLine)
 	today := formatDateWithFormat(now, format)
 	yesterday := formatDateWithFormat(now.AddDate(0, 0, -1), format)
 	tomorrow := formatDateWithFormat(now.AddDate(0, 0, 1), format)
@@ -510,12 +510,13 @@ func generateDateCompletionItems(historicalDates []string, content string) []pro
 
 	seen := map[string]bool{today: true, yesterday: true, tomorrow: true}
 	for i, date := range sortedDates {
-		if seen[date] {
+		reformatted := reformatDateString(date, format)
+		if seen[reformatted] {
 			continue
 		}
-		seen[date] = true
+		seen[reformatted] = true
 		items = append(items, protocol.CompletionItem{
-			Label:    date,
+			Label:    reformatted,
 			Kind:     protocol.CompletionItemKindConstant,
 			Detail:   "from history",
 			SortText: fmt.Sprintf("%04d", 100+i),
@@ -533,14 +534,19 @@ type DateFormat struct {
 
 var defaultDateFormat = DateFormat{Separator: "-", HasYear: true, LeadingZeros: true}
 
-func detectDateFormat(content string) DateFormat {
+func detectDateFormat(content string, cursorLine int) DateFormat {
 	lines := strings.Split(content, "\n")
-	maxLinesToCheck := 100
-	for i, line := range lines {
-		if i >= maxLinesToCheck {
-			break
-		}
-		trimmed := strings.TrimSpace(line)
+	maxLinesToCheck := 50
+
+	if cursorLine >= len(lines) {
+		cursorLine = len(lines) - 1
+	}
+	if cursorLine < 0 {
+		cursorLine = 0
+	}
+
+	for i := cursorLine; i >= 0 && cursorLine-i < maxLinesToCheck; i-- {
+		trimmed := strings.TrimSpace(lines[i])
 		if len(trimmed) < 5 {
 			continue
 		}
@@ -553,6 +559,22 @@ func detectDateFormat(content string) DateFormat {
 			return format
 		}
 	}
+
+	for i := cursorLine + 1; i < len(lines) && i-cursorLine < maxLinesToCheck; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if len(trimmed) < 5 {
+			continue
+		}
+
+		if trimmed[0] < '0' || trimmed[0] > '9' {
+			continue
+		}
+
+		if format, ok := parseDateFormat(trimmed); ok {
+			return format
+		}
+	}
+
 	return defaultDateFormat
 }
 
@@ -621,6 +643,14 @@ func formatDateWithFormat(t time.Time, f DateFormat) string {
 		return fmt.Sprintf("%04d%s%s%s%s", t.Year(), f.Separator, monthStr, f.Separator, dayStr)
 	}
 	return monthStr + f.Separator + dayStr
+}
+
+func reformatDateString(dateStr string, f DateFormat) string {
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	return formatDateWithFormat(t, f)
 }
 
 func buildPayeeTemplate(payee string, postings []analyzer.PostingTemplate) string {

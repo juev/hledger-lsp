@@ -790,6 +790,46 @@ func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
 	assert.Regexp(t, `^\d{4}-\d{1,2}-\d{1,2}$`, todayItem.Label, "should allow single digit month/day when file uses them")
 }
 
+func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
+	srv := NewServer()
+	content := `2024/01/10 old transaction
+    expenses:food  $50
+    assets:cash
+
+2024/01/12 another
+    expenses:rent  $1000
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 8, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var historicalItems []protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "from history" {
+			historicalItems = append(historicalItems, item)
+		}
+	}
+
+	require.NotEmpty(t, historicalItems, "should have historical date completions")
+	for _, item := range historicalItems {
+		assert.Regexp(t, `^\d{4}/\d{2}/\d{2}$`, item.Label, "historical dates should use YYYY/MM/DD format from file")
+	}
+}
+
 func extractDetails(items []protocol.CompletionItem) []string {
 	details := make([]string, len(items))
 	for i, item := range items {
@@ -2071,5 +2111,115 @@ func TestCompletion_ShowCountsDisabled(t *testing.T) {
 			assert.NotContains(t, item.Detail, "(", "counts should not be shown when disabled")
 			return
 		}
+	}
+}
+
+func TestCompletion_Date_UsesNearbyFormat(t *testing.T) {
+	srv := NewServer()
+	content := `2026-01-01 opening balances
+    assets:cash  $1000
+    equity:opening
+
+01-05 transaction 1
+    expenses:food  $20
+    assets:cash
+
+01-06 transaction 2
+    expenses:food  $30
+    assets:cash
+
+`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 12, Character: 0},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var todayItem protocol.CompletionItem
+	for _, item := range result.Items {
+		if item.Detail == "today" {
+			todayItem = item
+			break
+		}
+	}
+
+	require.NotEmpty(t, todayItem.Label, "should have today completion")
+	assert.Regexp(t, `^\d{2}-\d{2}$`, todayItem.Label,
+		"today should use MM-DD format from nearby transactions, not YYYY-MM-DD from file start")
+}
+
+func TestDetectDateFormat_FromCursorPosition(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		cursorLine int
+		wantYear   bool
+	}{
+		{
+			name: "full date at start, short dates near cursor",
+			content: `2026-01-01 opening
+    assets:cash  $1000
+
+01-05 transaction
+    expenses:food  $20
+
+01-06 transaction
+    expenses:food  $30
+
+`,
+			cursorLine: 9,
+			wantYear:   false,
+		},
+		{
+			name: "full dates throughout",
+			content: `2026-01-01 opening
+    assets:cash  $1000
+
+2026-01-05 transaction
+    expenses:food  $20
+
+`,
+			cursorLine: 6,
+			wantYear:   true,
+		},
+		{
+			name: "short dates from the start",
+			content: `01-01 opening
+    assets:cash  $1000
+
+01-05 transaction
+    expenses:food  $20
+
+`,
+			cursorLine: 5,
+			wantYear:   false,
+		},
+		{
+			name: "cursor at beginning, only full dates",
+			content: `2026-01-01 opening
+    assets:cash  $1000
+
+`,
+			cursorLine: 0,
+			wantYear:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			format := detectDateFormat(tt.content, tt.cursorLine)
+			assert.Equal(t, tt.wantYear, format.HasYear,
+				"detectDateFormat with cursorLine=%d should have HasYear=%v", tt.cursorLine, tt.wantYear)
+		})
 	}
 }
