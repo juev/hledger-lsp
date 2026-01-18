@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -299,6 +300,25 @@ func (d *serverDispatcher) OutgoingCalls(ctx context.Context, params *protocol.C
 }
 
 func (d *serverDispatcher) NonstandardRequest(ctx context.Context, method string, params any) (any, error) {
+	fmt.Fprintf(os.Stderr, "[LSP DEBUG] NonstandardRequest called: method=%s\n", method)
+	if method == "textDocument/inlineCompletion" {
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] json.Marshal error: %v\n", err)
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "[LSP DEBUG] calling InlineCompletion with params: %s\n", string(paramsJSON))
+		result, err := d.srv.InlineCompletion(ctx, paramsJSON)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion error: %v\n", err)
+		} else if result != nil {
+			resultJSON, _ := json.Marshal(result)
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion result: %s\n", string(resultJSON))
+		} else {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion returned nil\n")
+		}
+		return result, err
+	}
 	return nil, nil
 }
 
@@ -311,5 +331,24 @@ func (d *serverDispatcher) SelectionRange(ctx context.Context, params *protocol.
 }
 
 func (d *serverDispatcher) Request(ctx context.Context, method string, params any) (any, error) {
+	fmt.Fprintf(os.Stderr, "[LSP DEBUG] Request called: method=%s\n", method)
+	if method == "textDocument/inlineCompletion" {
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] json.Marshal error: %v\n", err)
+			return nil, err
+		}
+		fmt.Fprintf(os.Stderr, "[LSP DEBUG] calling InlineCompletion with params: %s\n", string(paramsJSON))
+		result, err := d.srv.InlineCompletion(ctx, paramsJSON)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion error: %v\n", err)
+		} else if result != nil {
+			resultJSON, _ := json.Marshal(result)
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion result: %s\n", string(resultJSON))
+		} else {
+			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion returned nil\n")
+		}
+		return result, err
+	}
 	return nil, nil
 }

@@ -136,6 +136,12 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		}
 	}
 
+	if settings.Features.Completion {
+		caps.Experimental = map[string]any{
+			"inlineCompletionProvider": true,
+		}
+	}
+
 	return &protocol.InitializeResult{
 		Capabilities: caps,
 		ServerInfo: &protocol.ServerInfo{

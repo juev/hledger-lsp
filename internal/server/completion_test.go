@@ -838,7 +838,7 @@ func extractDetails(items []protocol.CompletionItem) []string {
 	return details
 }
 
-func TestCompletion_Template_ByPayee(t *testing.T) {
+func TestCompletion_PayeeShowsTemplateIndicator(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Grocery Store
     expenses:food  $50.00
@@ -870,12 +870,11 @@ func TestCompletion_Template_ByPayee(t *testing.T) {
 	}
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
-	require.NotEmpty(t, groceryItem.InsertText, "Should have template text")
-	assert.Contains(t, groceryItem.InsertText, "expenses:food")
-	assert.Contains(t, groceryItem.InsertText, "assets:cash")
+	assert.Empty(t, groceryItem.InsertText, "Payee should not have template in InsertText")
+	assert.Contains(t, groceryItem.Detail, "template", "Detail should show template indicator")
 }
 
-func TestCompletion_Template_CommodityPosition(t *testing.T) {
+func TestCompletion_MultiplePayeesShowTemplateIndicators(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Shop EUR
     expenses:food  100 EUR
@@ -908,28 +907,27 @@ func TestCompletion_Template_CommodityPosition(t *testing.T) {
 
 	var eurItem, dollarItem, euroSymItem *protocol.CompletionItem
 	for i := range result.Items {
-		if result.Items[i].Label == "Shop EUR" {
+		switch result.Items[i].Label {
+		case "Shop EUR":
 			eurItem = &result.Items[i]
-		}
-		if result.Items[i].Label == "Dollar Store" {
+		case "Dollar Store":
 			dollarItem = &result.Items[i]
-		}
-		if result.Items[i].Label == "Euro Shop" {
+		case "Euro Shop":
 			euroSymItem = &result.Items[i]
 		}
 	}
 
 	require.NotNil(t, eurItem, "Shop EUR should be in completion items")
-	require.NotEmpty(t, eurItem.InsertText)
-	assert.Contains(t, eurItem.InsertText, "100 EUR")
+	assert.Empty(t, eurItem.InsertText, "Should not contain template")
+	assert.Contains(t, eurItem.Detail, "template", "Should indicate template available")
 
 	require.NotNil(t, dollarItem, "Dollar Store should be in completion items")
-	require.NotEmpty(t, dollarItem.InsertText)
-	assert.Contains(t, dollarItem.InsertText, "$50.00")
+	assert.Empty(t, dollarItem.InsertText, "Should not contain template")
+	assert.Contains(t, dollarItem.Detail, "template", "Should indicate template available")
 
 	require.NotNil(t, euroSymItem, "Euro Shop should be in completion items")
-	require.NotEmpty(t, euroSymItem.InsertText)
-	assert.Contains(t, euroSymItem.InsertText, "€75.00")
+	assert.Empty(t, euroSymItem.InsertText, "Should not contain template")
+	assert.Contains(t, euroSymItem.Detail, "template", "Should indicate template available")
 }
 
 func TestCompletion_RankingByFrequency(t *testing.T) {
@@ -1225,7 +1223,7 @@ include transactions.journal`
 		"expenses:food should show count 4 (3 from main + 1 from included), not just 1 from current file")
 }
 
-func TestCompletion_PayeeSnippetWithTabstops(t *testing.T) {
+func TestCompletion_PayeeWithSnippetSupportNoTemplate(t *testing.T) {
 	srv := NewServer()
 
 	initParams := &protocol.InitializeParams{
@@ -1272,14 +1270,9 @@ func TestCompletion_PayeeSnippetWithTabstops(t *testing.T) {
 	}
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
-	require.NotEmpty(t, groceryItem.InsertText, "Should have template text")
-
-	assert.Equal(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
-		"Should use snippet format when client supports it")
-	assert.Contains(t, groceryItem.InsertText, "${1:",
-		"Snippet should contain tabstops like ${1:...}")
-	assert.Contains(t, groceryItem.InsertText, "$0",
-		"Snippet should end with $0 for final cursor position")
+	assert.Empty(t, groceryItem.InsertText, "Payee completion should not include template")
+	assert.NotEqual(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
+		"Payee should not use snippet format (templates now via inline completion)")
 }
 
 func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
@@ -2014,6 +2007,49 @@ func TestFilterAndScoreFuzzyMatch_SegmentBased(t *testing.T) {
 
 		assert.Contains(t, labels, "Активы:Альфа:Текущий", "should match even with trailing colon")
 	})
+}
+
+func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 11},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var groceryItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "Grocery Store" {
+			groceryItem = &result.Items[i]
+			break
+		}
+	}
+
+	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
+
+	if groceryItem.InsertText != "" {
+		assert.Equal(t, "Grocery Store", groceryItem.InsertText,
+			"Payee completion should insert ONLY the payee name, not template")
+	}
+	assert.NotContains(t, groceryItem.InsertText, "expenses:food",
+		"Payee completion should NOT contain template postings")
+	assert.NotContains(t, groceryItem.InsertText, "\n",
+		"Payee completion should NOT contain newlines (template)")
 }
 
 func TestCompletion_SnippetsDisabled(t *testing.T) {

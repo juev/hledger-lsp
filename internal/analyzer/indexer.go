@@ -136,6 +136,13 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 			continue
 		}
 
+		if len(tx.Postings) == 0 {
+			if _, exists := result[payee]; !exists {
+				result[payee] = nil
+			}
+			continue
+		}
+
 		var postings []PostingTemplate
 		for _, p := range tx.Postings {
 			pt := PostingTemplate{
