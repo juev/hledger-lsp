@@ -639,6 +639,69 @@ func TestFormatDocument_TrimsNonASCIIText(t *testing.T) {
 		"Cyrillic transaction header should have trailing spaces removed")
 }
 
+func TestFormatDocument_AmountFormatVariations(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		wantAmountInOut bool
+	}{
+		{
+			name: "-USD222 format",
+			input: `2024-01-15 test
+    expenses:food  -USD222
+    assets:cash
+`,
+			wantAmountInOut: true,
+		},
+		{
+			name: "USD222 format",
+			input: `2024-01-15 test
+    expenses:food  USD222
+    assets:cash
+`,
+			wantAmountInOut: true,
+		},
+		{
+			name: "USD-222 format",
+			input: `2024-01-15 test
+    expenses:food  USD-222
+    assets:cash
+`,
+			wantAmountInOut: true,
+		},
+		{
+			name: "$-100 format",
+			input: `2024-01-15 test
+    expenses:food  $-100
+    assets:cash
+`,
+			wantAmountInOut: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tt.input)
+			require.Empty(t, errs, "parsing should succeed")
+			require.Len(t, journal.Transactions, 1)
+
+			posting := journal.Transactions[0].Postings[0]
+			if tt.wantAmountInOut {
+				require.NotNil(t, posting.Amount, "amount should not be nil after parsing")
+			}
+
+			edits := FormatDocument(journal, tt.input)
+			require.NotEmpty(t, edits, "should produce formatting edits")
+
+			formattedPosting := edits[0].NewText
+			if tt.wantAmountInOut {
+				assert.NotEqual(t, "    expenses:food", formattedPosting,
+					"amount should not be deleted during formatting")
+			}
+		})
+	}
+}
+
 func applyEdits(content string, edits []protocol.TextEdit) string {
 	sort.Slice(edits, func(i, j int) bool {
 		if edits[i].Range.Start.Line != edits[j].Range.Start.Line {
