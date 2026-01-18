@@ -112,10 +112,10 @@ See `docs/configuration.md` for supported settings and defaults.
 
 ## ⚡ Performance
 
-- **Incremental updates**: ~4ms for 1000 transactions (NFR < 50ms)
-- **Completion**: ~2.5ms response time (NFR < 100ms)
-- **Parsing**: ~17ms for 10k transactions (NFR < 500ms)
-- **Memory**: ~27MB for large journals (NFR < 200MB)
+- **Incremental updates**: ~2.8ms for 1000 transactions (NFR < 50ms)
+- **Completion**: ~3.4ms response time (NFR < 100ms)
+- **Parsing**: ~14ms for 10k transactions (NFR < 500ms)
+- **Memory**: ~31MB for large journals (NFR < 200MB)
 
 See [docs/benchmarks.md](docs/benchmarks.md) for detailed benchmarks.
 

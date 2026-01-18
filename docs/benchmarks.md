@@ -6,10 +6,10 @@ Benchmarks run on Apple M4 Pro, macOS, Go 1.23.
 
 | NFR | Target | Measured | Status |
 |-----|--------|----------|--------|
-| NFR-1.1 | Completion < 100ms | ~2.5ms | ✅ Pass |
-| NFR-1.2 | Parsing 10k lines < 500ms | ~17ms | ✅ Pass |
-| NFR-1.3 | Incremental updates < 50ms | ~4ms | ✅ Pass |
-| NFR-1.4 | Memory < 200MB | ~27MB | ✅ Pass |
+| NFR-1.1 | Completion < 100ms | ~3.4ms | ✅ Pass |
+| NFR-1.2 | Parsing 10k lines < 500ms | ~14ms | ✅ Pass |
+| NFR-1.3 | Incremental updates < 50ms | ~2.8ms | ✅ Pass |
+| NFR-1.4 | Memory < 200MB | ~31MB | ✅ Pass |
 
 All NFR targets are validated by automated tests in `internal/benchmark/nfr_test.go`.
 
@@ -21,10 +21,10 @@ All NFR targets are validated by automated tests in `internal/benchmark/nfr_test
 | Lexer_Medium | 100 | 81,521 | 640 | 149 |
 | Lexer_Large | 1,000 | 825,026 | 5,920 | 1,469 |
 | Lexer_XLarge | 10,000 | 8,278,067 | 58,720 | 14,669 |
-| Parser_Small | 10 | 16,146 | 28,480 | 166 |
-| Parser_Medium | 100 | 158,496 | 257,477 | 1,480 |
-| Parser_Large | 1,000 | 1,620,972 | 2,726,442 | 14,576 |
-| Parser_XLarge | 10,000 | 17,001,103 | 33,490,410 | 145,436 |
+| Parser_Small | 10 | 12,500 | 21,776 | 152 |
+| Parser_Medium | 100 | 125,200 | 218,466 | 1,484 |
+| Parser_Large | 1,000 | 1,308,000 | 2,166,945 | 14,804 |
+| Parser_XLarge | 10,000 | 13,150,000 | 21,659,700 | 148,004 |
 
 ## Workspace Index Benchmarks
 
@@ -103,7 +103,7 @@ go tool pprof -http=:8080 cpu.prof
 
 ## Key Observations
 
-1. **Parser scaling**: Linear with transaction count (~1.6µs per transaction)
+1. **Parser scaling**: Linear with transaction count (~1.3µs per transaction)
 2. **Memory efficiency**: ~3.3KB per transaction for full index
 3. **Include tree**: Minimal overhead for multi-file journals (~15-27µs for 5-20 files)
 4. **Incremental updates**: ~4ms for 1000 transactions (full cycle including diagnostics)

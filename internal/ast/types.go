@@ -71,7 +71,6 @@ const (
 
 type Account struct {
 	Name  string
-	Parts []string
 	Range Range
 }
 
