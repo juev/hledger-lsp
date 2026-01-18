@@ -618,17 +618,14 @@ func (l *Lexer) looksLikeVirtualAccount() bool {
 	return false
 }
 
+var directiveSet = map[string]struct{}{
+	"account": {}, "alias": {}, "apply": {}, "assert": {}, "bucket": {}, "capture": {},
+	"check": {}, "comment": {}, "commodity": {}, "D": {}, "decimal-mark": {}, "def": {},
+	"define": {}, "end": {}, "eval": {}, "expr": {}, "include": {}, "payee": {}, "P": {},
+	"tag": {}, "test": {}, "Y": {}, "year": {},
+}
+
 func isDirective(word string) bool {
-	directives := []string{
-		"account", "alias", "apply", "assert", "bucket", "capture",
-		"check", "comment", "commodity", "D", "decimal-mark", "def",
-		"define", "end", "eval", "expr", "include", "payee", "P",
-		"tag", "test", "Y", "year",
-	}
-	for _, d := range directives {
-		if word == d {
-			return true
-		}
-	}
-	return false
+	_, ok := directiveSet[word]
+	return ok
 }

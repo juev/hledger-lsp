@@ -25,18 +25,23 @@ type Parser struct {
 	current     Token
 	errors      []ParseError
 	defaultYear int
+	inputLen    int
 }
 
 func Parse(input string) (*ast.Journal, []ParseError) {
 	p := &Parser{
-		lexer: NewLexer(input),
+		lexer:    NewLexer(input),
+		inputLen: len(input),
 	}
 	p.advance()
 	return p.parseJournal(), p.errors
 }
 
 func (p *Parser) parseJournal() *ast.Journal {
-	journal := &ast.Journal{}
+	estimatedTx := p.inputLen / 100
+	journal := &ast.Journal{
+		Transactions: make([]ast.Transaction, 0, estimatedTx),
+	}
 
 	for p.current.Type != TokenEOF {
 		switch p.current.Type {
@@ -68,7 +73,9 @@ func (p *Parser) parseJournal() *ast.Journal {
 }
 
 func (p *Parser) parseTransaction() *ast.Transaction {
-	tx := &ast.Transaction{}
+	tx := &ast.Transaction{
+		Postings: make([]ast.Posting, 0, 3),
+	}
 	tx.Range.Start = toASTPosition(p.current.Pos)
 
 	date := p.parseDate()
@@ -263,7 +270,6 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	posting.Account = ast.Account{
 		Name:  p.current.Value,
-		Parts: strings.Split(p.current.Value, ":"),
 		Range: ast.Range{Start: toASTPosition(p.current.Pos)},
 	}
 	p.advance()
@@ -446,7 +452,6 @@ func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 	dir := ast.AccountDirective{
 		Account: ast.Account{
 			Name:  accountName,
-			Parts: strings.Split(accountName, ":"),
 			Range: ast.Range{Start: toASTPosition(accountPos)},
 		},
 		Range: ast.Range{Start: toASTPosition(startPos)},
@@ -661,6 +666,10 @@ func (p *Parser) parseComment() ast.Comment {
 }
 
 func parseTags(text string) []ast.Tag {
+	if !strings.Contains(text, ":") {
+		return nil
+	}
+
 	var tags []ast.Tag
 	parts := strings.Split(text, ",")
 
@@ -736,65 +745,101 @@ func toASTPosition(pos Position) ast.Position {
 }
 
 func normalizeNumber(s string) string {
-	dotCount := strings.Count(s, ".")
-	commaCount := strings.Count(s, ",")
+	var dotCount, commaCount int
+	var lastDot, lastComma int
 
-	if dotCount == 0 && commaCount == 1 {
-		idx := strings.LastIndex(s, ",")
-		if idx >= 1 && len(s)-idx-1 == 3 {
-			prefix := strings.TrimLeft(s[:idx], "0")
-			if len(prefix) > 0 {
-				return strings.Replace(s, ",", "", 1)
-			}
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.':
+			dotCount++
+			lastDot = i
+		case ',':
+			commaCount++
+			lastComma = i
 		}
-		return strings.Replace(s, ",", ".", 1)
 	}
 
-	if dotCount > 0 && commaCount == 1 {
-		lastDot := strings.LastIndex(s, ".")
-		lastComma := strings.LastIndex(s, ",")
-		if lastComma > lastDot {
-			s = strings.ReplaceAll(s, ".", "")
-			s = strings.Replace(s, ",", ".", 1)
-		} else {
-			s = strings.ReplaceAll(s, ",", "")
-		}
+	if dotCount == 0 && commaCount == 0 {
 		return s
 	}
 
-	if commaCount > 0 && dotCount == 1 {
-		lastDot := strings.LastIndex(s, ".")
-		lastComma := strings.LastIndex(s, ",")
-		if lastDot > lastComma {
-			s = strings.ReplaceAll(s, ",", "")
-		} else {
-			s = strings.ReplaceAll(s, ".", "")
-			s = strings.Replace(s, ",", ".", 1)
+	if dotCount == 0 && commaCount == 1 {
+		if lastComma >= 1 && len(s)-lastComma-1 == 3 {
+			hasNonZero := false
+			for i := 0; i < lastComma; i++ {
+				if s[i] != '0' && s[i] != '-' {
+					hasNonZero = true
+					break
+				}
+			}
+			if hasNonZero {
+				return s[:lastComma] + s[lastComma+1:]
+			}
+		}
+		return s[:lastComma] + "." + s[lastComma+1:]
+	}
+
+	if dotCount == 1 && commaCount == 0 {
+		if lastDot >= 1 && len(s)-lastDot-1 == 3 {
+			hasNonZero := false
+			for i := 0; i < lastDot; i++ {
+				if s[i] != '0' && s[i] != '-' {
+					hasNonZero = true
+					break
+				}
+			}
+			if hasNonZero {
+				return s[:lastDot] + s[lastDot+1:]
+			}
 		}
 		return s
 	}
 
 	if commaCount > 1 && dotCount == 0 {
-		s = strings.ReplaceAll(s, ",", "")
-		return s
+		return removeSeparator(s, ',')
 	}
 
 	if dotCount > 1 && commaCount == 0 {
-		s = strings.ReplaceAll(s, ".", "")
-		return s
+		return removeSeparator(s, '.')
 	}
 
-	if dotCount == 1 && commaCount == 0 {
-		idx := strings.LastIndex(s, ".")
-		if idx >= 1 && len(s)-idx-1 == 3 {
-			prefix := strings.TrimLeft(s[:idx], "0")
-			if len(prefix) > 0 {
-				return strings.Replace(s, ".", "", 1)
+	var decimalPos int
+
+	if dotCount > 0 && commaCount == 1 && lastComma > lastDot {
+		decimalPos = lastComma
+	} else if commaCount > 0 && dotCount == 1 && lastDot > lastComma {
+		decimalPos = lastDot
+	} else if dotCount > 0 && commaCount == 1 {
+		decimalPos = lastDot
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch ch {
+		case '.', ',':
+			if i == decimalPos {
+				b.WriteByte('.')
 			}
+		default:
+			b.WriteByte(ch)
 		}
 	}
 
-	return s
+	return b.String()
+}
+
+func removeSeparator(s string, sep byte) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != sep {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func isValidCommodityText(value string) bool {
