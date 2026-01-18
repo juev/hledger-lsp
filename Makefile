@@ -14,7 +14,7 @@ help:
 	@echo "  bench    Run benchmarks"
 	@echo "  clean    Remove build artifacts"
 	@echo "  install  Install to GOPATH/bin"
-	@echo "  local    Build binary to ~/Library/Application Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)"
+	@echo "  local    Build binary to ~/Library/Application\ Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)"
 	@echo "  all      Run lint, test, and build"
 
 build:
@@ -37,6 +37,6 @@ install:
 
 local:
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD_DIR)
-	cp $(BIN_DIR)/$(BINARY) ~/Library/Application Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)
+	cp $(BIN_DIR)/$(BINARY) ~/Library/Application\ Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)
 
 all: lint test build
