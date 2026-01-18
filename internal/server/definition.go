@@ -22,8 +22,9 @@ const (
 )
 
 type definitionTarget struct {
-	context DefinitionContext
-	name    string
+	context     DefinitionContext
+	name        string
+	symbolRange *protocol.Range
 }
 
 func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionParams) ([]protocol.Location, error) {
@@ -59,8 +60,9 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 			payeeRange := estimatePayeeRange(tx, payee)
 			if positionInRange(pos, payeeRange) {
 				return &definitionTarget{
-					context: DefContextPayee,
-					name:    payee,
+					context:     DefContextPayee,
+					name:        payee,
+					symbolRange: astRangeToProtocol(payeeRange),
 				}
 			}
 		}
@@ -71,16 +73,18 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 			accountRange := computeAccountRange(&p.Account)
 			if positionInRange(pos, accountRange) {
 				return &definitionTarget{
-					context: DefContextAccount,
-					name:    p.Account.Name,
+					context:     DefContextAccount,
+					name:        p.Account.Name,
+					symbolRange: astRangeToProtocol(accountRange),
 				}
 			}
 
 			if p.Amount != nil && p.Amount.Commodity.Symbol != "" {
 				if positionInRange(pos, p.Amount.Commodity.Range) {
 					return &definitionTarget{
-						context: DefContextCommodity,
-						name:    p.Amount.Commodity.Symbol,
+						context:     DefContextCommodity,
+						name:        p.Amount.Commodity.Symbol,
+						symbolRange: astRangeToProtocol(p.Amount.Commodity.Range),
 					}
 				}
 			}

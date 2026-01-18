@@ -14,6 +14,9 @@ Enable or disable specific LSP features.
 | `hledger.features.diagnostics` | `true` | Diagnostics |
 | `hledger.features.semanticTokens` | `true` | Semantic tokens |
 | `hledger.features.codeActions` | `true` | Code actions |
+| `hledger.features.foldingRanges` | `true` | Folding ranges for transactions and directives |
+| `hledger.features.documentLinks` | `true` | Clickable links for include directives |
+| `hledger.features.workspaceSymbol` | `true` | Workspace symbol search |
 
 ## Completion
 
@@ -64,6 +67,9 @@ Enable or disable specific LSP features.
   "hledger.features.hover": true,
   "hledger.features.completion": true,
   "hledger.features.formatting": true,
+  "hledger.features.foldingRanges": true,
+  "hledger.features.documentLinks": true,
+  "hledger.features.workspaceSymbol": true,
   "hledger.completion.maxResults": 100,
   "hledger.completion.snippets": true,
   "hledger.completion.fuzzyMatching": true,
@@ -92,6 +98,9 @@ lspconfig.hledger_lsp.setup({
         diagnostics = true,
         semanticTokens = true,
         codeActions = true,
+        foldingRanges = true,
+        documentLinks = true,
+        workspaceSymbol = true,
       },
       completion = {
         maxResults = 100,
@@ -129,7 +138,8 @@ lspconfig.hledger_lsp.setup({
 (setq-default eglot-workspace-configuration
   '(:hledger
     (:features (:hover t :completion t :formatting t :diagnostics t
-                :semanticTokens t :codeActions t)
+                :semanticTokens t :codeActions t :foldingRanges t
+                :documentLinks t :workspaceSymbol t)
      :completion (:maxResults 100 :snippets t :fuzzyMatching t :showCounts t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)

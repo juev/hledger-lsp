@@ -163,7 +163,7 @@ func (d *serverDispatcher) DocumentHighlight(ctx context.Context, params *protoc
 }
 
 func (d *serverDispatcher) DocumentLink(ctx context.Context, params *protocol.DocumentLinkParams) ([]protocol.DocumentLink, error) {
-	return nil, nil
+	return d.srv.DocumentLink(ctx, params)
 }
 
 func (d *serverDispatcher) DocumentLinkResolve(ctx context.Context, params *protocol.DocumentLink) (*protocol.DocumentLink, error) {
@@ -179,7 +179,7 @@ func (d *serverDispatcher) ExecuteCommand(ctx context.Context, params *protocol.
 }
 
 func (d *serverDispatcher) FoldingRanges(ctx context.Context, params *protocol.FoldingRangeParams) ([]protocol.FoldingRange, error) {
-	return nil, nil
+	return d.srv.FoldingRanges(ctx, params)
 }
 
 func (d *serverDispatcher) Formatting(ctx context.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
@@ -199,7 +199,7 @@ func (d *serverDispatcher) OnTypeFormatting(ctx context.Context, params *protoco
 }
 
 func (d *serverDispatcher) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {
-	return nil, nil
+	return d.srv.PrepareRename(ctx, params)
 }
 
 func (d *serverDispatcher) RangeFormatting(ctx context.Context, params *protocol.DocumentRangeFormattingParams) ([]protocol.TextEdit, error) {
@@ -211,7 +211,7 @@ func (d *serverDispatcher) References(ctx context.Context, params *protocol.Refe
 }
 
 func (d *serverDispatcher) Rename(ctx context.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	return nil, nil
+	return d.srv.Rename(ctx, params)
 }
 
 func (d *serverDispatcher) SignatureHelp(ctx context.Context, params *protocol.SignatureHelpParams) (*protocol.SignatureHelp, error) {
@@ -219,7 +219,7 @@ func (d *serverDispatcher) SignatureHelp(ctx context.Context, params *protocol.S
 }
 
 func (d *serverDispatcher) Symbols(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
-	return nil, nil
+	return d.srv.WorkspaceSymbol(ctx, params)
 }
 
 func (d *serverDispatcher) TypeDefinition(ctx context.Context, params *protocol.TypeDefinitionParams) ([]protocol.Location, error) {
@@ -267,11 +267,11 @@ func (d *serverDispatcher) SemanticTokensFull(ctx context.Context, params *proto
 }
 
 func (d *serverDispatcher) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {
-	return nil, nil
+	return d.srv.SemanticTokensFullDelta(ctx, params)
 }
 
 func (d *serverDispatcher) SemanticTokensRange(ctx context.Context, params *protocol.SemanticTokensRangeParams) (*protocol.SemanticTokens, error) {
-	return nil, nil
+	return d.srv.SemanticTokensRange(ctx, params)
 }
 
 func (d *serverDispatcher) SemanticTokensRefresh(ctx context.Context) error {

@@ -12,12 +12,15 @@ import (
 )
 
 type featureSettings struct {
-	Hover          bool
-	Completion     bool
-	Formatting     bool
-	Diagnostics    bool
-	SemanticTokens bool
-	CodeActions    bool
+	Hover           bool
+	Completion      bool
+	Formatting      bool
+	Diagnostics     bool
+	SemanticTokens  bool
+	CodeActions     bool
+	FoldingRanges   bool
+	DocumentLinks   bool
+	WorkspaceSymbol bool
 }
 
 type completionSettings struct {
@@ -57,12 +60,15 @@ type serverSettings struct {
 func defaultServerSettings() serverSettings {
 	return serverSettings{
 		Features: featureSettings{
-			Hover:          true,
-			Completion:     true,
-			Formatting:     true,
-			Diagnostics:    true,
-			SemanticTokens: true,
-			CodeActions:    true,
+			Hover:           true,
+			Completion:      true,
+			Formatting:      true,
+			Diagnostics:     true,
+			SemanticTokens:  true,
+			CodeActions:     true,
+			FoldingRanges:   true,
+			DocumentLinks:   true,
+			WorkspaceSymbol: true,
 		},
 		Completion: completionSettings{
 			MaxResults:    50,
@@ -186,6 +192,15 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(featuresRaw["codeActions"]); ok {
 			settings.Features.CodeActions = value
 		}
+		if value, ok := toBool(featuresRaw["foldingRanges"]); ok {
+			settings.Features.FoldingRanges = value
+		}
+		if value, ok := toBool(featuresRaw["documentLinks"]); ok {
+			settings.Features.DocumentLinks = value
+		}
+		if value, ok := toBool(featuresRaw["workspaceSymbol"]); ok {
+			settings.Features.WorkspaceSymbol = value
+		}
 	}
 	if value, ok := toBool(raw["features.hover"]); ok {
 		settings.Features.Hover = value
@@ -204,6 +219,15 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["features.codeActions"]); ok {
 		settings.Features.CodeActions = value
+	}
+	if value, ok := toBool(raw["features.foldingRanges"]); ok {
+		settings.Features.FoldingRanges = value
+	}
+	if value, ok := toBool(raw["features.documentLinks"]); ok {
+		settings.Features.DocumentLinks = value
+	}
+	if value, ok := toBool(raw["features.workspaceSymbol"]); ok {
+		settings.Features.WorkspaceSymbol = value
 	}
 
 	// Completion

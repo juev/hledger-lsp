@@ -114,7 +114,16 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		caps.DocumentFormattingProvider = true
 	}
 	if settings.Features.SemanticTokens {
-		caps.SemanticTokensProvider = true
+		caps.SemanticTokensProvider = GetSemanticTokensCapabilities()
+	}
+	if settings.Features.FoldingRanges {
+		caps.FoldingRangeProvider = true
+	}
+	if settings.Features.DocumentLinks {
+		caps.DocumentLinkProvider = &protocol.DocumentLinkOptions{}
+	}
+	if settings.Features.WorkspaceSymbol {
+		caps.WorkspaceSymbolProvider = true
 	}
 	if settings.Features.CodeActions {
 		caps.CodeActionProvider = &protocol.CodeActionOptions{
@@ -195,6 +204,7 @@ func isFullChange(r protocol.Range) bool {
 
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
 	s.documents.Delete(params.TextDocument.URI)
+	tokenCache.delete(params.TextDocument.URI)
 	return nil
 }
 

@@ -151,7 +151,7 @@ func TestServer_Initialize(t *testing.T) {
 	assert.True(t, caps.HoverProvider.(bool))
 	assert.True(t, caps.DocumentFormattingProvider.(bool))
 	assert.True(t, caps.DocumentSymbolProvider.(bool))
-	assert.True(t, caps.SemanticTokensProvider.(bool))
+	assert.NotNil(t, caps.SemanticTokensProvider)
 	assert.NotNil(t, caps.CodeActionProvider)
 	assert.NotNil(t, caps.ExecuteCommandProvider)
 	assert.Contains(t, caps.ExecuteCommandProvider.Commands, "hledger.run")
@@ -1022,7 +1022,7 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 				assert.NotNil(t, caps.CompletionProvider)
 				assert.True(t, caps.HoverProvider.(bool))
 				assert.True(t, caps.DocumentFormattingProvider.(bool))
-				assert.True(t, caps.SemanticTokensProvider.(bool))
+				assert.NotNil(t, caps.SemanticTokensProvider)
 				assert.NotNil(t, caps.CodeActionProvider)
 			},
 		},

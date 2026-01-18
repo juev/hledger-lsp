@@ -19,6 +19,8 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 ### Navigation
 - **Go to Definition** — Jump to account/commodity/payee declaration
 - **Find References** — Find all usages across workspace
+- **Rename** — Refactor accounts, commodities, and payees across files
+- **Workspace Symbol** — Quick search for accounts, commodities, payees
 
 ### Diagnostics
 - Real-time validation of transactions
@@ -27,8 +29,10 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 ### Other
 - **Formatting** — Automatic alignment of amounts
 - **Hover** — Account balances on hover
-- **Semantic Tokens** — Syntax highlighting
+- **Semantic Tokens** — Syntax highlighting with delta support
 - **Document Symbols** — Outline navigation
+- **Folding Ranges** — Collapse transactions and directives
+- **Document Links** — Clickable include file paths
 - **Include Support** — Multi-file journals with cycle detection
 
 ## 📦 Installation
@@ -101,6 +105,10 @@ See `docs/configuration.md` for supported settings and defaults.
 | Document Symbols | ✅ |
 | Go to Definition | ✅ |
 | Find References | ✅ |
+| Rename | ✅ |
+| Folding Ranges | ✅ |
+| Document Links | ✅ |
+| Workspace Symbol | ✅ |
 
 ## 📚 Resources
 
