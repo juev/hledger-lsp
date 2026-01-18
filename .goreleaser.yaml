@@ -9,12 +9,34 @@ builds:
       - linux
       - darwin
       - windows
+      - freebsd
+      - openbsd
     goarch:
       - amd64
       - arm64
+      - 386
+      - arm
     ignore:
+      # macOS only supports 64-bit
+      - goos: darwin
+        goarch: 386
+      - goos: darwin
+        goarch: arm
+      # Windows: focus on modern systems (64-bit only)
       - goos: windows
-        goarch: arm64
+        goarch: 386
+      - goos: windows
+        goarch: arm
+      # FreeBSD: 64-bit only
+      - goos: freebsd
+        goarch: 386
+      - goos: freebsd
+        goarch: arm
+      # OpenBSD: 64-bit only
+      - goos: openbsd
+        goarch: 386
+      - goos: openbsd
+        goarch: arm
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
