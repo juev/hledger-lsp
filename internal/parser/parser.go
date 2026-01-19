@@ -308,8 +308,10 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount.Range.Start = toASTPosition(p.current.Pos)
 
 	sign := ""
+	signBeforeCommodity := false
 	if p.current.Type == TokenSign {
 		sign = p.current.Value
+		signBeforeCommodity = true
 		p.advance()
 	}
 
@@ -321,6 +323,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 				Start: toASTPosition(p.current.Pos),
 				End:   toASTPosition(p.current.End),
 			},
+		}
+		if signBeforeCommodity && (sign == "-" || sign == "+") {
+			amount.SignBeforeCommodity = true
 		}
 		p.advance()
 	}

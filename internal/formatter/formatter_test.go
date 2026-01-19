@@ -639,6 +639,58 @@ func TestFormatDocument_TrimsNonASCIIText(t *testing.T) {
 		"Cyrillic transaction header should have trailing spaces removed")
 }
 
+func TestFormatDocument_PreservesSignBeforeCommodity(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name: "-MAU66 preserves sign before commodity",
+			input: `2024-01-15 test
+    expenses:food  -MAU66
+    assets:cash`,
+			expected: "    expenses:food  -MAU66",
+		},
+		{
+			name: "MAU-66 preserves sign after commodity",
+			input: `2024-01-15 test
+    expenses:food  MAU-66
+    assets:cash`,
+			expected: "    expenses:food  MAU-66",
+		},
+		{
+			name: "-$100 preserves sign before symbol",
+			input: `2024-01-15 test
+    expenses:food  -$100
+    assets:cash`,
+			expected: "    expenses:food  -$100",
+		},
+		{
+			name: "$-100 preserves sign after symbol",
+			input: `2024-01-15 test
+    expenses:food  $-100
+    assets:cash`,
+			expected: "    expenses:food  $-100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tt.input)
+			require.Empty(t, errs, "parsing should succeed")
+			require.Len(t, journal.Transactions, 1)
+
+			edits := FormatDocument(journal, tt.input)
+			require.NotEmpty(t, edits, "should produce formatting edits")
+
+			formattedPosting := edits[0].NewText
+			assert.Equal(t, tt.expected, formattedPosting,
+				"sign position relative to commodity should be preserved")
+		})
+	}
+}
+
 func TestFormatDocument_AmountFormatVariations(t *testing.T) {
 	tests := []struct {
 		name            string

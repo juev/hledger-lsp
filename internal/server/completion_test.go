@@ -1223,7 +1223,7 @@ include transactions.journal`
 		"expenses:food should show count 4 (3 from main + 1 from included), not just 1 from current file")
 }
 
-func TestCompletion_PayeeWithSnippetSupportNoTemplate(t *testing.T) {
+func TestCompletion_PayeeWithTemplateHasSnippetFormat(t *testing.T) {
 	srv := NewServer()
 
 	initParams := &protocol.InitializeParams{
@@ -1270,9 +1270,12 @@ func TestCompletion_PayeeWithSnippetSupportNoTemplate(t *testing.T) {
 	}
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
-	assert.Empty(t, groceryItem.InsertText, "Payee completion should not include template")
-	assert.NotEqual(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
-		"Payee should not use snippet format (templates now via inline completion)")
+	assert.NotEmpty(t, groceryItem.InsertText, "Payee completion should include template postings")
+	assert.Equal(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
+		"Payee with template should use snippet format for tabstops")
+	assert.Contains(t, groceryItem.InsertText, "${1:", "Template should have tabstop ${1:}")
+	assert.Contains(t, groceryItem.InsertText, "expenses:food", "Template should include account")
+	assert.Contains(t, groceryItem.InsertText, "$0", "Template should have final tabstop $0")
 }
 
 func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
