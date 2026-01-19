@@ -295,10 +295,15 @@ func tokenizeForSemantics(content string) []semanticToken {
 			isPayee = false
 		}
 
+		length := uint32(lsputil.UTF16Len(tok.Value))
+		if tok.Type == parser.TokenComment {
+			length++
+		}
+
 		tokens = append(tokens, semanticToken{
 			line:      uint32(tok.Pos.Line - 1),
 			col:       uint32(tok.Pos.Column - 1),
-			length:    uint32(lsputil.UTF16Len(tok.Value)),
+			length:    length,
 			tokenType: semType,
 			modifiers: modifiers,
 		})
