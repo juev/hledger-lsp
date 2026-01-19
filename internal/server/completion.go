@@ -889,10 +889,12 @@ func buildPayeeSnippetTemplate(payee string, postings []analyzer.PostingTemplate
 	sb.WriteString(payee)
 
 	tabstopNum := 1
-	for i, p := range postings {
+	for _, p := range postings {
 		sb.WriteString("\n")
 		sb.WriteString(indent)
-		sb.WriteString(p.Account)
+
+		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstopNum, p.Account))
+		tabstopNum++
 
 		if p.Amount != "" || p.Commodity != "" {
 			sb.WriteString("  ")
@@ -905,12 +907,9 @@ func buildPayeeSnippetTemplate(payee string, postings []analyzer.PostingTemplate
 				sb.WriteString(" ")
 				sb.WriteString(p.Commodity)
 			}
-		} else if i < len(postings)-1 {
-			sb.WriteString(fmt.Sprintf("  ${%d}", tabstopNum))
-			tabstopNum++
 		}
 	}
 
-	sb.WriteString("$0")
+	sb.WriteString("\n$0")
 	return sb.String()
 }

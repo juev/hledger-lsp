@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
@@ -2259,6 +2260,64 @@ func TestDetectDateFormat_FromCursorPosition(t *testing.T) {
 			format := detectDateFormat(tt.content, tt.cursorLine)
 			assert.Equal(t, tt.wantYear, format.HasYear,
 				"detectDateFormat with cursorLine=%d should have HasYear=%v", tt.cursorLine, tt.wantYear)
+		})
+	}
+}
+
+func TestBuildPayeeSnippetTemplate(t *testing.T) {
+	tests := []struct {
+		name       string
+		payee      string
+		postings   []analyzer.PostingTemplate
+		indentSize int
+		expected   string
+	}{
+		{
+			name:  "two postings with amounts - accounts and amounts as tab stops",
+			payee: "Grocery Store",
+			postings: []analyzer.PostingTemplate{
+				{Account: "expenses:food", Amount: "50.00", Commodity: "$", CommodityLeft: true},
+				{Account: "assets:cash", Amount: "50.00", Commodity: "$", CommodityLeft: true},
+			},
+			indentSize: 4,
+			expected:   "Grocery Store\n    ${1:expenses:food}  $${2:50.00}\n    ${3:assets:cash}  $${4:50.00}\n$0",
+		},
+		{
+			name:  "first posting with amount, second inferred",
+			payee: "Grocery Store",
+			postings: []analyzer.PostingTemplate{
+				{Account: "expenses:food", Amount: "50.00", Commodity: "$", CommodityLeft: true},
+				{Account: "assets:cash"},
+			},
+			indentSize: 4,
+			expected:   "Grocery Store\n    ${1:expenses:food}  $${2:50.00}\n    ${3:assets:cash}\n$0",
+		},
+		{
+			name:  "commodity on right side",
+			payee: "Purchase",
+			postings: []analyzer.PostingTemplate{
+				{Account: "expenses:misc", Amount: "100", Commodity: "EUR", CommodityLeft: false},
+				{Account: "assets:bank"},
+			},
+			indentSize: 4,
+			expected:   "Purchase\n    ${1:expenses:misc}  ${2:100} EUR\n    ${3:assets:bank}\n$0",
+		},
+		{
+			name:  "no amounts - only accounts as tab stops",
+			payee: "Transfer",
+			postings: []analyzer.PostingTemplate{
+				{Account: "assets:checking"},
+				{Account: "assets:savings"},
+			},
+			indentSize: 4,
+			expected:   "Transfer\n    ${1:assets:checking}\n    ${2:assets:savings}\n$0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildPayeeSnippetTemplate(tt.payee, tt.postings, tt.indentSize)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }
