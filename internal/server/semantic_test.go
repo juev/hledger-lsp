@@ -251,3 +251,50 @@ func TestSemanticTokens_Delta(t *testing.T) {
 		t.Fatalf("unexpected result type: %T", deltaResult)
 	}
 }
+
+func TestSemanticTokens_CommentLength(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantLength uint32
+	}{
+		{
+			name:       "single semicolon comment",
+			content:    "; test",
+			wantLength: 6,
+		},
+		{
+			name:       "double semicolon comment",
+			content:    ";; test",
+			wantLength: 7,
+		},
+		{
+			name:       "triple semicolon comment",
+			content:    ";;; test",
+			wantLength: 8,
+		},
+		{
+			name:       "double semicolon with date",
+			content:    ";;  01-12",
+			wantLength: 9,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens)
+
+			var commentToken *semanticToken
+			for i := range tokens {
+				if tokens[i].tokenType == TokenTypeComment {
+					commentToken = &tokens[i]
+					break
+				}
+			}
+			require.NotNil(t, commentToken, "comment token not found")
+			assert.Equal(t, tt.wantLength, commentToken.length,
+				"comment length mismatch for %q", tt.content)
+		})
+	}
+}
