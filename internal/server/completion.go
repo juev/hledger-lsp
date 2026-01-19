@@ -310,16 +310,21 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 
 	case ContextPayee:
 		for _, payee := range result.Payees {
-			_, hasTemplate := result.PayeeTemplates[payee]
-			if hasTemplate {
-				postings := result.PayeeTemplates[payee]
-				hasTemplate = len(postings) > 0
-			}
+			postings := result.PayeeTemplates[payee]
+			hasTemplate := len(postings) > 0
+
 			item := protocol.CompletionItem{
 				Label:  payee,
 				Kind:   protocol.CompletionItemKindClass,
 				Detail: formatPayeeDetailWithCount(payee, counts, hasTemplate, settings.ShowCounts),
 			}
+
+			if hasTemplate && s.snippetSupport && settings.Snippets {
+				formattingSettings := s.getSettings().Formatting
+				item.InsertText = buildPayeeSnippetTemplate(payee, postings, formattingSettings.IndentSize)
+				item.InsertTextFormat = protocol.InsertTextFormatSnippet
+			}
+
 			items = append(items, item)
 		}
 
@@ -874,4 +879,37 @@ func filterByPrefix(items []protocol.CompletionItem, query string) []scoredItem 
 		}
 	}
 	return result
+}
+
+func buildPayeeSnippetTemplate(payee string, postings []analyzer.PostingTemplate, indentSize int) string {
+	var sb strings.Builder
+
+	indent := strings.Repeat(" ", indentSize)
+
+	sb.WriteString(payee)
+
+	tabstopNum := 1
+	for _, p := range postings {
+		sb.WriteString("\n")
+		sb.WriteString(indent)
+
+		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstopNum, p.Account))
+		tabstopNum++
+
+		if p.Amount != "" || p.Commodity != "" {
+			sb.WriteString("  ")
+			if p.CommodityLeft && p.Commodity != "" {
+				sb.WriteString(p.Commodity)
+			}
+			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstopNum, p.Amount))
+			tabstopNum++
+			if !p.CommodityLeft && p.Commodity != "" {
+				sb.WriteString(" ")
+				sb.WriteString(p.Commodity)
+			}
+		}
+	}
+
+	sb.WriteString("\n$0")
+	return sb.String()
 }

@@ -376,3 +376,111 @@ func TestFormatDate_ValidatesRange(t *testing.T) {
 		})
 	}
 }
+
+func TestCollectPayeeTemplates_SelectsMostFrequentPattern(t *testing.T) {
+	input := `2024-01-01 Store
+    expenses:food  $10
+    assets:cash
+
+2024-01-02 Store
+    expenses:food  $20
+    assets:bank
+
+2024-01-03 Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-04 Store
+    expenses:food  $40
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	templates := CollectPayeeTemplates(journal)
+
+	require.Contains(t, templates, "Store")
+	postings := templates["Store"]
+	require.Len(t, postings, 2)
+
+	assert.Equal(t, "expenses:food", postings[0].Account)
+	assert.Equal(t, "assets:cash", postings[1].Account,
+		"Should select assets:cash (3 times) over assets:bank (1 time)")
+	assert.Equal(t, "40", postings[0].Amount,
+		"Should use amount from the last transaction with the most frequent pattern")
+	assert.Equal(t, "$", postings[0].Commodity, "Commodity should be separate")
+}
+
+func TestCollectPayeeTemplates_SingleTransaction(t *testing.T) {
+	input := `2024-01-01 Store
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	templates := CollectPayeeTemplates(journal)
+
+	require.Contains(t, templates, "Store")
+	postings := templates["Store"]
+	require.Len(t, postings, 2)
+
+	assert.Equal(t, "expenses:food", postings[0].Account)
+	assert.Equal(t, "assets:cash", postings[1].Account)
+}
+
+func TestCollectPayeeTemplates_TiedFrequency_UsesLast(t *testing.T) {
+	input := `2024-01-01 Store
+    expenses:food  $10
+    assets:cash
+
+2024-01-02 Store
+    expenses:food  $20
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	templates := CollectPayeeTemplates(journal)
+
+	require.Contains(t, templates, "Store")
+	postings := templates["Store"]
+	require.Len(t, postings, 2)
+
+	assert.Equal(t, "assets:bank", postings[1].Account,
+		"With equal frequency, should use the last seen pattern")
+	assert.Equal(t, "20", postings[0].Amount)
+}
+
+func TestCollectPayeeTemplates_MostFrequentNotLast(t *testing.T) {
+	input := `2024-01-01 Store
+    expenses:food  $10
+    assets:cash
+
+2024-01-02 Store
+    expenses:food  $20
+    assets:cash
+
+2024-01-03 Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-04 Store
+    expenses:food  $99
+    assets:bank`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	templates := CollectPayeeTemplates(journal)
+
+	require.Contains(t, templates, "Store")
+	postings := templates["Store"]
+	require.Len(t, postings, 2)
+
+	assert.Equal(t, "expenses:food", postings[0].Account)
+	assert.Equal(t, "assets:cash", postings[1].Account,
+		"Should select most frequent pattern (assets:cash 3 times) not last (assets:bank)")
+	assert.Equal(t, "30", postings[0].Amount,
+		"Should use amount from the LAST transaction with the most frequent pattern")
+}

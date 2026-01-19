@@ -320,16 +320,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		}
 		sb.WriteString(strings.Repeat(" ", spaces))
 
-		if posting.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.Amount.Commodity.Symbol)
-		}
-
-		sb.WriteString(formatAmountQuantity(posting.Amount, commodityFormats))
-
-		if posting.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.Amount.Commodity.Symbol)
-		}
+		writeAmountWithSign(&sb, posting.Amount, commodityFormats)
 	}
 
 	if posting.Cost != nil {
@@ -338,14 +329,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		} else {
 			sb.WriteString(" @ ")
 		}
-		if posting.Cost.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
-		}
-		sb.WriteString(formatAmountQuantity(&posting.Cost.Amount, commodityFormats))
-		if posting.Cost.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.Cost.Amount.Commodity.Symbol)
-		}
+		writeAmountWithSign(&sb, &posting.Cost.Amount, commodityFormats)
 	}
 
 	if posting.BalanceAssertion != nil {
@@ -362,14 +346,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		} else {
 			sb.WriteString("= ")
 		}
-		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityLeft {
-			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
-		}
-		sb.WriteString(formatAmountQuantity(&posting.BalanceAssertion.Amount, commodityFormats))
-		if posting.BalanceAssertion.Amount.Commodity.Position == ast.CommodityRight {
-			sb.WriteString(" ")
-			sb.WriteString(posting.BalanceAssertion.Amount.Commodity.Symbol)
-		}
+		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
 	}
 
 	if posting.Comment != "" {
@@ -378,6 +355,27 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	}
 
 	return sb.String()
+}
+
+func writeAmountWithSign(sb *strings.Builder, amount *ast.Amount, commodityFormats map[string]NumberFormat) {
+	qty := formatAmountQuantity(amount, commodityFormats)
+
+	if amount.Commodity.Position == ast.CommodityLeft {
+		if amount.SignBeforeCommodity && len(qty) > 0 && (qty[0] == '-' || qty[0] == '+') {
+			sb.WriteByte(qty[0])
+			sb.WriteString(amount.Commodity.Symbol)
+			sb.WriteString(qty[1:])
+		} else {
+			sb.WriteString(amount.Commodity.Symbol)
+			sb.WriteString(qty)
+		}
+	} else {
+		sb.WriteString(qty)
+		if amount.Commodity.Symbol != "" {
+			sb.WriteString(" ")
+			sb.WriteString(amount.Commodity.Symbol)
+		}
+	}
 }
 
 // formatAmountQuantity returns formatted quantity string.

@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -125,7 +126,12 @@ func CollectTags(journal *ast.Journal) []string {
 }
 
 func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
-	result := make(map[string][]PostingTemplate)
+	type txData struct {
+		postings []PostingTemplate
+		pattern  string
+	}
+
+	payeeTxs := make(map[string][]txData)
 
 	for _, tx := range journal.Transactions {
 		payee := tx.Payee
@@ -137,13 +143,11 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 		}
 
 		if len(tx.Postings) == 0 {
-			if _, exists := result[payee]; !exists {
-				result[payee] = nil
-			}
 			continue
 		}
 
 		var postings []PostingTemplate
+		var accounts []string
 		for _, p := range tx.Postings {
 			pt := PostingTemplate{
 				Account: p.Account.Name,
@@ -157,8 +161,47 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 				pt.CommodityLeft = p.Amount.Commodity.Position == ast.CommodityLeft
 			}
 			postings = append(postings, pt)
+			accounts = append(accounts, p.Account.Name)
 		}
-		result[payee] = postings
+
+		sort.Strings(accounts)
+		pattern := strings.Join(accounts, "|")
+
+		payeeTxs[payee] = append(payeeTxs[payee], txData{
+			postings: postings,
+			pattern:  pattern,
+		})
+	}
+
+	result := make(map[string][]PostingTemplate)
+
+	for payee, txs := range payeeTxs {
+		if len(txs) == 0 {
+			continue
+		}
+
+		patternCount := make(map[string]int)
+		patternLastIdx := make(map[string]int)
+
+		for i, tx := range txs {
+			patternCount[tx.pattern]++
+			patternLastIdx[tx.pattern] = i
+		}
+
+		bestCount := 0
+		bestLastIdx := -1
+
+		for pattern, count := range patternCount {
+			lastIdx := patternLastIdx[pattern]
+			if count > bestCount || (count == bestCount && lastIdx > bestLastIdx) {
+				bestCount = count
+				bestLastIdx = lastIdx
+			}
+		}
+
+		if bestLastIdx >= 0 {
+			result[payee] = txs[bestLastIdx].postings
+		}
 	}
 
 	return result
