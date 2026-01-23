@@ -58,6 +58,48 @@
     :server-id 'hledger-lsp)))
 ```
 
+## Semantic Token Highlighting
+
+hledger-lsp uses custom semantic token types. Configure faces for highlighting:
+
+### Using eglot (Emacs 29+)
+
+```elisp
+(defface hledger-account-face '((t :inherit font-lock-variable-name-face)) "Face for accounts.")
+(defface hledger-commodity-face '((t :inherit font-lock-type-face)) "Face for commodities.")
+(defface hledger-payee-face '((t :inherit font-lock-function-name-face)) "Face for payees.")
+(defface hledger-date-face '((t :inherit font-lock-constant-face)) "Face for dates.")
+(defface hledger-amount-face '((t :inherit font-lock-constant-face)) "Face for amounts.")
+(defface hledger-directive-face '((t :inherit font-lock-preprocessor-face)) "Face for directives.")
+(defface hledger-code-face '((t :inherit font-lock-string-face)) "Face for codes.")
+(defface hledger-status-face '((t :inherit font-lock-builtin-face)) "Face for status.")
+
+(setq eglot-semantic-token-faces
+      '((account . hledger-account-face)
+        (commodity . hledger-commodity-face)
+        (payee . hledger-payee-face)
+        (date . hledger-date-face)
+        (amount . hledger-amount-face)
+        (directive . hledger-directive-face)
+        (code . hledger-code-face)
+        (status . hledger-status-face)))
+```
+
+### Using lsp-mode
+
+```elisp
+(setq lsp-semantic-tokens-apply-modifiers nil)
+
+(defface lsp-face-semhl-account '((t :inherit font-lock-variable-name-face)) "Face for accounts.")
+(defface lsp-face-semhl-commodity '((t :inherit font-lock-type-face)) "Face for commodities.")
+(defface lsp-face-semhl-payee '((t :inherit font-lock-function-name-face)) "Face for payees.")
+(defface lsp-face-semhl-date '((t :inherit font-lock-constant-face)) "Face for dates.")
+(defface lsp-face-semhl-amount '((t :inherit font-lock-constant-face)) "Face for amounts.")
+(defface lsp-face-semhl-directive '((t :inherit font-lock-preprocessor-face)) "Face for directives.")
+(defface lsp-face-semhl-code '((t :inherit font-lock-string-face)) "Face for codes.")
+(defface lsp-face-semhl-status '((t :inherit font-lock-builtin-face)) "Face for status.")
+```
+
 ## Keybindings
 
 With eglot, standard keybindings work:

@@ -69,6 +69,34 @@ vim.filetype.add({
 })
 ```
 
+## Semantic Token Highlighting
+
+hledger-lsp uses custom semantic token types. Add highlight links to your config:
+
+```lua
+vim.api.nvim_set_hl(0, "@lsp.type.account.hledger", { link = "Identifier" })
+vim.api.nvim_set_hl(0, "@lsp.type.commodity.hledger", { link = "Type" })
+vim.api.nvim_set_hl(0, "@lsp.type.payee.hledger", { link = "Function" })
+vim.api.nvim_set_hl(0, "@lsp.type.date.hledger", { link = "Number" })
+vim.api.nvim_set_hl(0, "@lsp.type.amount.hledger", { link = "Number" })
+vim.api.nvim_set_hl(0, "@lsp.type.directive.hledger", { link = "PreProc" })
+vim.api.nvim_set_hl(0, "@lsp.type.code.hledger", { link = "Special" })
+vim.api.nvim_set_hl(0, "@lsp.type.status.hledger", { link = "Operator" })
+```
+
+Or with custom colors:
+
+```lua
+vim.api.nvim_set_hl(0, "@lsp.type.account.hledger", { fg = "#4EC9B0" })
+vim.api.nvim_set_hl(0, "@lsp.type.commodity.hledger", { fg = "#569CD6" })
+vim.api.nvim_set_hl(0, "@lsp.type.payee.hledger", { fg = "#DCDCAA" })
+vim.api.nvim_set_hl(0, "@lsp.type.date.hledger", { fg = "#B5CEA8" })
+vim.api.nvim_set_hl(0, "@lsp.type.amount.hledger", { fg = "#B5CEA8" })
+vim.api.nvim_set_hl(0, "@lsp.type.directive.hledger", { fg = "#C586C0" })
+vim.api.nvim_set_hl(0, "@lsp.type.code.hledger", { fg = "#9CDCFE" })
+vim.api.nvim_set_hl(0, "@lsp.type.status.hledger", { fg = "#D4D4D4" })
+```
+
 ## Keybindings
 
 Recommended keybindings for LSP features:

@@ -72,18 +72,19 @@ hledger-lsp provides semantic highlighting for journal elements. You can customi
 
 ### Token Type Reference
 
+hledger-lsp uses custom semantic token types for domain-specific highlighting:
+
 | hledger Element | Token Type | Example |
 |-----------------|------------|---------|
-| Account | `namespace` | `expenses:food` |
-| Date | `number` | `2024-01-15` |
-| Amount | `number` | `50.00` |
-| Commodity | `type` | `USD`, `$` |
-| Payee | `function` | `grocery store` |
-| Directive | `macro` | `account`, `include` |
-| Code | `variable` | `(123)` |
-| Tag | `property` | `tag:value` |
+| Account | `account` | `expenses:food` |
+| Date | `date` | `2024-01-15` |
+| Amount | `amount` | `50.00` |
+| Commodity | `commodity` | `USD`, `$` |
+| Payee | `payee` | `grocery store` |
+| Directive | `directive` | `account`, `include` |
+| Code | `code` | `(123)` |
+| Status | `status` | `*`, `!` |
 | Comment | `comment` | `; note` |
-| Status | `operator` | `*`, `!` |
 
 ### Customizing Colors with hledger-vscode
 
@@ -93,16 +94,15 @@ With hledger-vscode, use the `:hledger` suffix to apply colors only to hledger f
 {
   "editor.semanticTokenColorCustomizations": {
     "rules": {
-      "namespace:hledger": "#4EC9B0",
-      "number:hledger": "#B5CEA8",
-      "type:hledger": "#569CD6",
-      "comment:hledger": "#6A9955",
-      "operator:hledger": "#D4D4D4",
-      "string:hledger": "#CE9178",
-      "function:hledger": "#DCDCAA",
-      "property:hledger": "#9CDCFE",
-      "macro:hledger": "#C586C0",
-      "variable:hledger": "#9CDCFE"
+      "account:hledger": "#4EC9B0",
+      "date:hledger": "#B5CEA8",
+      "amount:hledger": "#B5CEA8",
+      "commodity:hledger": "#569CD6",
+      "payee:hledger": "#DCDCAA",
+      "directive:hledger": "#C586C0",
+      "code:hledger": "#9CDCFE",
+      "status:hledger": "#D4D4D4",
+      "comment:hledger": "#6A9955"
     }
   }
 }
@@ -116,22 +116,21 @@ Without a registered language ID, colors apply globally:
 {
   "editor.semanticTokenColorCustomizations": {
     "rules": {
-      "namespace": "#4EC9B0",
-      "number": "#B5CEA8",
-      "type": "#569CD6",
-      "comment": "#6A9955",
-      "operator": "#D4D4D4",
-      "string": "#CE9178",
-      "function": "#DCDCAA",
-      "property": "#9CDCFE",
-      "macro": "#C586C0",
-      "variable": "#9CDCFE"
+      "account": "#4EC9B0",
+      "date": "#B5CEA8",
+      "amount": "#B5CEA8",
+      "commodity": "#569CD6",
+      "payee": "#DCDCAA",
+      "directive": "#C586C0",
+      "code": "#9CDCFE",
+      "status": "#D4D4D4",
+      "comment": "#6A9955"
     }
   }
 }
 ```
 
-**Warning**: These rules affect all languages. To avoid conflicts, you may want to customize only distinctive tokens like `macro` and `namespace`.
+**Warning**: Since these are custom token types, they won't affect other languages. However, if other LSP servers use the same custom type names, conflicts may occur.
 
 ## Enable Format on Type
 

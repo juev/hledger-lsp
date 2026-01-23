@@ -12,16 +12,21 @@ import (
 )
 
 const (
-	TokenTypeNamespace = 0
-	TokenTypeNumber    = 1
-	TokenTypeType      = 2
-	TokenTypeComment   = 3
-	TokenTypeOperator  = 4
-	TokenTypeString    = 5
-	TokenTypeFunction  = 6
-	TokenTypeProperty  = 7
-	TokenTypeMacro     = 8
-	TokenTypeVariable  = 9
+	// Custom hledger-specific semantic token types
+	TokenTypeAccount   = 0
+	TokenTypeCommodity = 1
+	TokenTypePayee     = 2
+	TokenTypeDate      = 3
+	TokenTypeAmount    = 4
+	TokenTypeTag       = 5
+	TokenTypeDirective = 6
+	TokenTypeCode      = 7
+	TokenTypeStatus    = 8
+
+	// Standard LSP types (kept for compatibility)
+	TokenTypeComment  = 9
+	TokenTypeString   = 10
+	TokenTypeOperator = 11
 )
 
 const (
@@ -42,16 +47,20 @@ type SemanticTokensServerCapabilities struct {
 func GetSemanticTokensLegend() protocol.SemanticTokensLegend {
 	return protocol.SemanticTokensLegend{
 		TokenTypes: []protocol.SemanticTokenTypes{
-			protocol.SemanticTokenNamespace,
-			protocol.SemanticTokenNumber,
-			protocol.SemanticTokenType,
+			// Custom hledger-specific types (indices 0-8)
+			"account",
+			"commodity",
+			"payee",
+			"date",
+			"amount",
+			"tag",
+			"directive",
+			"code",
+			"status",
+			// Standard LSP types (indices 9-11)
 			protocol.SemanticTokenComment,
-			protocol.SemanticTokenOperator,
 			protocol.SemanticTokenString,
-			protocol.SemanticTokenFunction,
-			protocol.SemanticTokenProperty,
-			protocol.SemanticTokenMacro,
-			protocol.SemanticTokenVariable,
+			protocol.SemanticTokenOperator,
 		},
 		TokenModifiers: []protocol.SemanticTokenModifiers{
 			protocol.SemanticTokenModifierDeclaration,
@@ -291,7 +300,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 		}
 
 		if tok.Type == parser.TokenText && isPayee {
-			semType = TokenTypeFunction
+			semType = TokenTypePayee
 			isPayee = false
 		}
 
@@ -315,13 +324,13 @@ func tokenizeForSemantics(content string) []semanticToken {
 func mapTokenType(t parser.TokenType) (uint32, bool) {
 	switch t {
 	case parser.TokenDate:
-		return TokenTypeNumber, true
+		return TokenTypeDate, true
 	case parser.TokenAccount:
-		return TokenTypeNamespace, true
+		return TokenTypeAccount, true
 	case parser.TokenNumber:
-		return TokenTypeNumber, true
+		return TokenTypeAmount, true
 	case parser.TokenCommodity:
-		return TokenTypeType, true
+		return TokenTypeCommodity, true
 	case parser.TokenComment:
 		return TokenTypeComment, true
 	case parser.TokenAt, parser.TokenAtAt, parser.TokenEquals, parser.TokenDoubleEquals, parser.TokenPipe:
@@ -329,13 +338,13 @@ func mapTokenType(t parser.TokenType) (uint32, bool) {
 	case parser.TokenText:
 		return TokenTypeString, true
 	case parser.TokenCode:
-		return TokenTypeVariable, true
+		return TokenTypeCode, true
 	case parser.TokenStatus:
-		return TokenTypeOperator, true
+		return TokenTypeStatus, true
 	case parser.TokenDirective:
-		return TokenTypeMacro, true
+		return TokenTypeDirective, true
 	case parser.TokenTag:
-		return TokenTypeProperty, true
+		return TokenTypeTag, true
 	default:
 		return 0, false
 	}

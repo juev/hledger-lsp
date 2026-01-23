@@ -13,12 +13,18 @@ func TestSemanticTokens_Legend(t *testing.T) {
 	legend := GetSemanticTokensLegend()
 
 	assert.NotEmpty(t, legend.TokenTypes)
-	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenNamespace)
-	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenNumber)
+	// Custom hledger types
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("account"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("commodity"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("payee"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("date"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("amount"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("tag"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("directive"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("code"))
+	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenTypes("status"))
+	// Standard LSP types
 	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenComment)
-	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenMacro)
-	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenFunction)
-	assert.Contains(t, legend.TokenTypes, protocol.SemanticTokenProperty)
 }
 
 func TestSemanticTokens_Encode(t *testing.T) {
@@ -109,24 +115,44 @@ func TestSemanticTokens_TokenTypes(t *testing.T) {
 		wantType uint32
 	}{
 		{
-			name:     "directive uses macro type",
+			name:     "directive uses directive type",
 			content:  "account expenses:food",
-			wantType: TokenTypeMacro,
+			wantType: TokenTypeDirective,
 		},
 		{
-			name:     "date uses number type",
+			name:     "date uses date type",
 			content:  "2024-01-15 test",
-			wantType: TokenTypeNumber,
+			wantType: TokenTypeDate,
 		},
 		{
-			name:     "payee uses function type",
+			name:     "payee uses payee type",
 			content:  "2024-01-15 grocery store",
-			wantType: TokenTypeFunction,
+			wantType: TokenTypePayee,
 		},
 		{
-			name:     "code uses variable type",
+			name:     "code uses code type",
 			content:  "2024-01-15 (123) test",
-			wantType: TokenTypeVariable,
+			wantType: TokenTypeCode,
+		},
+		{
+			name:     "account uses account type",
+			content:  "2024-01-15 test\n    expenses:food  $50",
+			wantType: TokenTypeAccount,
+		},
+		{
+			name:     "amount uses amount type",
+			content:  "2024-01-15 test\n    expenses:food  50",
+			wantType: TokenTypeAmount,
+		},
+		{
+			name:     "commodity uses commodity type",
+			content:  "2024-01-15 test\n    expenses:food  $50",
+			wantType: TokenTypeCommodity,
+		},
+		{
+			name:     "status uses status type",
+			content:  "2024-01-15 * test",
+			wantType: TokenTypeStatus,
 		},
 	}
 
