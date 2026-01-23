@@ -583,26 +583,43 @@ func (l *Lexer) looksLikeCommodity(value string) bool {
 }
 
 func (l *Lexer) looksLikeDate() bool {
+	// Date format: YYYY-MM-DD (minimum 8 chars for YYYY-M-D, typical 10 for YYYY-MM-DD)
+	// We require a SECOND separator to distinguish from numbers like 1000.00
 	if l.pos+8 > len(l.input) {
 		return false
 	}
 
+	// Check for 4-digit year
 	for i := 0; i < 4; i++ {
 		if !l.isDigit(l.input[l.pos+i]) {
 			return false
 		}
 	}
 
+	// Check first separator
 	sep := l.input[l.pos+4]
 	if sep != '-' && sep != '/' && sep != '.' {
 		return false
 	}
 
+	// Check month digit
 	if !l.isDigit(l.input[l.pos+5]) {
 		return false
 	}
 
-	return true
+	// Find second separator position (after 1 or 2 digit month)
+	secondSepPos := 6
+	if l.pos+6 < len(l.input) && l.isDigit(l.input[l.pos+6]) {
+		// Two-digit month
+		secondSepPos = 7
+	}
+
+	// Require second separator to be a date (distinguishes 2024-01-15 from 1000.00)
+	if l.pos+secondSepPos >= len(l.input) {
+		return false
+	}
+
+	return l.input[l.pos+secondSepPos] == sep
 }
 
 func (l *Lexer) looksLikeVirtualAccount() bool {

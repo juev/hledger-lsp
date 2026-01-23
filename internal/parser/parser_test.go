@@ -665,15 +665,16 @@ func TestParser_CommodityDirectiveMultipleSubdirs(t *testing.T) {
 
 func TestParser_CommodityDirectiveInlineFormat(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		expected string
+		name           string
+		input          string
+		expectedSymbol string
+		expectedFormat string
 	}{
-		{"symbol right USD", "commodity 1.000,00 USD", "USD"},
-		{"symbol right EUR", "commodity 1.000,00 EUR", "EUR"},
-		{"symbol right BTC", "commodity 1.00000000 BTC", "BTC"},
-		{"symbol left dollar", "commodity $1000.00", "$"},
-		{"symbol left euro", "commodity €1.000,00", "€"},
+		{"symbol right USD", "commodity 1.000,00 USD", "USD", "1.000,00 USD"},
+		{"symbol right EUR", "commodity 1.000,00 EUR", "EUR", "1.000,00 EUR"},
+		{"symbol right BTC", "commodity 1.00000000 BTC", "BTC", "1.00000000 BTC"},
+		{"symbol left dollar", "commodity $1000.00", "$", "$1000.00"},
+		{"symbol left euro", "commodity €1.000,00", "€", "€1.000,00"},
 	}
 
 	for _, tt := range tests {
@@ -684,9 +685,61 @@ func TestParser_CommodityDirectiveInlineFormat(t *testing.T) {
 
 			dir, ok := journal.Directives[0].(ast.CommodityDirective)
 			require.True(t, ok)
-			assert.Equal(t, tt.expected, dir.Commodity.Symbol)
+			assert.Equal(t, tt.expectedSymbol, dir.Commodity.Symbol)
+			assert.Equal(t, tt.expectedFormat, dir.Format, "inline format should be saved")
 		})
 	}
+}
+
+func TestParser_DefaultCommodityDirective(t *testing.T) {
+	tests := []struct {
+		name           string
+		input          string
+		expectedSymbol string
+		expectedFormat string
+	}{
+		{"USD format with comma", "D $1,000.00", "$", "$1,000.00"},
+		{"USD format no comma", "D $1000.00", "$", "$1000.00"},
+		{"EUR format", "D 1.000,00 EUR", "EUR", "1.000,00 EUR"},
+		{"RUB format", "D 1 000,00 RUB", "RUB", "1 000,00 RUB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Directives, 1)
+
+			dir, ok := journal.Directives[0].(ast.DefaultCommodityDirective)
+			require.True(t, ok, "expected DefaultCommodityDirective, got %T", journal.Directives[0])
+			assert.Equal(t, tt.expectedSymbol, dir.Symbol)
+			assert.Equal(t, tt.expectedFormat, dir.Format)
+		})
+	}
+}
+
+func TestParser_DefaultCommodityWithTransaction(t *testing.T) {
+	input := `D $1,000.00
+
+2024-01-15 test
+    expenses:food  $50.00
+    assets:cash`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs, "parse errors: %v", errs)
+	require.Len(t, journal.Directives, 1, "expected 1 directive")
+	require.Len(t, journal.Transactions, 1, "expected 1 transaction")
+
+	dir, ok := journal.Directives[0].(ast.DefaultCommodityDirective)
+	require.True(t, ok, "expected DefaultCommodityDirective, got %T", journal.Directives[0])
+	assert.Equal(t, "$", dir.Symbol)
+	assert.Equal(t, "$1,000.00", dir.Format)
+
+	// Verify transaction parsed correctly
+	tx := journal.Transactions[0]
+	assert.Equal(t, "test", tx.Description)
+	require.Len(t, tx.Postings, 2)
+	assert.Equal(t, "expenses:food", tx.Postings[0].Account.Name)
 }
 
 func TestParser_AccountDirectiveWithComment(t *testing.T) {

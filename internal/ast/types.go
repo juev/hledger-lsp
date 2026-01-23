@@ -162,6 +162,15 @@ type YearDirective struct {
 func (YearDirective) directive()        {}
 func (d YearDirective) GetRange() Range { return d.Range }
 
+type DefaultCommodityDirective struct {
+	Symbol string
+	Format string
+	Range  Range
+}
+
+func (DefaultCommodityDirective) directive()        {}
+func (d DefaultCommodityDirective) GetRange() Range { return d.Range }
+
 type Comment struct {
 	Text  string
 	Tags  []Tag

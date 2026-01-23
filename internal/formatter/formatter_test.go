@@ -754,6 +754,78 @@ func TestFormatDocument_AmountFormatVariations(t *testing.T) {
 	}
 }
 
+func TestFormatDocument_WithInlineCommodityFormat(t *testing.T) {
+	input := `commodity 1 000,00 RUB
+
+2024-01-15 test
+    expenses:food  846661.89 RUB
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && strings.Contains(edit.NewText, "846 661,89 RUB") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Expected amount formatted with inline commodity format (846 661,89 RUB), got edits: %v", edits)
+}
+
+func TestFormatDocument_WithDefaultCommodityFormat(t *testing.T) {
+	input := `D $1,000.00
+
+2024-01-15 test
+    expenses:food  $1234.56
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && strings.Contains(edit.NewText, "$1,234.56") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Expected amount formatted with default commodity format ($1,234.56), got edits: %v", edits)
+}
+
+func TestFormatDocument_DefaultFormatFallback(t *testing.T) {
+	input := `D 1 000,00 RUB
+
+2024-01-15 test
+    expenses:food  846661.89 USD
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	edits := FormatDocument(journal, input)
+	require.NotEmpty(t, edits)
+
+	found := false
+	for _, edit := range edits {
+		if edit.NewText != "" && strings.Contains(edit.NewText, "846 661,89 USD") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "Expected amount formatted with default format fallback (846 661,89 USD), got edits: %v", edits)
+}
+
 func applyEdits(content string, edits []protocol.TextEdit) string {
 	sort.Slice(edits, func(i, j int) bool {
 		if edits[i].Range.Start.Line != edits[j].Range.Start.Line {

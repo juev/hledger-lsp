@@ -116,13 +116,29 @@ func trimTrailingSpacesEdits(content string, mapper *lsputil.PositionMapper, pos
 
 func extractCommodityFormats(journal *ast.Journal) map[string]NumberFormat {
 	formats := make(map[string]NumberFormat)
+	var defaultFormat *NumberFormat
+
 	for _, dir := range journal.Directives {
-		if cd, ok := dir.(ast.CommodityDirective); ok {
-			if cd.Format != "" {
-				formats[cd.Commodity.Symbol] = ParseNumberFormat(cd.Format)
+		switch d := dir.(type) {
+		case ast.CommodityDirective:
+			if d.Format != "" {
+				formats[d.Commodity.Symbol] = ParseNumberFormat(d.Format)
+			}
+		case ast.DefaultCommodityDirective:
+			if d.Format != "" {
+				nf := ParseNumberFormat(d.Format)
+				defaultFormat = &nf
+				if d.Symbol != "" {
+					formats[d.Symbol] = nf
+				}
 			}
 		}
 	}
+
+	if defaultFormat != nil {
+		formats[""] = *defaultFormat
+	}
+
 	return formats
 }
 
@@ -379,13 +395,18 @@ func writeAmountWithSign(sb *strings.Builder, amount *ast.Amount, commodityForma
 }
 
 // formatAmountQuantity returns formatted quantity string.
-// Priority: commodity directive format > original raw format > decimal string.
+// Priority: commodity directive format > default format > original raw format > decimal string.
 func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]NumberFormat) string {
 	if amount == nil {
 		return ""
 	}
 	if commodityFormats != nil {
+		// First try specific commodity format
 		if format, ok := commodityFormats[amount.Commodity.Symbol]; ok {
+			return FormatNumber(amount.Quantity, format)
+		}
+		// Then try default format (stored under empty key)
+		if format, ok := commodityFormats[""]; ok {
 			return FormatNumber(amount.Quantity, format)
 		}
 	}
