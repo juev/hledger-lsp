@@ -36,9 +36,9 @@ func TestDefaultServerSettings(t *testing.T) {
 	if !s.Features.CodeActions {
 		t.Error("Features.CodeActions should default to true")
 	}
-	// InlineCompletion should default to false
-	if s.Features.InlineCompletion {
-		t.Error("Features.InlineCompletion should default to false")
+	// InlineCompletion should default to true
+	if !s.Features.InlineCompletion {
+		t.Error("Features.InlineCompletion should default to true")
 	}
 
 	// Completion settings

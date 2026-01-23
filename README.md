@@ -109,7 +109,7 @@ See `docs/configuration.md` for supported settings and defaults.
 | Folding Ranges | ✅ |
 | Document Links | ✅ |
 | Workspace Symbol | ✅ |
-| Inline Completion | ✅ (opt-in) |
+| Inline Completion | ✅ |
 
 ## ⚡ Performance
 

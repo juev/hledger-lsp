@@ -69,7 +69,7 @@ func defaultServerSettings() serverSettings {
 			FoldingRanges:    true,
 			DocumentLinks:    true,
 			WorkspaceSymbol:  true,
-			InlineCompletion: false,
+			InlineCompletion: true,
 		},
 		Completion: completionSettings{
 			MaxResults:    50,

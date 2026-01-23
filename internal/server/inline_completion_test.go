@@ -10,7 +10,7 @@ import (
 	"go.lsp.dev/protocol"
 )
 
-func TestInlineCompletion_DisabledByDefault(t *testing.T) {
+func TestInlineCompletion_EnabledByDefault(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Grocery Store
     expenses:food  $50.00
@@ -36,7 +36,7 @@ func TestInlineCompletion_DisabledByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "inline completion should be disabled by default")
+	assert.NotEmpty(t, result.Items, "inline completion should be enabled by default")
 }
 
 func TestInlineCompletion_EnabledOnEmptyLineAfterPayee(t *testing.T) {
