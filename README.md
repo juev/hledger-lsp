@@ -11,7 +11,7 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 
 ### Completions
 - **Accounts** — Fuzzy matching with frequency-based ranking
-- **Payees** — With transaction templates (auto-inserts postings)
+- **Payees** — From transaction history with usage counts
 - **Commodities** — From directives and usage
 - **Tags** — Name and value completion from existing tags
 - **Dates** — today/yesterday/tomorrow + historical dates from file

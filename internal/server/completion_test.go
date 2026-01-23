@@ -2000,37 +2000,6 @@ func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
 		"Payee completion should NOT contain newlines (template)")
 }
 
-func TestCompletion_SnippetsDisabled(t *testing.T) {
-	srv := NewServer()
-	settings := srv.getSettings()
-	settings.Completion.Snippets = false
-	srv.setSettings(settings)
-
-	content := `2024-01-15 grocery store
-    expenses:food  $50.00
-    assets:cash
-
-2024-01-16 `
-	uri := protocol.DocumentURI("file:///test.journal")
-	srv.StoreDocument(uri, content)
-
-	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-			Position:     protocol.Position{Line: 4, Character: 11},
-		},
-	})
-	require.NoError(t, err)
-
-	for _, item := range result.Items {
-		if item.Label == "grocery store" {
-			assert.NotEqual(t, protocol.InsertTextFormatSnippet, item.InsertTextFormat,
-				"snippets should be disabled")
-			return
-		}
-	}
-}
-
 func TestCompletion_FuzzyMatchingDisabled(t *testing.T) {
 	srv := NewServer()
 	settings := srv.getSettings()

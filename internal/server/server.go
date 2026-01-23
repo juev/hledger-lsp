@@ -31,7 +31,6 @@ type Server struct {
 	settings              serverSettings
 	settingsMu            sync.RWMutex
 	supportsConfiguration bool
-	snippetSupport        bool
 }
 
 func NewServer() *Server {
@@ -60,11 +59,6 @@ func (s *Server) StoreDocument(uri protocol.DocumentURI, content string) {
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
 	if params != nil && params.Capabilities.Workspace != nil {
 		s.supportsConfiguration = params.Capabilities.Workspace.Configuration
-	}
-	if params != nil && params.Capabilities.TextDocument != nil &&
-		params.Capabilities.TextDocument.Completion != nil &&
-		params.Capabilities.TextDocument.Completion.CompletionItem != nil {
-		s.snippetSupport = params.Capabilities.TextDocument.Completion.CompletionItem.SnippetSupport
 	}
 	if params != nil {
 		settings := parseSettingsFromRaw(s.getSettings(), params.InitializationOptions)

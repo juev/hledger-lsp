@@ -26,7 +26,6 @@ type featureSettings struct {
 
 type completionSettings struct {
 	MaxResults    int
-	Snippets      bool
 	FuzzyMatching bool
 	ShowCounts    bool
 }
@@ -74,7 +73,6 @@ func defaultServerSettings() serverSettings {
 		},
 		Completion: completionSettings{
 			MaxResults:    50,
-			Snippets:      true,
 			FuzzyMatching: true,
 			ShowCounts:    true,
 		},
@@ -243,9 +241,6 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toInt(completionRaw["maxResults"]); ok {
 			settings.Completion.MaxResults = value
 		}
-		if value, ok := toBool(completionRaw["snippets"]); ok {
-			settings.Completion.Snippets = value
-		}
 		if value, ok := toBool(completionRaw["fuzzyMatching"]); ok {
 			settings.Completion.FuzzyMatching = value
 		}
@@ -255,9 +250,6 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toInt(raw["completion.maxResults"]); ok {
 		settings.Completion.MaxResults = value
-	}
-	if value, ok := toBool(raw["completion.snippets"]); ok {
-		settings.Completion.Snippets = value
 	}
 	if value, ok := toBool(raw["completion.fuzzyMatching"]); ok {
 		settings.Completion.FuzzyMatching = value

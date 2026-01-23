@@ -24,7 +24,6 @@ Enable or disable specific LSP features.
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `hledger.completion.maxResults` | `50` | Maximum number of completion items |
-| `hledger.completion.snippets` | `true` | Enable snippets for payees |
 | `hledger.completion.fuzzyMatching` | `true` | Enable fuzzy matching |
 | `hledger.completion.showCounts` | `true` | Show usage counts in completion details |
 
@@ -73,7 +72,6 @@ Enable or disable specific LSP features.
   "hledger.features.workspaceSymbol": true,
   "hledger.features.inlineCompletion": false,
   "hledger.completion.maxResults": 100,
-  "hledger.completion.snippets": true,
   "hledger.completion.fuzzyMatching": true,
   "hledger.diagnostics.undeclaredAccounts": true,
   "hledger.diagnostics.unbalancedTransactions": true,
@@ -107,7 +105,6 @@ lspconfig.hledger_lsp.setup({
       },
       completion = {
         maxResults = 100,
-        snippets = true,
         fuzzyMatching = true,
         showCounts = true,
       },
@@ -143,7 +140,7 @@ lspconfig.hledger_lsp.setup({
     (:features (:hover t :completion t :formatting t :diagnostics t
                 :semanticTokens t :codeActions t :foldingRanges t
                 :documentLinks t :workspaceSymbol t :inlineCompletion nil)
-     :completion (:maxResults 100 :snippets t :fuzzyMatching t :showCounts t)
+     :completion (:maxResults 100 :fuzzyMatching t :showCounts t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)
      :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0)

@@ -42,9 +42,6 @@ func TestDefaultServerSettings(t *testing.T) {
 	}
 
 	// Completion settings
-	if !s.Completion.Snippets {
-		t.Error("Completion.Snippets should default to true")
-	}
 	if !s.Completion.FuzzyMatching {
 		t.Error("Completion.FuzzyMatching should default to true")
 	}
@@ -129,7 +126,6 @@ func TestParseSettingsFromRaw_Completion(t *testing.T) {
 	raw := map[string]interface{}{
 		"completion": map[string]interface{}{
 			"maxResults":    100,
-			"snippets":      false,
 			"fuzzyMatching": false,
 			"showCounts":    false,
 		},
@@ -139,9 +135,6 @@ func TestParseSettingsFromRaw_Completion(t *testing.T) {
 
 	if result.Completion.MaxResults != 100 {
 		t.Errorf("Completion.MaxResults = %d, want 100", result.Completion.MaxResults)
-	}
-	if result.Completion.Snippets {
-		t.Error("Completion.Snippets should be false")
 	}
 	if result.Completion.FuzzyMatching {
 		t.Error("Completion.FuzzyMatching should be false")
@@ -229,7 +222,6 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 	raw := map[string]interface{}{
 		"features.hover":                 false,
 		"features.inlineCompletion":      true,
-		"completion.snippets":            false,
 		"diagnostics.undeclaredAccounts": false,
 		"formatting.indentSize":          8,
 		"formatting.minAlignmentColumn":  40,
@@ -243,9 +235,6 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 	}
 	if !result.Features.InlineCompletion {
 		t.Error("Features.InlineCompletion should be true")
-	}
-	if result.Completion.Snippets {
-		t.Error("Completion.Snippets should be false")
 	}
 	if result.Diagnostics.UndeclaredAccounts {
 		t.Error("Diagnostics.UndeclaredAccounts should be false")
