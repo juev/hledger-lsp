@@ -31,6 +31,7 @@ type Server struct {
 	settings              serverSettings
 	settingsMu            sync.RWMutex
 	supportsConfiguration bool
+	payeeTemplatesCache   sync.Map // map[protocol.DocumentURI]map[string][]analyzer.PostingTemplate
 }
 
 func NewServer() *Server {
@@ -209,6 +210,8 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 }
 
 func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocumentParams) error {
+	s.payeeTemplatesCache.Delete(params.TextDocument.URI)
+
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); path != "" {
 			if content, ok := s.GetDocument(params.TextDocument.URI); ok {

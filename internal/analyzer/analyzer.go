@@ -284,7 +284,7 @@ func collectDatesFromResolved(resolved *include.ResolvedJournal) []string {
 
 // collectPayeeTemplatesFromResolved collects payee templates from all journals.
 // When the same payee exists in multiple files, the primary file's template wins.
-// Included files are processed first, then primary file overwrites conflicts.
+// Included files are processed in FileOrder, then primary file overwrites conflicts.
 func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
 	result := make(map[string][]PostingTemplate)
 
@@ -297,8 +297,10 @@ func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[st
 		}
 	}
 
-	for _, journal := range resolved.Files {
-		mergeTemplates(journal)
+	for _, path := range resolved.FileOrder {
+		if journal, ok := resolved.Files[path]; ok {
+			mergeTemplates(journal)
+		}
 	}
 	mergeTemplates(resolved.Primary)
 

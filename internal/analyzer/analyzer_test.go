@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -579,4 +581,84 @@ func TestAnalyzer_SimilarNameNotSubaccount_Diagnostic(t *testing.T) {
 		}
 	}
 	assert.True(t, foundExpenses2, "expenses2:food should trigger warning (not a subaccount of expenses)")
+}
+
+func TestAnalyzeResolved_PayeeTemplates_Deterministic(t *testing.T) {
+	// This test verifies that payee templates from resolved journals
+	// are deterministic - using FileOrder instead of map iteration.
+	// The last file in FileOrder should win for duplicate payees.
+
+	file1Content := `2024-01-15 Grocery
+    expenses:food:groceries  $100
+    assets:cash`
+
+	file2Content := `2024-01-16 Grocery
+    expenses:food:supermarket  $200
+    assets:bank`
+
+	journal1, _ := parser.Parse(file1Content)
+	journal2, _ := parser.Parse(file2Content)
+	primary, _ := parser.Parse("")
+
+	resolved := &include.ResolvedJournal{
+		Primary: primary,
+		Files: map[string]*ast.Journal{
+			"/path/to/file1.journal": journal1,
+			"/path/to/file2.journal": journal2,
+		},
+		FileOrder: []string{"/path/to/file1.journal", "/path/to/file2.journal"},
+	}
+
+	a := New()
+
+	// Run analysis multiple times to verify determinism
+	for i := 0; i < 10; i++ {
+		result := a.AnalyzeResolved(resolved)
+
+		templates, ok := result.PayeeTemplates["Grocery"]
+		require.True(t, ok, "iteration %d: Grocery templates should exist", i)
+		require.Len(t, templates, 2, "iteration %d: should have 2 postings", i)
+
+		// file2 is last in FileOrder, so its template should win
+		assert.Equal(t, "expenses:food:supermarket", templates[0].Account,
+			"iteration %d: first posting should be from file2 (last in FileOrder)", i)
+		assert.Equal(t, "assets:bank", templates[1].Account,
+			"iteration %d: second posting should be from file2 (last in FileOrder)", i)
+	}
+}
+
+func TestAnalyzeResolved_PayeeTemplates_PrimaryOverridesIncludes(t *testing.T) {
+	// Primary file should always override included files for duplicate payees
+
+	includeContent := `2024-01-15 Grocery
+    expenses:food:included  $100
+    assets:included`
+
+	primaryContent := `2024-01-16 Grocery
+    expenses:food:primary  $200
+    assets:primary`
+
+	includeJournal, _ := parser.Parse(includeContent)
+	primaryJournal, _ := parser.Parse(primaryContent)
+
+	resolved := &include.ResolvedJournal{
+		Primary: primaryJournal,
+		Files: map[string]*ast.Journal{
+			"/path/to/include.journal": includeJournal,
+		},
+		FileOrder: []string{"/path/to/include.journal"},
+	}
+
+	a := New()
+	result := a.AnalyzeResolved(resolved)
+
+	templates, ok := result.PayeeTemplates["Grocery"]
+	require.True(t, ok, "Grocery templates should exist")
+	require.Len(t, templates, 2, "should have 2 postings")
+
+	// Primary should override included file
+	assert.Equal(t, "expenses:food:primary", templates[0].Account,
+		"first posting should be from primary file")
+	assert.Equal(t, "assets:primary", templates[1].Account,
+		"second posting should be from primary file")
 }

@@ -379,3 +379,98 @@ func TestExtractPayeeFromHeader(t *testing.T) {
 		})
 	}
 }
+
+func TestInlineCompletion_CacheInvalidatedOnSave(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+
+	content1 := `2024-01-10 Grocery Store
+    expenses:food:groceries  $50.00
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	srv.documents.Store(uri, content1)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result1, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result1.Items, 1)
+	assert.Contains(t, result1.Items[0].InsertText, "expenses:food:groceries")
+
+	content2 := `2024-01-10 Grocery Store
+    expenses:food:supermarket  $100.00
+    assets:bank
+
+2024-01-15 Grocery Store
+`
+	srv.documents.Store(uri, content2)
+
+	err = srv.DidSave(context.Background(), &protocol.DidSaveTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+	})
+	require.NoError(t, err)
+
+	result2, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result2.Items, 1)
+	assert.Contains(t, result2.Items[0].InsertText, "expenses:food:supermarket",
+		"should return updated template after DidSave invalidates cache")
+	assert.Contains(t, result2.Items[0].InsertText, "assets:bank",
+		"should return updated second posting after DidSave invalidates cache")
+}
+
+func TestInlineCompletion_DeterministicResults(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	var firstResult string
+	for i := 0; i < 10; i++ {
+		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		require.NoError(t, err)
+		require.Len(t, result.Items, 1)
+
+		if i == 0 {
+			firstResult = result.Items[0].InsertText
+		} else {
+			assert.Equal(t, firstResult, result.Items[0].InsertText,
+				"iteration %d: inline completion should return deterministic results", i)
+		}
+	}
+}

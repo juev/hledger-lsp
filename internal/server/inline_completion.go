@@ -82,15 +82,8 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
 	}
 
-	var result *analyzer.AnalysisResult
-	if resolved := s.getWorkspaceResolved(p.TextDocument.URI); resolved != nil {
-		result = s.analyzer.AnalyzeResolved(resolved)
-	} else {
-		journal, _ := parser.Parse(content)
-		result = s.analyzer.Analyze(journal)
-	}
-
-	postings, ok := result.PayeeTemplates[payee]
+	templates := s.getPayeeTemplates(p.TextDocument.URI, content)
+	postings, ok := templates[payee]
 	if !ok || len(postings) == 0 {
 		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
 	}
@@ -106,6 +99,25 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 	}
 
 	return &InlineCompletionList{Items: []InlineCompletionItem{item}}, nil
+}
+
+func (s *Server) getPayeeTemplates(uri protocol.DocumentURI, content string) map[string][]analyzer.PostingTemplate {
+	if cached, ok := s.payeeTemplatesCache.Load(uri); ok {
+		if templates, ok := cached.(map[string][]analyzer.PostingTemplate); ok {
+			return templates
+		}
+	}
+
+	var result *analyzer.AnalysisResult
+	if resolved := s.getWorkspaceResolved(uri); resolved != nil {
+		result = s.analyzer.AnalyzeResolved(resolved)
+	} else {
+		journal, _ := parser.Parse(content)
+		result = s.analyzer.Analyze(journal)
+	}
+
+	s.payeeTemplatesCache.Store(uri, result.PayeeTemplates)
+	return result.PayeeTemplates
 }
 
 func isTransactionHeaderLine(line string) bool {
