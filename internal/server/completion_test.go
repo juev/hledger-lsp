@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 
-	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
@@ -133,8 +132,8 @@ func TestCompletion_PayeesShowUsageCount(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, "Payee (2) + template", groceryDetail, "Grocery Store used 2 times with template")
-	assert.Equal(t, "Payee (1) + template", coffeeDetail, "Coffee Shop used 1 time with template")
+	assert.Equal(t, "Payee (2)", groceryDetail, "Grocery Store used 2 times")
+	assert.Equal(t, "Payee (1)", coffeeDetail, "Coffee Shop used 1 time")
 }
 
 func TestCompletion_AccountsByPrefix(t *testing.T) {
@@ -839,7 +838,7 @@ func extractDetails(items []protocol.CompletionItem) []string {
 	return details
 }
 
-func TestCompletion_PayeeShowsTemplateIndicator(t *testing.T) {
+func TestCompletion_PayeeInsertsOnlyPayeeName(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Grocery Store
     expenses:food  $50.00
@@ -871,11 +870,11 @@ func TestCompletion_PayeeShowsTemplateIndicator(t *testing.T) {
 	}
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
-	assert.Empty(t, groceryItem.InsertText, "Payee should not have template in InsertText")
-	assert.Contains(t, groceryItem.Detail, "template", "Detail should show template indicator")
+	assert.Empty(t, groceryItem.InsertText, "Payee should insert only the label")
+	assert.Equal(t, "Payee (1)", groceryItem.Detail, "Detail should show count")
 }
 
-func TestCompletion_MultiplePayeesShowTemplateIndicators(t *testing.T) {
+func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Shop EUR
     expenses:food  100 EUR
@@ -919,16 +918,16 @@ func TestCompletion_MultiplePayeesShowTemplateIndicators(t *testing.T) {
 	}
 
 	require.NotNil(t, eurItem, "Shop EUR should be in completion items")
-	assert.Empty(t, eurItem.InsertText, "Should not contain template")
-	assert.Contains(t, eurItem.Detail, "template", "Should indicate template available")
+	assert.Empty(t, eurItem.InsertText, "Payee should insert only the label")
+	assert.Equal(t, "Payee (1)", eurItem.Detail)
 
 	require.NotNil(t, dollarItem, "Dollar Store should be in completion items")
-	assert.Empty(t, dollarItem.InsertText, "Should not contain template")
-	assert.Contains(t, dollarItem.Detail, "template", "Should indicate template available")
+	assert.Empty(t, dollarItem.InsertText, "Payee should insert only the label")
+	assert.Equal(t, "Payee (1)", dollarItem.Detail)
 
 	require.NotNil(t, euroSymItem, "Euro Shop should be in completion items")
-	assert.Empty(t, euroSymItem.InsertText, "Should not contain template")
-	assert.Contains(t, euroSymItem.Detail, "template", "Should indicate template available")
+	assert.Empty(t, euroSymItem.InsertText, "Payee should insert only the label")
+	assert.Equal(t, "Payee (1)", euroSymItem.Detail)
 }
 
 func TestCompletion_RankingByFrequency(t *testing.T) {
@@ -1222,61 +1221,6 @@ include transactions.journal`
 
 	assert.Equal(t, "Account (4)", foodDetail,
 		"expenses:food should show count 4 (3 from main + 1 from included), not just 1 from current file")
-}
-
-func TestCompletion_PayeeWithTemplateHasSnippetFormat(t *testing.T) {
-	srv := NewServer()
-
-	initParams := &protocol.InitializeParams{
-		Capabilities: protocol.ClientCapabilities{
-			TextDocument: &protocol.TextDocumentClientCapabilities{
-				Completion: &protocol.CompletionTextDocumentClientCapabilities{
-					CompletionItem: &protocol.CompletionTextDocumentClientCapabilitiesItem{
-						SnippetSupport: true,
-					},
-				},
-			},
-		},
-	}
-	_, err := srv.Initialize(context.Background(), initParams)
-	require.NoError(t, err)
-
-	content := `2024-01-10 Grocery Store
-    expenses:food  $50.00
-    assets:cash
-
-2024-01-15 `
-
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
-
-	params := &protocol.CompletionParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{
-				URI: "file:///test.journal",
-			},
-			Position: protocol.Position{Line: 4, Character: 11},
-		},
-	}
-
-	result, err := srv.Completion(context.Background(), params)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	var groceryItem *protocol.CompletionItem
-	for i := range result.Items {
-		if result.Items[i].Label == "Grocery Store" {
-			groceryItem = &result.Items[i]
-			break
-		}
-	}
-
-	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
-	assert.NotEmpty(t, groceryItem.InsertText, "Payee completion should include template postings")
-	assert.Equal(t, protocol.InsertTextFormatSnippet, groceryItem.InsertTextFormat,
-		"Payee with template should use snippet format for tabstops")
-	assert.Contains(t, groceryItem.InsertText, "${1:", "Template should have tabstop ${1:}")
-	assert.Contains(t, groceryItem.InsertText, "expenses:food", "Template should include account")
-	assert.Contains(t, groceryItem.InsertText, "$0", "Template should have final tabstop $0")
 }
 
 func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
@@ -2260,64 +2204,6 @@ func TestDetectDateFormat_FromCursorPosition(t *testing.T) {
 			format := detectDateFormat(tt.content, tt.cursorLine)
 			assert.Equal(t, tt.wantYear, format.HasYear,
 				"detectDateFormat with cursorLine=%d should have HasYear=%v", tt.cursorLine, tt.wantYear)
-		})
-	}
-}
-
-func TestBuildPayeeSnippetTemplate(t *testing.T) {
-	tests := []struct {
-		name       string
-		payee      string
-		postings   []analyzer.PostingTemplate
-		indentSize int
-		expected   string
-	}{
-		{
-			name:  "two postings with amounts - accounts and amounts as tab stops",
-			payee: "Grocery Store",
-			postings: []analyzer.PostingTemplate{
-				{Account: "expenses:food", Amount: "50.00", Commodity: "$", CommodityLeft: true},
-				{Account: "assets:cash", Amount: "50.00", Commodity: "$", CommodityLeft: true},
-			},
-			indentSize: 4,
-			expected:   "Grocery Store\n    ${1:expenses:food}  $${2:50.00}\n    ${3:assets:cash}  $${4:50.00}\n$0",
-		},
-		{
-			name:  "first posting with amount, second inferred",
-			payee: "Grocery Store",
-			postings: []analyzer.PostingTemplate{
-				{Account: "expenses:food", Amount: "50.00", Commodity: "$", CommodityLeft: true},
-				{Account: "assets:cash"},
-			},
-			indentSize: 4,
-			expected:   "Grocery Store\n    ${1:expenses:food}  $${2:50.00}\n    ${3:assets:cash}\n$0",
-		},
-		{
-			name:  "commodity on right side",
-			payee: "Purchase",
-			postings: []analyzer.PostingTemplate{
-				{Account: "expenses:misc", Amount: "100", Commodity: "EUR", CommodityLeft: false},
-				{Account: "assets:bank"},
-			},
-			indentSize: 4,
-			expected:   "Purchase\n    ${1:expenses:misc}  ${2:100} EUR\n    ${3:assets:bank}\n$0",
-		},
-		{
-			name:  "no amounts - only accounts as tab stops",
-			payee: "Transfer",
-			postings: []analyzer.PostingTemplate{
-				{Account: "assets:checking"},
-				{Account: "assets:savings"},
-			},
-			indentSize: 4,
-			expected:   "Transfer\n    ${1:assets:checking}\n    ${2:assets:savings}\n$0",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := buildPayeeSnippetTemplate(tt.payee, tt.postings, tt.indentSize)
-			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

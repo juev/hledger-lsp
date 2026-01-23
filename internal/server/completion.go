@@ -310,22 +310,11 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 
 	case ContextPayee:
 		for _, payee := range result.Payees {
-			postings := result.PayeeTemplates[payee]
-			hasTemplate := len(postings) > 0
-
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label:  payee,
 				Kind:   protocol.CompletionItemKindClass,
-				Detail: formatPayeeDetailWithCount(payee, counts, hasTemplate, settings.ShowCounts),
-			}
-
-			if hasTemplate && s.snippetSupport && settings.Snippets {
-				formattingSettings := s.getSettings().Formatting
-				item.InsertText = buildPayeeSnippetTemplate(payee, postings, formattingSettings.IndentSize)
-				item.InsertTextFormat = protocol.InsertTextFormatSnippet
-			}
-
-			items = append(items, item)
+				Detail: formatPayeeDetailWithCount(payee, counts, settings.ShowCounts),
+			})
 		}
 
 	case ContextCommodity:
@@ -390,20 +379,11 @@ func formatDetailWithCount(baseDetail, label string, counts map[string]int, show
 	return baseDetail
 }
 
-func formatPayeeDetailWithCount(payee string, counts map[string]int, hasTemplate, showCounts bool) string {
-	count := 0
+func formatPayeeDetailWithCount(payee string, counts map[string]int, showCounts bool) string {
 	if showCounts && counts != nil {
-		count = counts[payee]
-	}
-
-	if count > 0 && hasTemplate {
-		return fmt.Sprintf("Payee (%d) + template", count)
-	}
-	if count > 0 {
-		return fmt.Sprintf("Payee (%d)", count)
-	}
-	if hasTemplate {
-		return "Payee + template"
+		if count := counts[payee]; count > 0 {
+			return fmt.Sprintf("Payee (%d)", count)
+		}
 	}
 	return "Payee"
 }
@@ -879,37 +859,4 @@ func filterByPrefix(items []protocol.CompletionItem, query string) []scoredItem 
 		}
 	}
 	return result
-}
-
-func buildPayeeSnippetTemplate(payee string, postings []analyzer.PostingTemplate, indentSize int) string {
-	var sb strings.Builder
-
-	indent := strings.Repeat(" ", indentSize)
-
-	sb.WriteString(payee)
-
-	tabstopNum := 1
-	for _, p := range postings {
-		sb.WriteString("\n")
-		sb.WriteString(indent)
-
-		sb.WriteString(fmt.Sprintf("${%d:%s}", tabstopNum, p.Account))
-		tabstopNum++
-
-		if p.Amount != "" || p.Commodity != "" {
-			sb.WriteString("  ")
-			if p.CommodityLeft && p.Commodity != "" {
-				sb.WriteString(p.Commodity)
-			}
-			sb.WriteString(fmt.Sprintf("${%d:%s}", tabstopNum, p.Amount))
-			tabstopNum++
-			if !p.CommodityLeft && p.Commodity != "" {
-				sb.WriteString(" ")
-				sb.WriteString(p.Commodity)
-			}
-		}
-	}
-
-	sb.WriteString("\n$0")
-	return sb.String()
 }
