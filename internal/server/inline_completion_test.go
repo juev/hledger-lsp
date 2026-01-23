@@ -461,7 +461,7 @@ func TestInlineCompletion_DeterministicResults(t *testing.T) {
 	require.NoError(t, err)
 
 	var firstResult string
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
 		require.NoError(t, err)
 		require.Len(t, result.Items, 1)
@@ -473,4 +473,61 @@ func TestInlineCompletion_DeterministicResults(t *testing.T) {
 				"iteration %d: inline completion should return deterministic results", i)
 		}
 	}
+}
+
+func TestInlineCompletion_DeterministicWithMultiplePatterns(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	// Three transactions for "Store" with different patterns (each pattern appears once)
+	// This tests that when multiple patterns have the same count, results are deterministic
+	content := `2024-01-10 Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-12 Store
+    expenses:food  $100.00
+    assets:bank
+
+2024-01-14 Store
+    expenses:household  $30.00
+    assets:wallet
+
+2024-01-20 Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 13, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	var firstResult string
+	for i := range 10 {
+		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		require.NoError(t, err)
+		require.Len(t, result.Items, 1, "iteration %d: should return one completion item", i)
+
+		if i == 0 {
+			firstResult = result.Items[0].InsertText
+		} else {
+			assert.Equal(t, firstResult, result.Items[0].InsertText,
+				"iteration %d: inline completion should return deterministic results with multiple patterns", i)
+		}
+	}
+
+	// Verify the last pattern (expenses:household, assets:wallet) is selected
+	// because when counts are equal, we pick the one with highest lastIdx
+	assert.Contains(t, firstResult, "expenses:household",
+		"Should select pattern from last transaction when counts are equal")
+	assert.Contains(t, firstResult, "assets:wallet")
 }

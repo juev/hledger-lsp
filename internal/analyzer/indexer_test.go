@@ -484,3 +484,50 @@ func TestCollectPayeeTemplates_MostFrequentNotLast(t *testing.T) {
 	assert.Equal(t, "30", postings[0].Amount,
 		"Should use amount from the LAST transaction with the most frequent pattern")
 }
+
+func TestCollectPayeeTemplates_DeterministicWithMultiplePatterns(t *testing.T) {
+	// Three transactions for "Store" with different patterns (each pattern appears once)
+	// This tests that when multiple patterns have the same count, results are deterministic
+	input := `2024-01-10 Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-12 Store
+    expenses:food  $100.00
+    assets:bank
+
+2024-01-14 Store
+    expenses:household  $30.00
+    assets:wallet`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	// Run 20 times to detect non-determinism
+	var firstResult []PostingTemplate
+	for i := range 20 {
+		templates := CollectPayeeTemplates(journal)
+		require.Contains(t, templates, "Store")
+		postings := templates["Store"]
+
+		if i == 0 {
+			firstResult = postings
+		} else {
+			require.Equal(t, len(firstResult), len(postings),
+				"iteration %d: number of postings should be consistent", i)
+			for j := range postings {
+				assert.Equal(t, firstResult[j].Account, postings[j].Account,
+					"iteration %d, posting %d: account should be deterministic", i, j)
+				assert.Equal(t, firstResult[j].Amount, postings[j].Amount,
+					"iteration %d, posting %d: amount should be deterministic", i, j)
+			}
+		}
+	}
+
+	// The last transaction (expenses:household, assets:wallet) should always be selected
+	// because when counts are equal, we pick the one with highest lastIdx
+	require.Len(t, firstResult, 2)
+	assert.Equal(t, "expenses:household", firstResult[0].Account,
+		"Should deterministically select pattern from last transaction when counts are equal")
+	assert.Equal(t, "assets:wallet", firstResult[1].Account)
+}

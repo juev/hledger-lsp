@@ -175,7 +175,15 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 
 	result := make(map[string][]PostingTemplate)
 
-	for payee, txs := range payeeTxs {
+	// Sort payees for deterministic iteration
+	payeeNames := make([]string, 0, len(payeeTxs))
+	for payee := range payeeTxs {
+		payeeNames = append(payeeNames, payee)
+	}
+	sort.Strings(payeeNames)
+
+	for _, payee := range payeeNames {
+		txs := payeeTxs[payee]
 		if len(txs) == 0 {
 			continue
 		}
@@ -188,10 +196,18 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 			patternLastIdx[tx.pattern] = i
 		}
 
+		// Sort patterns for deterministic selection when counts are equal
+		patterns := make([]string, 0, len(patternCount))
+		for pattern := range patternCount {
+			patterns = append(patterns, pattern)
+		}
+		sort.Strings(patterns)
+
 		bestCount := 0
 		bestLastIdx := -1
 
-		for pattern, count := range patternCount {
+		for _, pattern := range patterns {
+			count := patternCount[pattern]
 			lastIdx := patternLastIdx[pattern]
 			if count > bestCount || (count == bestCount && lastIdx > bestLastIdx) {
 				bestCount = count
