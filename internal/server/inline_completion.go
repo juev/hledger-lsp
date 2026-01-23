@@ -39,7 +39,11 @@ type InlineCompletionList struct {
 	Items []InlineCompletionItem `json:"items"`
 }
 
-var dateRegex = regexp.MustCompile(`^\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2}`)
+// dateRegex matches transaction dates:
+// - Full: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD (with or without leading zeros)
+// - Short: MM-DD, M-D (year inferred from context)
+// - Secondary date after = is handled separately by space detection
+var dateRegex = regexp.MustCompile(`^(\d{4}[-/\.])?\d{1,2}[-/\.]\d{1,2}`)
 
 func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*InlineCompletionList, error) {
 	var p InlineCompletionParams
@@ -150,6 +154,10 @@ func extractPayeeFromHeader(line string) string {
 
 	if commentIdx := strings.Index(afterDate, ";"); commentIdx != -1 {
 		afterDate = strings.TrimSpace(afterDate[:commentIdx])
+	}
+
+	if pipeIdx := strings.Index(afterDate, "|"); pipeIdx != -1 {
+		afterDate = strings.TrimSpace(afterDate[:pipeIdx])
 	}
 
 	return afterDate

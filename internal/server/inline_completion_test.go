@@ -334,6 +334,11 @@ func TestIsTransactionHeaderLine(t *testing.T) {
 		{"comment line", "; this is a comment", false},
 		{"empty line", "", false},
 		{"include directive", "include other.journal", false},
+		{"secondary date with payee", "2024-01-15=2024-01-20 Grocery Store", true},
+		{"secondary date only", "2024-01-15=2024-01-20", false},
+		{"short date MM-DD", "01-15 Grocery Store", true},
+		{"short date M-D", "1-5 Coffee Shop", true},
+		{"short date only", "01-15", false},
 	}
 
 	for _, tt := range tests {
@@ -359,6 +364,12 @@ func TestExtractPayeeFromHeader(t *testing.T) {
 		{"with comment", "2024-01-15 Grocery Store ; comment", "Grocery Store"},
 		{"date only", "2024-01-15", ""},
 		{"empty", "", ""},
+		{"with pipe separator", "2024-01-15 Grocery Store | weekly", "Grocery Store"},
+		{"with pipe and comment", "2024-01-15 Payer | note ; tag:value", "Payer"},
+		{"with secondary date", "2024-01-15=2024-01-20 Grocery Store", "Grocery Store"},
+		{"secondary date with status", "2024-01-15=2024-01-20 * Grocery Store", "Grocery Store"},
+		{"short date MM-DD", "01-15 Coffee Shop", "Coffee Shop"},
+		{"short date M-D with status", "1-5 * Grocery", "Grocery"},
 	}
 
 	for _, tt := range tests {
