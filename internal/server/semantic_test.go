@@ -324,3 +324,190 @@ func TestSemanticTokens_CommentLength(t *testing.T) {
 		})
 	}
 }
+
+func TestSemanticTokens_TagsInComments(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		wantTags   int
+		wantTagPos []struct {
+			col    uint32
+			length uint32
+		}
+	}{
+		{
+			name:     "single tag with value",
+			content:  "; client:acme",
+			wantTags: 1,
+			wantTagPos: []struct {
+				col    uint32
+				length uint32
+			}{
+				{col: 2, length: 7}, // "client:" = 6+1 = 7 (value is now separate token)
+			},
+		},
+		{
+			name:     "multiple tags",
+			content:  "; client:acme, project:alpha",
+			wantTags: 2,
+			wantTagPos: []struct {
+				col    uint32
+				length uint32
+			}{
+				{col: 2, length: 7},  // "client:" = 6+1 = 7
+				{col: 15, length: 8}, // "project:" = 7+1 = 8
+			},
+		},
+		{
+			name:     "tag without value",
+			content:  "; billable:",
+			wantTags: 1,
+			wantTagPos: []struct {
+				col    uint32
+				length uint32
+			}{
+				{col: 2, length: 9}, // "billable:" = 8+1 = 9
+			},
+		},
+		{
+			name:     "tag in transaction comment",
+			content:  "2024-01-15 test  ; date:2024-01-20",
+			wantTags: 1,
+		},
+		{
+			name:     "unicode tag name (cyrillic)",
+			content:  "; клиент:acme",
+			wantTags: 1,
+		},
+		{
+			name:     "unicode tag name (chinese)",
+			content:  "; 项目:测试",
+			wantTags: 1,
+		},
+		{
+			name:     "date tag with space after colon",
+			content:  "; date: 2024-01-20",
+			wantTags: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens, "expected tokens")
+
+			var tagTokens []semanticToken
+			for _, tok := range tokens {
+				if tok.tokenType == TokenTypeTag {
+					tagTokens = append(tagTokens, tok)
+				}
+			}
+
+			assert.Len(t, tagTokens, tt.wantTags, "expected %d tag tokens, got %d", tt.wantTags, len(tagTokens))
+
+			if tt.wantTagPos != nil {
+				for i, pos := range tt.wantTagPos {
+					if i < len(tagTokens) {
+						assert.Equal(t, pos.col, tagTokens[i].col, "tag %d column mismatch", i)
+						assert.Equal(t, pos.length, tagTokens[i].length, "tag %d length mismatch", i)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSemanticTokens_TagNameAndValueSeparate(t *testing.T) {
+	tests := []struct {
+		name            string
+		content         string
+		wantTagTokens   int
+		wantValueTokens int
+		wantPositions   []struct {
+			tokenType uint32
+			col       uint32
+			length    uint32
+		}
+	}{
+		{
+			name:            "tag with value split into two tokens",
+			content:         "; client:acme",
+			wantTagTokens:   1,
+			wantValueTokens: 1,
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 7},      // "client:" = 7
+				{tokenType: TokenTypeTagValue, col: 9, length: 4}, // "acme" = 4
+			},
+		},
+		{
+			name:            "tag without value has no value token",
+			content:         "; billable:",
+			wantTagTokens:   1,
+			wantValueTokens: 0,
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 9}, // "billable:" = 9
+			},
+		},
+		{
+			name:            "multiple tags with values",
+			content:         "; client:acme, project:alpha",
+			wantTagTokens:   2,
+			wantValueTokens: 2,
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 7},       // "client:" = 7
+				{tokenType: TokenTypeTagValue, col: 9, length: 4},  // "acme" = 4
+				{tokenType: TokenTypeTag, col: 15, length: 8},      // "project:" = 8
+				{tokenType: TokenTypeTagValue, col: 23, length: 5}, // "alpha" = 5
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens, "expected tokens")
+
+			var tagTokens, valueTokens []semanticToken
+			for _, tok := range tokens {
+				if tok.tokenType == TokenTypeTag {
+					tagTokens = append(tagTokens, tok)
+				}
+				if tok.tokenType == TokenTypeTagValue {
+					valueTokens = append(valueTokens, tok)
+				}
+			}
+
+			assert.Len(t, tagTokens, tt.wantTagTokens, "tag token count mismatch")
+			assert.Len(t, valueTokens, tt.wantValueTokens, "value token count mismatch")
+
+			if tt.wantPositions != nil {
+				allTagTokens := make([]semanticToken, 0)
+				for _, tok := range tokens {
+					if tok.tokenType == TokenTypeTag || tok.tokenType == TokenTypeTagValue {
+						allTagTokens = append(allTagTokens, tok)
+					}
+				}
+
+				for i, pos := range tt.wantPositions {
+					if i < len(allTagTokens) {
+						assert.Equal(t, pos.tokenType, allTagTokens[i].tokenType, "token %d type mismatch", i)
+						assert.Equal(t, pos.col, allTagTokens[i].col, "token %d column mismatch", i)
+						assert.Equal(t, pos.length, allTagTokens[i].length, "token %d length mismatch", i)
+					}
+				}
+			}
+		})
+	}
+}

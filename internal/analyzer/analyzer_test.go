@@ -662,3 +662,157 @@ func TestAnalyzeResolved_PayeeTemplates_PrimaryOverridesIncludes(t *testing.T) {
 	assert.Equal(t, "assets:primary", templates[1].Account,
 		"second posting should be from primary file")
 }
+
+func TestAnalyzer_DateTag_EmptyValue(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date:
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Code == "EMPTY_DATE_TAG" {
+			warnings = append(warnings, d.Message)
+		}
+	}
+
+	require.Len(t, warnings, 1, "Expected exactly 1 empty date tag warning")
+	assert.Contains(t, warnings[0], "date", "Message should mention 'date' tag")
+}
+
+func TestAnalyzer_DateTag_ValidValue_NoDiagnostic(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date:2024-01-20
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "EMPTY_DATE_TAG" || d.Code == "INVALID_DATE_TAG" {
+			t.Errorf("Unexpected date tag diagnostic: %s - %s", d.Code, d.Message)
+		}
+	}
+}
+
+func TestAnalyzer_DateTag_InvalidValue(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date:invalid
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Code == "INVALID_DATE_TAG" {
+			warnings = append(warnings, d.Message)
+		}
+	}
+
+	require.Len(t, warnings, 1, "Expected exactly 1 invalid date tag warning")
+	assert.Contains(t, warnings[0], "date", "Message should mention 'date' tag")
+	assert.Contains(t, warnings[0], "invalid", "Message should contain the invalid value")
+}
+
+func TestAnalyzer_Date2Tag_EmptyValue(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date2:
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Code == "EMPTY_DATE_TAG" {
+			warnings = append(warnings, d.Message)
+		}
+	}
+
+	require.Len(t, warnings, 1, "Expected exactly 1 empty date2 tag warning")
+	assert.Contains(t, warnings[0], "date2", "Message should mention 'date2' tag")
+}
+
+func TestAnalyzer_DateTag_TransactionComment(t *testing.T) {
+	input := `2024-01-15 test  ; date:
+    expenses:food  $50
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var warnings []string
+	for _, d := range result.Diagnostics {
+		if d.Code == "EMPTY_DATE_TAG" {
+			warnings = append(warnings, d.Message)
+		}
+	}
+
+	require.Len(t, warnings, 1, "Expected exactly 1 empty date tag warning for transaction comment")
+}
+
+func TestAnalyzer_DateTag_WithSpaceAfterColon_ValidValue(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date: 2024-01-20
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	for _, d := range result.Diagnostics {
+		if d.Code == "EMPTY_DATE_TAG" || d.Code == "INVALID_DATE_TAG" {
+			t.Errorf("Unexpected date tag diagnostic: %s - %s", d.Code, d.Message)
+		}
+	}
+}
+
+func TestAnalyzer_DateTag_DiagnosticRangePointsToTag(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50  ; date:invalid
+    assets:cash  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var diag *Diagnostic
+	for i := range result.Diagnostics {
+		if result.Diagnostics[i].Code == "INVALID_DATE_TAG" {
+			diag = &result.Diagnostics[i]
+			break
+		}
+	}
+
+	require.NotNil(t, diag, "Expected INVALID_DATE_TAG diagnostic")
+
+	// Input: "    expenses:food  $50  ; date:invalid"
+	// Tag "date:invalid" starts at column 27 (1-indexed):
+	// - 4 spaces + "expenses:food" (13) + "  " (2) + "$50" (3) + "  " (2) + ";" (1) + " " (1) = 26
+	// - Then "date" starts at column 27
+	// Line 2 (1-indexed) is the posting line
+	assert.Equal(t, 2, diag.Range.Start.Line, "diagnostic should point to posting line")
+	assert.Equal(t, 27, diag.Range.Start.Column, "diagnostic should start at tag position, not posting start")
+}

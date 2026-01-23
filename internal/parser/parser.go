@@ -295,7 +295,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	if p.current.Type == TokenComment {
 		posting.Comment = p.current.Value
-		posting.Tags = parseTags(p.current.Value)
+		posting.Tags = parseTags(p.current.Value, p.current.Pos)
 		p.advance()
 	}
 
@@ -432,6 +432,8 @@ func (p *Parser) parseDirective() ast.Directive {
 		return p.parsePriceDirective(pos)
 	case "Y", "year":
 		return p.parseYearDirective(pos)
+	case "D":
+		return p.parseDefaultCommodityDirective(pos)
 	default:
 		p.skipToNextLine()
 		return nil
@@ -464,7 +466,7 @@ func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 
 	if p.current.Type == TokenComment {
 		dir.Comment = p.current.Value
-		dir.Tags = parseTags(p.current.Value)
+		dir.Tags = parseTags(p.current.Value, p.current.Pos)
 		p.advance()
 	}
 
@@ -483,12 +485,35 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
 
-	// Handle inline format: "commodity 1.000,00 USD" (number first, then symbol)
-	if p.current.Type == TokenNumber {
+	// Handle inline format: "commodity $1000.00" (symbol first, then number)
+	switch p.current.Type {
+	case TokenCommodity:
+		symbol := p.current.Value
+		dir.Commodity = ast.Commodity{
+			Symbol: symbol,
+			Range:  ast.Range{Start: toASTPosition(p.current.Pos)},
+		}
 		p.advance()
-	}
 
-	if p.current.Type == TokenCommodity || p.current.Type == TokenText {
+		// Collect number part for format (no space for currency symbols)
+		if p.current.Type == TokenNumber {
+			dir.Format = symbol + p.current.Value
+			p.advance()
+		}
+	case TokenNumber:
+		// Handle inline format: "commodity 1.000,00 USD" (number first, then symbol)
+		number := p.current.Value
+		p.advance()
+
+		if p.current.Type == TokenCommodity || p.current.Type == TokenText {
+			dir.Commodity = ast.Commodity{
+				Symbol: p.current.Value,
+				Range:  ast.Range{Start: toASTPosition(p.current.Pos)},
+			}
+			dir.Format = number + " " + p.current.Value
+			p.advance()
+		}
+	case TokenText:
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
 			Range:  ast.Range{Start: toASTPosition(p.current.Pos)},
@@ -635,6 +660,39 @@ func (p *Parser) parseSubdirectives() map[string]string {
 	return subdirs
 }
 
+func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive {
+	dir := ast.DefaultCommodityDirective{
+		Range: ast.Range{Start: toASTPosition(startPos)},
+	}
+
+	// Handle "D $1,000.00" (symbol first, then number)
+	switch p.current.Type {
+	case TokenCommodity:
+		symbol := p.current.Value
+		dir.Symbol = symbol
+		p.advance()
+
+		if p.current.Type == TokenNumber {
+			dir.Format = symbol + p.current.Value
+			p.advance()
+		}
+	case TokenNumber:
+		// Handle "D 1.000,00 EUR" (number first, then symbol)
+		number := p.current.Value
+		p.advance()
+
+		if p.current.Type == TokenCommodity || p.current.Type == TokenText {
+			dir.Symbol = p.current.Value
+			dir.Format = number + " " + p.current.Value
+			p.advance()
+		}
+	}
+
+	dir.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return dir
+}
+
 func (p *Parser) parseYearDirective(startPos Position) ast.Directive {
 	if p.current.Type != TokenNumber {
 		p.error("expected year")
@@ -664,41 +722,65 @@ func (p *Parser) parseComment() ast.Comment {
 	comment := ast.Comment{
 		Text:  p.current.Value,
 		Range: ast.Range{Start: toASTPosition(p.current.Pos)},
-		Tags:  parseTags(p.current.Value),
+		Tags:  parseTags(p.current.Value, p.current.Pos),
 	}
 	p.advance()
 	return comment
 }
 
-func parseTags(text string) []ast.Tag {
+func parseTags(text string, basePos Position) []ast.Tag {
 	if !strings.Contains(text, ":") {
 		return nil
 	}
 
 	var tags []ast.Tag
 	parts := strings.Split(text, ",")
+	searchStart := 0
 
 	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		colonIdx := strings.Index(part, ":")
+		trimmed := strings.TrimSpace(part)
+		colonIdx := strings.Index(trimmed, ":")
 		if colonIdx == -1 {
 			continue
 		}
 
-		name := strings.TrimSpace(part[:colonIdx])
+		name := strings.TrimSpace(trimmed[:colonIdx])
 		if name == "" || !isValidTagName(name) {
 			continue
 		}
 
 		value := ""
-		if colonIdx+1 < len(part) {
-			value = strings.TrimSpace(part[colonIdx+1:])
+		if colonIdx+1 < len(trimmed) {
+			value = strings.TrimSpace(trimmed[colonIdx+1:])
 		}
+
+		tagStart := strings.Index(text[searchStart:], name+":")
+		if tagStart == -1 {
+			continue
+		}
+		tagStart += searchStart
+
+		tagEnd := tagStart + len(name) + 1
+		if value != "" {
+			valueStart := strings.Index(text[tagEnd:], value)
+			if valueStart != -1 {
+				tagEnd = tagEnd + valueStart + len(value)
+			}
+		}
+
+		startCol := basePos.Column + 1 + tagStart
+		endCol := basePos.Column + 1 + tagEnd
 
 		tags = append(tags, ast.Tag{
 			Name:  name,
 			Value: value,
+			Range: ast.Range{
+				Start: ast.Position{Line: basePos.Line, Column: startCol, Offset: basePos.Offset + 1 + tagStart},
+				End:   ast.Position{Line: basePos.Line, Column: endCol, Offset: basePos.Offset + 1 + tagEnd},
+			},
 		})
+
+		searchStart = tagEnd
 	}
 
 	return tags

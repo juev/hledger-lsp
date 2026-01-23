@@ -84,6 +84,8 @@ hledger-lsp uses custom semantic token types for domain-specific highlighting:
 | Directive | `directive` | `account`, `include` |
 | Code | `code` | `(123)` |
 | Status | `status` | `*`, `!` |
+| Tag | `tag` | `client:` |
+| Tag Value | `tagValue` | `acme` (in `; client:acme`) |
 | Comment | `comment` | `; note` |
 
 ### Customizing Colors with hledger-vscode
@@ -102,6 +104,8 @@ With hledger-vscode, use the `:hledger` suffix to apply colors only to hledger f
       "directive:hledger": "#C586C0",
       "code:hledger": "#9CDCFE",
       "status:hledger": "#D4D4D4",
+      "tag:hledger": "#FF8C00",
+      "tagValue:hledger": "#98FB98",
       "comment:hledger": "#6A9955"
     }
   }
@@ -124,6 +128,8 @@ Without a registered language ID, colors apply globally:
       "directive": "#C586C0",
       "code": "#9CDCFE",
       "status": "#D4D4D4",
+      "tag": "#FF8C00",
+      "tagValue": "#98FB98",
       "comment": "#6A9955"
     }
   }

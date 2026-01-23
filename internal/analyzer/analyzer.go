@@ -66,6 +66,9 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
 			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
 		}
+
+		dateTagDiags := validateDateTags(tx)
+		result.Diagnostics = append(result.Diagnostics, dateTagDiags...)
 	}
 
 	return result
@@ -124,6 +127,9 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
 			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
 		}
+
+		dateTagDiags := validateDateTags(tx)
+		result.Diagnostics = append(result.Diagnostics, dateTagDiags...)
 	}
 
 	return result
@@ -527,4 +533,77 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 		}
 	}
 	return diags
+}
+
+func validateDateTags(tx *ast.Transaction) []Diagnostic {
+	var diags []Diagnostic
+
+	checkTag := func(tag ast.Tag) {
+		name := strings.ToLower(tag.Name)
+		if name != "date" && name != "date2" {
+			return
+		}
+
+		if strings.TrimSpace(tag.Value) == "" {
+			diags = append(diags, Diagnostic{
+				Range:    tag.Range,
+				Severity: SeverityWarning,
+				Code:     "EMPTY_DATE_TAG",
+				Message:  fmt.Sprintf("tag '%s' requires a date value", tag.Name),
+			})
+			return
+		}
+
+		if !isValidDateValue(tag.Value) {
+			diags = append(diags, Diagnostic{
+				Range:    tag.Range,
+				Severity: SeverityWarning,
+				Code:     "INVALID_DATE_TAG",
+				Message:  fmt.Sprintf("tag '%s' has invalid date value: %s", tag.Name, tag.Value),
+			})
+		}
+	}
+
+	// Check transaction comments
+	for _, comment := range tx.Comments {
+		for _, tag := range comment.Tags {
+			checkTag(tag)
+		}
+	}
+
+	// Check posting tags
+	for _, posting := range tx.Postings {
+		for _, tag := range posting.Tags {
+			checkTag(tag)
+		}
+	}
+
+	return diags
+}
+
+func isValidDateValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+
+	// Simple date validation: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+	// Also allow partial dates like MM-DD or M-D
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '-' || r == '/' || r == '.'
+	})
+
+	if len(parts) < 2 || len(parts) > 3 {
+		return false
+	}
+
+	for _, part := range parts {
+		for _, ch := range part {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+
+	return true
 }

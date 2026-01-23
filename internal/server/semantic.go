@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
+	"unicode"
 
 	"go.lsp.dev/protocol"
 
@@ -27,6 +29,9 @@ const (
 	TokenTypeComment  = 9
 	TokenTypeString   = 10
 	TokenTypeOperator = 11
+
+	// Additional custom types
+	TokenTypeTagValue = 12
 )
 
 const (
@@ -61,6 +66,8 @@ func GetSemanticTokensLegend() protocol.SemanticTokensLegend {
 			protocol.SemanticTokenComment,
 			protocol.SemanticTokenString,
 			protocol.SemanticTokenOperator,
+			// Additional custom types (index 12+)
+			"tagValue",
 		},
 		TokenModifiers: []protocol.SemanticTokenModifiers{
 			protocol.SemanticTokenModifierDeclaration,
@@ -304,6 +311,15 @@ func tokenizeForSemantics(content string) []semanticToken {
 			isPayee = false
 		}
 
+		// Handle comments with tags - extract tag tokens
+		if tok.Type == parser.TokenComment {
+			tagTokens := extractTagTokensFromComment(tok)
+			if len(tagTokens) > 0 {
+				tokens = append(tokens, tagTokens...)
+				continue
+			}
+		}
+
 		length := uint32(lsputil.UTF16Len(tok.Value))
 		if tok.Type == parser.TokenComment {
 			length++
@@ -319,6 +335,95 @@ func tokenizeForSemantics(content string) []semanticToken {
 	}
 
 	return tokens
+}
+
+func extractTagTokensFromComment(tok parser.Token) []semanticToken {
+	commentText := tok.Value
+	if !strings.Contains(commentText, ":") {
+		return nil
+	}
+
+	var tokens []semanticToken
+	baseLine := uint32(tok.Pos.Line - 1)
+	baseCol := uint32(tok.Pos.Column - 1)
+
+	parts := strings.Split(commentText, ",")
+	searchStart := 0
+
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		colonIdx := strings.Index(trimmed, ":")
+		if colonIdx == -1 {
+			continue
+		}
+
+		name := strings.TrimSpace(trimmed[:colonIdx])
+		if name == "" || !isValidTagName(name) {
+			continue
+		}
+
+		// Find the position of this tag in the original comment text
+		tagStart := strings.Index(commentText[searchStart:], name+":")
+		if tagStart == -1 {
+			continue
+		}
+		tagStart += searchStart
+
+		// Tag name with colon: "name:"
+		tagNameWithColonLen := uint32(len(name) + 1)
+
+		// +1 to baseCol accounts for the semicolon that starts the comment
+		tokens = append(tokens, semanticToken{
+			line:      baseLine,
+			col:       baseCol + 1 + uint32(tagStart),
+			length:    tagNameWithColonLen,
+			tokenType: TokenTypeTag,
+			modifiers: 0,
+		})
+
+		// Tag value (if present)
+		if colonIdx+1 < len(trimmed) {
+			value := strings.TrimSpace(trimmed[colonIdx+1:])
+			if value != "" {
+				// Find where the value starts in the original text
+				tagNameEnd := tagStart + len(name) + 1
+				valueStart := strings.Index(commentText[tagNameEnd:], value)
+				if valueStart != -1 {
+					tokens = append(tokens, semanticToken{
+						line:      baseLine,
+						col:       baseCol + 1 + uint32(tagNameEnd+valueStart),
+						length:    uint32(len(value)),
+						tokenType: TokenTypeTagValue,
+						modifiers: 0,
+					})
+					searchStart = tagNameEnd + valueStart + len(value)
+					continue
+				}
+			}
+		}
+
+		searchStart = tagStart + len(name) + 1
+	}
+
+	// If no valid tags found, return nil (comment will be handled normally)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	return tokens
+}
+
+func isValidTagName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	for _, r := range name {
+		// Allow letters (any script: Latin, Cyrillic, CJK, etc.), digits, underscores, and hyphens
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func mapTokenType(t parser.TokenType) (uint32, bool) {
