@@ -12,15 +12,16 @@ import (
 )
 
 type featureSettings struct {
-	Hover           bool
-	Completion      bool
-	Formatting      bool
-	Diagnostics     bool
-	SemanticTokens  bool
-	CodeActions     bool
-	FoldingRanges   bool
-	DocumentLinks   bool
-	WorkspaceSymbol bool
+	Hover            bool
+	Completion       bool
+	Formatting       bool
+	Diagnostics      bool
+	SemanticTokens   bool
+	CodeActions      bool
+	FoldingRanges    bool
+	DocumentLinks    bool
+	WorkspaceSymbol  bool
+	InlineCompletion bool
 }
 
 type completionSettings struct {
@@ -60,15 +61,16 @@ type serverSettings struct {
 func defaultServerSettings() serverSettings {
 	return serverSettings{
 		Features: featureSettings{
-			Hover:           true,
-			Completion:      true,
-			Formatting:      true,
-			Diagnostics:     true,
-			SemanticTokens:  true,
-			CodeActions:     true,
-			FoldingRanges:   true,
-			DocumentLinks:   true,
-			WorkspaceSymbol: true,
+			Hover:            true,
+			Completion:       true,
+			Formatting:       true,
+			Diagnostics:      true,
+			SemanticTokens:   true,
+			CodeActions:      true,
+			FoldingRanges:    true,
+			DocumentLinks:    true,
+			WorkspaceSymbol:  true,
+			InlineCompletion: false,
 		},
 		Completion: completionSettings{
 			MaxResults:    50,
@@ -201,6 +203,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(featuresRaw["workspaceSymbol"]); ok {
 			settings.Features.WorkspaceSymbol = value
 		}
+		if value, ok := toBool(featuresRaw["inlineCompletion"]); ok {
+			settings.Features.InlineCompletion = value
+		}
 	}
 	if value, ok := toBool(raw["features.hover"]); ok {
 		settings.Features.Hover = value
@@ -228,6 +233,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["features.workspaceSymbol"]); ok {
 		settings.Features.WorkspaceSymbol = value
+	}
+	if value, ok := toBool(raw["features.inlineCompletion"]); ok {
+		settings.Features.InlineCompletion = value
 	}
 
 	// Completion

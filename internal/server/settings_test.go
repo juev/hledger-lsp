@@ -36,6 +36,10 @@ func TestDefaultServerSettings(t *testing.T) {
 	if !s.Features.CodeActions {
 		t.Error("Features.CodeActions should default to true")
 	}
+	// InlineCompletion should default to false
+	if s.Features.InlineCompletion {
+		t.Error("Features.InlineCompletion should default to false")
+	}
 
 	// Completion settings
 	if !s.Completion.Snippets {
@@ -84,12 +88,13 @@ func TestParseSettingsFromRaw_Features(t *testing.T) {
 
 	raw := map[string]interface{}{
 		"features": map[string]interface{}{
-			"hover":          false,
-			"completion":     false,
-			"formatting":     false,
-			"diagnostics":    false,
-			"semanticTokens": false,
-			"codeActions":    false,
+			"hover":            false,
+			"completion":       false,
+			"formatting":       false,
+			"diagnostics":      false,
+			"semanticTokens":   false,
+			"codeActions":      false,
+			"inlineCompletion": true,
 		},
 	}
 
@@ -112,6 +117,9 @@ func TestParseSettingsFromRaw_Features(t *testing.T) {
 	}
 	if result.Features.CodeActions {
 		t.Error("Features.CodeActions should be false")
+	}
+	if !result.Features.InlineCompletion {
+		t.Error("Features.InlineCompletion should be true")
 	}
 }
 
@@ -220,6 +228,7 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 
 	raw := map[string]interface{}{
 		"features.hover":                 false,
+		"features.inlineCompletion":      true,
 		"completion.snippets":            false,
 		"diagnostics.undeclaredAccounts": false,
 		"formatting.indentSize":          8,
@@ -231,6 +240,9 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 
 	if result.Features.Hover {
 		t.Error("Features.Hover should be false")
+	}
+	if !result.Features.InlineCompletion {
+		t.Error("Features.InlineCompletion should be true")
 	}
 	if result.Completion.Snippets {
 		t.Error("Completion.Snippets should be false")

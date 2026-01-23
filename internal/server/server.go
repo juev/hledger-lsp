@@ -136,7 +136,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		}
 	}
 
-	if settings.Features.Completion {
+	if settings.Features.InlineCompletion {
 		caps.Experimental = map[string]any{
 			"inlineCompletionProvider": true,
 		}

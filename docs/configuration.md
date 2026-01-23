@@ -17,6 +17,7 @@ Enable or disable specific LSP features.
 | `hledger.features.foldingRanges` | `true` | Folding ranges for transactions and directives |
 | `hledger.features.documentLinks` | `true` | Clickable links for include directives |
 | `hledger.features.workspaceSymbol` | `true` | Workspace symbol search |
+| `hledger.features.inlineCompletion` | `false` | Ghost text completions for transaction templates |
 
 ## Completion
 
@@ -70,6 +71,7 @@ Enable or disable specific LSP features.
   "hledger.features.foldingRanges": true,
   "hledger.features.documentLinks": true,
   "hledger.features.workspaceSymbol": true,
+  "hledger.features.inlineCompletion": false,
   "hledger.completion.maxResults": 100,
   "hledger.completion.snippets": true,
   "hledger.completion.fuzzyMatching": true,
@@ -101,6 +103,7 @@ lspconfig.hledger_lsp.setup({
         foldingRanges = true,
         documentLinks = true,
         workspaceSymbol = true,
+        inlineCompletion = false,
       },
       completion = {
         maxResults = 100,
@@ -139,7 +142,7 @@ lspconfig.hledger_lsp.setup({
   '(:hledger
     (:features (:hover t :completion t :formatting t :diagnostics t
                 :semanticTokens t :codeActions t :foldingRanges t
-                :documentLinks t :workspaceSymbol t)
+                :documentLinks t :workspaceSymbol t :inlineCompletion nil)
      :completion (:maxResults 100 :snippets t :fuzzyMatching t :showCounts t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)
