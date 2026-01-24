@@ -23,6 +23,8 @@ const (
 	HoverPayee
 	HoverCommodity
 	HoverDate
+	HoverTag
+	HoverTagValue
 )
 
 type hoverElement struct {
@@ -33,6 +35,8 @@ type hoverElement struct {
 	cost        *ast.Cost
 	payee       string
 	transaction *ast.Transaction
+	tagName     string
+	tagValue    string
 }
 
 func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
@@ -118,6 +122,13 @@ func findElementAtPosition(journal *ast.Journal, pos protocol.Position) *hoverEl
 			}
 		}
 
+		// Check transaction-level tags (in comments)
+		for _, comment := range tx.Comments {
+			if elem := findTagAtPosition(comment.Tags, pos); elem != nil {
+				return elem
+			}
+		}
+
 		for j := range tx.Postings {
 			p := &tx.Postings[j]
 
@@ -137,6 +148,11 @@ func findElementAtPosition(journal *ast.Journal, pos protocol.Position) *hoverEl
 					amount:  p.Amount,
 					cost:    p.Cost,
 				}
+			}
+
+			// Check posting-level tags
+			if elem := findTagAtPosition(p.Tags, pos); elem != nil {
+				return elem
 			}
 		}
 	}
@@ -205,6 +221,10 @@ func buildHoverContentWithTransactions(element *hoverElement, balances analyzer.
 		return buildPayeeHoverWithTransactions(element.payee, transactions)
 	case HoverDate:
 		return buildDateHover(element.transaction)
+	case HoverTag:
+		return buildTagHover(element.tagName, transactions)
+	case HoverTagValue:
+		return buildTagValueHover(element.tagName, element.tagValue, transactions)
 	default:
 		return ""
 	}
@@ -309,4 +329,141 @@ func astRangeToProtocol(rng ast.Range) *protocol.Range {
 			Character: uint32(rng.End.Column - 1),
 		},
 	}
+}
+
+func findTagAtPosition(tags []ast.Tag, pos protocol.Position) *hoverElement {
+	for _, tag := range tags {
+		if !positionInRange(pos, tag.Range) {
+			continue
+		}
+
+		// Determine if cursor is on tag name or tag value
+		// Tag format: name:value
+		// tag.Range.Start is at the beginning of name
+		colonCol := tag.Range.Start.Column + lsputil.UTF16Len(tag.Name)
+		cursorCol := int(pos.Character) + 1 // convert to 1-based
+
+		if cursorCol <= colonCol {
+			// Cursor is on tag name
+			return &hoverElement{
+				context: HoverTag,
+				rng: ast.Range{
+					Start: tag.Range.Start,
+					End: ast.Position{
+						Line:   tag.Range.Start.Line,
+						Column: colonCol,
+						Offset: tag.Range.Start.Offset + len(tag.Name),
+					},
+				},
+				tagName: tag.Name,
+			}
+		}
+
+		// Cursor is on tag value (after the colon)
+		return &hoverElement{
+			context: HoverTagValue,
+			rng: ast.Range{
+				Start: ast.Position{
+					Line:   tag.Range.Start.Line,
+					Column: colonCol + 1,
+					Offset: tag.Range.Start.Offset + len(tag.Name) + 1,
+				},
+				End: tag.Range.End,
+			},
+			tagName:  tag.Name,
+			tagValue: tag.Value,
+		}
+	}
+	return nil
+}
+
+func buildTagHover(tagName string, transactions []ast.Transaction) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "**Tag:** `%s`\n\n", tagName)
+
+	count := countTagUsage(tagName, transactions)
+	fmt.Fprintf(&sb, "**Usage:** %d\n\n", count)
+
+	values := collectTagValues(tagName, transactions)
+	if len(values) > 0 {
+		sb.WriteString("**Values:**\n")
+		for _, v := range values {
+			if v == "" {
+				fmt.Fprint(&sb, "- *(empty)*\n")
+			} else {
+				fmt.Fprintf(&sb, "- `%s`\n", v)
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+func buildTagValueHover(tagName, tagValue string, transactions []ast.Transaction) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "**Tag:** `%s`\n", tagName)
+	if tagValue == "" {
+		sb.WriteString("**Value:** *(empty)*\n\n")
+	} else {
+		fmt.Fprintf(&sb, "**Value:** `%s`\n\n", tagValue)
+	}
+
+	count := countTagValueUsage(tagName, tagValue, transactions)
+	fmt.Fprintf(&sb, "**Usage:** %d", count)
+
+	return sb.String()
+}
+
+func forEachTag(transactions []ast.Transaction, fn func(ast.Tag)) {
+	for i := range transactions {
+		tx := &transactions[i]
+		for _, comment := range tx.Comments {
+			for _, tag := range comment.Tags {
+				fn(tag)
+			}
+		}
+		for j := range tx.Postings {
+			for _, tag := range tx.Postings[j].Tags {
+				fn(tag)
+			}
+		}
+	}
+}
+
+func countTagUsage(tagName string, transactions []ast.Transaction) int {
+	count := 0
+	forEachTag(transactions, func(tag ast.Tag) {
+		if tag.Name == tagName {
+			count++
+		}
+	})
+	return count
+}
+
+func countTagValueUsage(tagName, tagValue string, transactions []ast.Transaction) int {
+	count := 0
+	forEachTag(transactions, func(tag ast.Tag) {
+		if tag.Name == tagName && tag.Value == tagValue {
+			count++
+		}
+	})
+	return count
+}
+
+func collectTagValues(tagName string, transactions []ast.Transaction) []string {
+	valuesSet := make(map[string]struct{})
+	forEachTag(transactions, func(tag ast.Tag) {
+		if tag.Name == tagName {
+			valuesSet[tag.Value] = struct{}{}
+		}
+	})
+
+	values := make([]string, 0, len(valuesSet))
+	for v := range valuesSet {
+		values = append(values, v)
+	}
+	sort.Strings(values)
+	return values
 }

@@ -241,3 +241,254 @@ func TestHover_AmountWithCost(t *testing.T) {
 	content = strings.ToLower(result.Contents.Value)
 	assert.True(t, strings.Contains(content, "10") || strings.Contains(content, "aapl"))
 }
+
+func TestHover_TagName(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery ; project:home
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 restaurant ; project:work
+    expenses:food  $30
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over "project" tag name (position right after semicolon and space)
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 21}, // on "project"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "project")
+	assert.Contains(t, result.Contents.Value, "2") // usage count
+}
+
+func TestHover_TagValue(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery ; project:home
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 restaurant ; project:home
+    expenses:food  $30
+    assets:cash
+
+2024-01-17 office ; project:work
+    expenses:food  $20
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over "home" tag value
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 30}, // on "home"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "project")
+	assert.Contains(t, result.Contents.Value, "home")
+	assert.Contains(t, result.Contents.Value, "2") // usage count for project:home
+}
+
+func TestHover_PostingTag(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery
+    expenses:food  $50 ; category:groceries
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over posting tag
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 1, Character: 27}, // on "category"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "category")
+}
+
+func TestHover_TagWithValuesListed(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery ; project:home
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 restaurant ; project:work
+    expenses:food  $30
+    assets:cash
+
+2024-01-17 office ; project:office
+    expenses:food  $20
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over tag name to see all values
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 21}, // on "project"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should show all unique values for this tag
+	assert.Contains(t, result.Contents.Value, "Values")
+}
+
+func TestHover_TagWithEmptyValue(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery ; completed:
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over tag name with empty value
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 21}, // on "completed"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "completed")
+	assert.Contains(t, result.Contents.Value, "(empty)")
+}
+
+func TestHover_TagValueEmpty(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 grocery ; done:
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over empty tag value (position after the colon)
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 26}, // after "done:"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "done")
+	assert.Contains(t, result.Contents.Value, "(empty)")
+}
+
+func TestHover_TagWithUnicodeValue(t *testing.T) {
+	srv := NewServer()
+	// ASCII tag name with Unicode value
+	content := `2024-01-15 grocery ; project:дом
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 restaurant ; project:работа
+    expenses:food  $30
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over ASCII tag name "project"
+	// "2024-01-15 grocery ; " = 21 chars, so "project" starts at char 21
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 22}, // on "project"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "project")
+	assert.Contains(t, result.Contents.Value, "2") // usage count
+	// Check that Unicode values are listed
+	assert.Contains(t, result.Contents.Value, "дом")
+	assert.Contains(t, result.Contents.Value, "работа")
+}
+
+func TestHover_TagValueWithUnicodeContent(t *testing.T) {
+	srv := NewServer()
+	// ASCII tag name with Unicode value
+	content := `2024-01-15 grocery ; project:дом
+    expenses:food  $50
+    assets:cash
+
+2024-01-16 restaurant ; project:дом
+    expenses:food  $30
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over Unicode tag value "дом"
+	// "2024-01-15 grocery ; project:" = 30 chars, "дом" starts at char 30
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 0, Character: 30}, // on "дом"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Tag")
+	assert.Contains(t, result.Contents.Value, "project")
+	assert.Contains(t, result.Contents.Value, "дом")
+	assert.Contains(t, result.Contents.Value, "2") // usage count for project:дом
+}
