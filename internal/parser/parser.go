@@ -152,6 +152,7 @@ func (p *Parser) parseDate() *ast.Date {
 
 	value := p.current.Value
 	pos := p.current.Pos
+	end := p.current.End
 	p.advance()
 
 	var sep byte
@@ -184,7 +185,7 @@ func (p *Parser) parseDate() *ast.Date {
 			Year:  p.defaultYear,
 			Month: month,
 			Day:   day,
-			Range: ast.Range{Start: toASTPosition(pos)},
+			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
 		}
 	case 3:
 		year, err := strconv.Atoi(parts[0])
@@ -206,7 +207,7 @@ func (p *Parser) parseDate() *ast.Date {
 			Year:  year,
 			Month: month,
 			Day:   day,
-			Range: ast.Range{Start: toASTPosition(pos)},
+			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
 		}
 	default:
 		p.errorAt(pos, "invalid date format: %s", value)
@@ -270,7 +271,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	posting.Account = ast.Account{
 		Name:  p.current.Value,
-		Range: ast.Range{Start: toASTPosition(p.current.Pos)},
+		Range: ast.Range{Start: toASTPosition(p.current.Pos), End: toASTPosition(p.current.End)},
 	}
 	p.advance()
 

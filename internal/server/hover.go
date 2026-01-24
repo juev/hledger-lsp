@@ -161,28 +161,11 @@ func findElementAtPosition(journal *ast.Journal, pos protocol.Position) *hoverEl
 }
 
 func computeDateRange(tx *ast.Transaction) ast.Range {
-	start := tx.Date.Range.Start
-	return ast.Range{
-		Start: start,
-		End: ast.Position{
-			Line:   start.Line,
-			Column: start.Column + 10,
-			Offset: start.Offset + 10,
-		},
-	}
+	return tx.Date.Range
 }
 
 func computeAccountRange(account *ast.Account) ast.Range {
-	start := account.Range.Start
-	nameLen := lsputil.UTF16Len(account.Name)
-	return ast.Range{
-		Start: start,
-		End: ast.Position{
-			Line:   start.Line,
-			Column: start.Column + nameLen,
-			Offset: start.Offset + len(account.Name),
-		},
-	}
+	return account.Range
 }
 
 func getPayeeOrDescription(tx *ast.Transaction) string {
@@ -193,7 +176,7 @@ func getPayeeOrDescription(tx *ast.Transaction) string {
 }
 
 func estimatePayeeRange(tx *ast.Transaction, payee string) ast.Range {
-	startCol := tx.Date.Range.Start.Column + 11
+	startCol := tx.Date.Range.End.Column + 1
 	if tx.Status != ast.StatusNone {
 		startCol += 2
 	}

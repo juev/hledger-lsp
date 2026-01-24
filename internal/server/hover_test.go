@@ -492,3 +492,95 @@ func TestHover_TagValueWithUnicodeContent(t *testing.T) {
 	assert.Contains(t, result.Contents.Value, "дом")
 	assert.Contains(t, result.Contents.Value, "2") // usage count for project:дом
 }
+
+func TestHover_PartialDateWithComment(t *testing.T) {
+	srv := NewServer()
+	// Y 2024 directive sets default year for partial dates
+	content := `Y 2024
+
+01-22 Магазин ; просто текст
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over plain comment text (no tags) - should return nil
+	// "01-22 Магазин ; просто текст"
+	// Position on "просто" which is in the comment area
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 2, Character: 18}, // on "просто"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	// Comment without tags should not show any hover
+	assert.Nil(t, result)
+}
+
+func TestHover_PartialDatePayee(t *testing.T) {
+	srv := NewServer()
+	content := `Y 2024
+
+01-22 Магазин
+    expenses:food  $50
+    assets:cash
+
+01-23 Магазин
+    expenses:food  $30
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over "Магазин" payee with partial date
+	// "01-22 Магазин" - payee starts at column 6 (0-indexed: 6)
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 2, Character: 8}, // on "Магазин"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Payee")
+	assert.Contains(t, result.Contents.Value, "Магазин")
+	assert.Contains(t, result.Contents.Value, "2") // transaction count
+}
+
+func TestHover_PartialDateWithStatus(t *testing.T) {
+	srv := NewServer()
+	content := `Y 2024
+
+01-22 * Магазин
+    expenses:food  $50
+    assets:cash`
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	// Hover over "Магазин" payee with partial date and status
+	// "01-22 * Магазин" - payee starts at column 8 (0-indexed: 8)
+	params := &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 2, Character: 10}, // on "Магазин"
+		},
+	}
+
+	result, err := srv.Hover(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, result.Contents.Value, "Payee")
+	assert.Contains(t, result.Contents.Value, "Магазин")
+}
