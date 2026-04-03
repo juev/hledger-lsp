@@ -32,6 +32,8 @@ internal/
     token.go                Token types and Position
     lexer.go                Hand-written lexer for hledger format
     parser.go               Parser with error recovery
+  formatter/
+    formatter.go            Document formatting: alignment (right/decimal), indentation
   server/
     server.go               LSP server: document sync, diagnostics
     completion.go           Completion: context detection, item generation, fuzzy scoring

@@ -152,7 +152,8 @@ Pass settings to hledger-lsp via `eglot-workspace-configuration`. Without this, 
 ```elisp
 (setq-default eglot-workspace-configuration
   '(:hledger
-    (:formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 40)
+    (:formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 40
+                  :amountAlignmentMode "right")
      :completion (:maxResults 100 :fuzzyMatching t :includeNotes t)
      :diagnostics (:undeclaredAccounts t :unbalancedTransactions t))))
 ```
