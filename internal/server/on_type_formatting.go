@@ -183,6 +183,19 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 		alignCol = settings.Formatting.MinAlignmentColumn - 1
 	}
 
+	if settings.Formatting.AmountAlignmentMode == "decimal" {
+		commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
+		if s.workspace != nil {
+			if wf := s.workspace.GetCommodityFormatsForFile(uriToPath(uri)); wf != nil {
+				commodityFormats = wf
+			}
+		}
+		decimalCol := formatter.CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, alignCol)
+		if decimalCol > 0 {
+			alignCol = decimalCol
+		}
+	}
+
 	s.alignmentCache.Store(uri, alignCol)
 	return alignCol
 }

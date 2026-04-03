@@ -442,6 +442,93 @@ func TestToFloat64(t *testing.T) {
 	}
 }
 
+func TestDefaultServerSettings_AmountAlignmentMode(t *testing.T) {
+	s := defaultServerSettings()
+	if s.Formatting.AmountAlignmentMode != "right" {
+		t.Errorf("Formatting.AmountAlignmentMode = %q, want %q", s.Formatting.AmountAlignmentMode, "right")
+	}
+}
+
+func TestParseSettingsFromRaw_Formatting_AmountAlignmentMode(t *testing.T) {
+	base := defaultServerSettings()
+
+	t.Run("nested decimal", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"amountAlignmentMode": "decimal",
+			},
+		}
+		result := parseSettingsFromRaw(base, raw)
+		if result.Formatting.AmountAlignmentMode != "decimal" {
+			t.Errorf("AmountAlignmentMode = %q, want %q", result.Formatting.AmountAlignmentMode, "decimal")
+		}
+	})
+
+	t.Run("nested right", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"amountAlignmentMode": "right",
+			},
+		}
+		result := parseSettingsFromRaw(base, raw)
+		if result.Formatting.AmountAlignmentMode != "right" {
+			t.Errorf("AmountAlignmentMode = %q, want %q", result.Formatting.AmountAlignmentMode, "right")
+		}
+	})
+
+	t.Run("invalid value falls back to right", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"amountAlignmentMode": "invalid",
+			},
+		}
+		result := parseSettingsFromRaw(base, raw)
+		if result.Formatting.AmountAlignmentMode != "right" {
+			t.Errorf("AmountAlignmentMode = %q, want %q", result.Formatting.AmountAlignmentMode, "right")
+		}
+	})
+
+	t.Run("absent uses default", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"indentSize": 2,
+			},
+		}
+		result := parseSettingsFromRaw(base, raw)
+		if result.Formatting.AmountAlignmentMode != "right" {
+			t.Errorf("AmountAlignmentMode = %q, want %q", result.Formatting.AmountAlignmentMode, "right")
+		}
+	})
+}
+
+func TestParseSettingsFromRaw_Formatting_AmountAlignmentMode_FlatKey(t *testing.T) {
+	base := defaultServerSettings()
+
+	raw := map[string]interface{}{
+		"formatting.amountAlignmentMode": "decimal",
+	}
+
+	result := parseSettingsFromRaw(base, raw)
+	if result.Formatting.AmountAlignmentMode != "decimal" {
+		t.Errorf("AmountAlignmentMode = %q, want %q", result.Formatting.AmountAlignmentMode, "decimal")
+	}
+}
+
+func TestServer_SetSettings_ClearsAlignmentCacheOnAlignmentModeChange(t *testing.T) {
+	srv := NewServer()
+	uri := "file:///test.journal"
+	srv.alignmentCache.Store(uri, 42)
+
+	settings := srv.getSettings()
+	settings.Formatting.AmountAlignmentMode = "decimal"
+	srv.setSettings(settings)
+
+	_, loaded := srv.alignmentCache.Load(uri)
+	if loaded {
+		t.Error("alignmentCache should be cleared when AmountAlignmentMode changes")
+	}
+}
+
 func TestServer_SetSettings_KeepsAlignmentCacheWhenFormattingUnchanged(t *testing.T) {
 	srv := NewServer()
 	uri := "file:///test.journal"

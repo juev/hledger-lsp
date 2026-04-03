@@ -24,9 +24,10 @@ func (s *Server) RangeFormat(ctx context.Context, params *protocol.DocumentRange
 
 	settings := s.getSettings()
 	opts := formatter.Options{
-		IndentSize:         settings.Formatting.IndentSize,
-		AlignAmounts:       settings.Formatting.AlignAmounts,
-		MinAlignmentColumn: settings.Formatting.MinAlignmentColumn,
+		IndentSize:          settings.Formatting.IndentSize,
+		AlignAmounts:        settings.Formatting.AlignAmounts,
+		MinAlignmentColumn:  settings.Formatting.MinAlignmentColumn,
+		AmountAlignmentMode: settings.Formatting.AmountAlignmentMode,
 	}
 
 	allEdits := formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts)
