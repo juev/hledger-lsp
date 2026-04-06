@@ -323,11 +323,70 @@ func tokenizeForSemantics(content string) []semanticToken {
 	inVirtualContext := false
 	seenPipe := false
 	isTransactionHeader := false
+	inCommentBlock := false
 
 	for {
 		tok := lexer.Next()
 		if tok.Type == parser.TokenEOF {
 			break
+		}
+
+		// Handle comment block: detect "end comment" to exit
+		if inCommentBlock {
+			if tok.Type == parser.TokenDirective && tok.Value == "end" {
+				// Peek at next token to check for "comment"
+				next := lexer.Next()
+				if next.Type != parser.TokenEOF &&
+					strings.TrimSpace(next.Value) == "comment" {
+					// End of comment block — emit both as directive tokens
+					inCommentBlock = false
+					tokens = append(tokens, semanticToken{
+						line:      uint32(tok.Pos.Line - 1),
+						col:       uint32(tok.Pos.Column - 1),
+						length:    uint32(lsputil.UTF16Len(tok.Value)),
+						tokenType: TokenTypeDirective,
+						modifiers: 0,
+					})
+					tokens = append(tokens, semanticToken{
+						line:      uint32(next.Pos.Line - 1),
+						col:       uint32(next.Pos.Column - 1),
+						length:    uint32(lsputil.UTF16Len(next.Value)),
+						tokenType: TokenTypeDirective,
+						modifiers: 0,
+					})
+					continue
+				}
+				// Not "end comment" — emit "end" as comment, then handle next token
+				tokens = append(tokens, semanticToken{
+					line:      uint32(tok.Pos.Line - 1),
+					col:       uint32(tok.Pos.Column - 1),
+					length:    uint32(lsputil.UTF16Len(tok.Value)),
+					tokenType: TokenTypeComment,
+					modifiers: 0,
+				})
+				// Fall through to handle next token (which is not "comment")
+				tok = next
+				if tok.Type == parser.TokenEOF {
+					break
+				}
+			}
+
+			// Inside comment block — emit as comment (skip newlines)
+			if tok.Type == parser.TokenNewline {
+				continue
+			}
+			length := uint32(lsputil.UTF16Len(tok.Value))
+			if tok.Type == parser.TokenComment {
+				length++
+			}
+			tokens = append(tokens, semanticToken{
+				line:      uint32(tok.Pos.Line - 1),
+				col:       uint32(tok.Pos.Column - 1),
+				length:    length,
+				tokenType: TokenTypeComment,
+				modifiers: 0,
+			})
+			continue
 		}
 
 		if tok.Pos.Line != currentLine {
@@ -339,6 +398,19 @@ func tokenizeForSemantics(content string) []semanticToken {
 			if tok.Type == parser.TokenDirective {
 				inDirective = true
 				directiveType = tok.Value
+				// Enter comment block mode
+				if tok.Value == "comment" {
+					inCommentBlock = true
+					// Emit "comment" directive token
+					tokens = append(tokens, semanticToken{
+						line:      uint32(tok.Pos.Line - 1),
+						col:       uint32(tok.Pos.Column - 1),
+						length:    uint32(lsputil.UTF16Len(tok.Value)),
+						tokenType: TokenTypeDirective,
+						modifiers: 0,
+					})
+					continue
+				}
 			} else if tok.Type == parser.TokenDate {
 				inDirective = false
 				directiveType = ""
@@ -347,6 +419,44 @@ func tokenizeForSemantics(content string) []semanticToken {
 			} else if tok.Type != parser.TokenIndent && tok.Type != parser.TokenNewline {
 				inDirective = false
 				directiveType = ""
+			}
+		}
+
+		// Handle standalone "end comment" (outside block) — both tokens as directive
+		if tok.Type == parser.TokenDirective && tok.Value == "end" {
+			next := lexer.Next()
+			if next.Type != parser.TokenEOF &&
+				strings.TrimSpace(next.Value) == "comment" {
+				tokens = append(tokens, semanticToken{
+					line:      uint32(tok.Pos.Line - 1),
+					col:       uint32(tok.Pos.Column - 1),
+					length:    uint32(lsputil.UTF16Len(tok.Value)),
+					tokenType: TokenTypeDirective,
+					modifiers: 0,
+				})
+				tokens = append(tokens, semanticToken{
+					line:      uint32(next.Pos.Line - 1),
+					col:       uint32(next.Pos.Column - 1),
+					length:    uint32(lsputil.UTF16Len(next.Value)),
+					tokenType: TokenTypeDirective,
+					modifiers: 0,
+				})
+				continue
+			}
+			// Not "end comment" — process "end" normally, then handle next
+			semType, ok := mapTokenType(tok.Type)
+			if ok {
+				tokens = append(tokens, semanticToken{
+					line:      uint32(tok.Pos.Line - 1),
+					col:       uint32(tok.Pos.Column - 1),
+					length:    uint32(lsputil.UTF16Len(tok.Value)),
+					tokenType: semType,
+					modifiers: 0,
+				})
+			}
+			tok = next
+			if tok.Type == parser.TokenEOF {
+				break
 			}
 		}
 

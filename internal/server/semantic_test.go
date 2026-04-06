@@ -988,3 +988,134 @@ func TestSemanticTokens_QuotedCommodityLength(t *testing.T) {
 	assert.Equal(t, uint32(6), commodityToken.length,
 		"quoted commodity length must include surrounding quotes")
 }
+
+func TestSemanticTokens_CommentBlock(t *testing.T) {
+	content := `account expenses:food
+
+comment
+This is ignored
+2024-01-01 Fake transaction
+    expenses:food  $50
+end comment
+
+2024-01-15 Real transaction
+    expenses:food  $30
+    assets:cash`
+
+	tokens := tokenizeForSemantics(content)
+	require.NotEmpty(t, tokens)
+
+	// Collect tokens by line for analysis
+	// Lines: 0=account, 1=empty, 2=comment, 3=ignored, 4=ignored, 5=ignored, 6=end comment, 7=empty, 8=real tx...
+
+	// All tokens on lines 3-5 (inside comment block) must be TokenTypeComment
+	for _, tok := range tokens {
+		if tok.line >= 3 && tok.line <= 5 {
+			assert.Equal(t, uint32(TokenTypeComment), tok.tokenType,
+				"token on line %d inside comment block should be comment type, got %d", tok.line, tok.tokenType)
+		}
+	}
+
+	// The "comment" directive on line 2 should be TokenTypeDirective
+	var commentDirectiveFound bool
+	for _, tok := range tokens {
+		if tok.line == 2 && tok.tokenType == TokenTypeDirective {
+			commentDirectiveFound = true
+			break
+		}
+	}
+	assert.True(t, commentDirectiveFound, "comment directive should be TokenTypeDirective")
+
+	// The "end comment" directive tokens on line 6 should be TokenTypeDirective
+	var endDirectiveCount int
+	for _, tok := range tokens {
+		if tok.line == 6 && tok.tokenType == TokenTypeDirective {
+			endDirectiveCount++
+		}
+	}
+	assert.Equal(t, 2, endDirectiveCount, "end comment should produce 2 directive tokens")
+
+	// Code after "end comment" should have normal types
+	var foundDateAfter bool
+	for _, tok := range tokens {
+		if tok.line == 8 && tok.tokenType == TokenTypeDate {
+			foundDateAfter = true
+			break
+		}
+	}
+	assert.True(t, foundDateAfter, "date after end comment should have normal date type")
+}
+
+func TestSemanticTokens_CommentBlockUnterminated(t *testing.T) {
+	content := `2024-01-15 Real transaction
+    expenses:food  $30
+    assets:cash
+
+comment
+This is ignored until EOF
+2024-02-01 Fake transaction
+    expenses:food  $50
+`
+
+	tokens := tokenizeForSemantics(content)
+	require.NotEmpty(t, tokens)
+
+	// All tokens on lines >= 5 (after "comment" directive on line 4) should be TokenTypeComment
+	for _, tok := range tokens {
+		if tok.line >= 5 {
+			assert.Equal(t, uint32(TokenTypeComment), tok.tokenType,
+				"token on line %d after unterminated comment should be comment type, got %d", tok.line, tok.tokenType)
+		}
+	}
+
+	// Tokens before the comment block should have normal types
+	var foundDate bool
+	for _, tok := range tokens {
+		if tok.line == 0 && tok.tokenType == TokenTypeDate {
+			foundDate = true
+			break
+		}
+	}
+	assert.True(t, foundDate, "date before comment block should have normal date type")
+}
+
+func TestSemanticTokens_EndCommentDirective(t *testing.T) {
+	// Standalone "end comment" outside a block — both tokens should be directive
+	content := "end comment\n"
+
+	tokens := tokenizeForSemantics(content)
+	require.NotEmpty(t, tokens)
+
+	var directiveTokens []semanticToken
+	for _, tok := range tokens {
+		if tok.tokenType == TokenTypeDirective {
+			directiveTokens = append(directiveTokens, tok)
+		}
+	}
+	require.Len(t, directiveTokens, 2, "end comment should produce 2 directive tokens")
+	assert.Equal(t, uint32(0), directiveTokens[0].col, "end token should start at col 0")
+	assert.Equal(t, uint32(4), directiveTokens[1].col, "comment token should start at col 4")
+}
+
+func TestSemanticTokens_CommentBlockEmpty(t *testing.T) {
+	content := `comment
+end comment
+
+2024-01-15 test
+    expenses:food  $30
+    assets:cash`
+
+	tokens := tokenizeForSemantics(content)
+	require.NotEmpty(t, tokens)
+
+	// No comment-type tokens between comment and end comment (empty block)
+	// Date on line 3 should be normal
+	var foundDate bool
+	for _, tok := range tokens {
+		if tok.line == 3 && tok.tokenType == TokenTypeDate {
+			foundDate = true
+			break
+		}
+	}
+	assert.True(t, foundDate, "date after empty comment block should have normal date type")
+}

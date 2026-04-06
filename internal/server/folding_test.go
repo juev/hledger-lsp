@@ -123,6 +123,81 @@ func TestFoldingRanges_EmptyDocument(t *testing.T) {
 	assert.Empty(t, result)
 }
 
+func TestFoldingRanges_CommentDirectiveBlock(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+comment
+This is a multi-line comment
+that should be ignored
+end comment
+
+2024-01-16 test2
+    expenses:rent  $1000
+    assets:checking`
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := &protocol.FoldingRangeParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		},
+	}
+
+	result, err := srv.FoldingRanges(context.Background(), params)
+	require.NoError(t, err)
+
+	var commentFold *protocol.FoldingRange
+	for i := range result {
+		if result[i].Kind == protocol.CommentFoldingRange &&
+			result[i].StartLine == 4 {
+			commentFold = &result[i]
+			break
+		}
+	}
+	require.NotNil(t, commentFold, "expected folding range for comment directive block")
+	assert.Equal(t, uint32(4), commentFold.StartLine)
+	assert.Equal(t, uint32(7), commentFold.EndLine)
+}
+
+func TestFoldingRanges_CommentDirectiveBlockUnterminated(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+
+comment
+This is ignored until EOF
+2024-02-01 Fake transaction`
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := &protocol.FoldingRangeParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		},
+	}
+
+	result, err := srv.FoldingRanges(context.Background(), params)
+	require.NoError(t, err)
+
+	var commentFold *protocol.FoldingRange
+	for i := range result {
+		if result[i].Kind == protocol.CommentFoldingRange &&
+			result[i].StartLine == 4 {
+			commentFold = &result[i]
+			break
+		}
+	}
+	require.NotNil(t, commentFold, "expected folding range for unterminated comment block")
+	assert.Equal(t, uint32(4), commentFold.StartLine)
+	assert.Equal(t, uint32(6), commentFold.EndLine, "unterminated comment should fold to last line")
+}
+
 func TestFoldingRanges_DocumentNotFound(t *testing.T) {
 	srv := NewServer()
 

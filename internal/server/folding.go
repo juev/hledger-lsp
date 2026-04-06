@@ -30,6 +30,7 @@ func (s *Server) FoldingRanges(ctx context.Context, params *protocol.FoldingRang
 	ranges = append(ranges, findTransactionFolds(doc)...)
 	ranges = append(ranges, findDirectiveFolds(doc)...)
 	ranges = append(ranges, findCommentBlockFolds(doc)...)
+	ranges = append(ranges, findCommentDirectiveFolds(doc)...)
 
 	return ranges, nil
 }
@@ -128,6 +129,48 @@ func isDirectiveLine(line string) bool {
 		}
 	}
 	return false
+}
+
+func findCommentDirectiveFolds(content string) []protocol.FoldingRange {
+	lines := strings.Split(content, "\n")
+	var ranges []protocol.FoldingRange
+
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		// Match "comment" directive: exactly "comment" or "comment" followed by whitespace
+		if trimmed != "comment" && !strings.HasPrefix(trimmed, "comment ") && !strings.HasPrefix(trimmed, "comment\t") {
+			continue
+		}
+
+		startLine := i
+		endLine := len(lines) - 1 // default: unterminated → fold to end of file
+
+		for j := i + 1; j < len(lines); j++ {
+			endTrimmed := strings.TrimSpace(lines[j])
+			if endTrimmed == "end comment" || strings.HasPrefix(endTrimmed, "end comment ") || strings.HasPrefix(endTrimmed, "end comment\t") {
+				endLine = j
+				break
+			}
+		}
+
+		// Skip trailing empty lines for unterminated blocks
+		for endLine > startLine && strings.TrimSpace(lines[endLine]) == "" {
+			endLine--
+		}
+
+		if endLine > startLine {
+			ranges = append(ranges, protocol.FoldingRange{
+				StartLine: uint32(startLine),
+				EndLine:   uint32(endLine),
+				Kind:      protocol.CommentFoldingRange,
+			})
+		}
+
+		i = endLine
+	}
+
+	return ranges
 }
 
 func findCommentBlockFolds(content string) []protocol.FoldingRange {

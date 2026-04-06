@@ -521,7 +521,9 @@ This is a comment block without end comment
     assets:cash
 `
 	journal, errs := Parse(input)
-	require.Empty(t, errs)
+	require.Len(t, errs, 1, "unterminated comment block should produce a warning")
+	assert.Contains(t, errs[0].Message, "unterminated")
+	assert.Equal(t, 1, errs[0].Pos.Line, "error should point to the 'comment' directive line")
 	require.Empty(t, journal.Transactions)
 	require.Empty(t, journal.Directives)
 }
@@ -538,7 +540,9 @@ Everything below is ignored
     assets:cash
 `
 	journal, errs := Parse(input)
-	require.Empty(t, errs)
+	require.Len(t, errs, 1, "unterminated comment block should produce a warning")
+	assert.Contains(t, errs[0].Message, "unterminated")
+	assert.Equal(t, 5, errs[0].Pos.Line, "error should point to the 'comment' directive line")
 	require.Len(t, journal.Transactions, 1)
 
 	tx := journal.Transactions[0]

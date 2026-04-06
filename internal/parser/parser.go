@@ -1260,7 +1260,7 @@ func (p *Parser) parseApplyDirective(_ Position) ast.Directive {
 	return nil
 }
 
-func (p *Parser) parseCommentBlock(_ Position) ast.Directive {
+func (p *Parser) parseCommentBlock(startPos Position) ast.Directive {
 	// Skip to next line after "comment"
 	p.skipToNextLine()
 
@@ -1282,6 +1282,8 @@ func (p *Parser) parseCommentBlock(_ Position) ast.Directive {
 		p.advance()
 	}
 
+	endPos := Position{Line: startPos.Line, Column: startPos.Column + len("comment"), Offset: startPos.Offset + len("comment")}
+	p.errorAt(startPos, endPos, "unterminated 'comment' block (missing 'end comment')")
 	return nil
 }
 
