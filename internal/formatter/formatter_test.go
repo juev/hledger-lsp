@@ -2369,24 +2369,24 @@ func TestFormatDocument_DecimalAlignment_CostAlignment(t *testing.T) {
 	assert.Contains(t, result, "0.8687 BMO")
 	assert.Contains(t, result, "-24.24 CAD")
 
-	// Cost amount decimal should align with non-cost posting amount decimal
+	// Posting amount decimals should align with each other.
+	// The cost amount's decimal is NOT used for alignment.
 	lines := strings.Split(result, "\n")
-	var costDecimalPos, postingDecimalPos int
+	var postingDecimalPos, cashDecimalPos int
 	for _, line := range lines {
 		if strings.Contains(line, "@@") {
-			// Find the decimal in the cost amount (after @@)
-			atIdx := strings.Index(line, "@@")
-			costPart := line[atIdx:]
-			costDecimalPos = atIdx + strings.Index(costPart, ".")
+			// Find decimal in POSTING amount (before @@)
+			amountPart := line[:strings.Index(line, " @@ ")]
+			postingDecimalPos = strings.LastIndex(amountPart, ".")
 		} else if strings.Contains(line, "-24.24") {
-			postingDecimalPos = strings.Index(line, ".")
+			cashDecimalPos = strings.Index(line, ".")
 		}
 	}
 
-	require.Greater(t, costDecimalPos, 0)
 	require.Greater(t, postingDecimalPos, 0)
-	assert.Equal(t, postingDecimalPos, costDecimalPos,
-		"cost amount decimal should align with non-cost posting amount decimal")
+	require.Greater(t, cashDecimalPos, 0)
+	assert.Equal(t, cashDecimalPos, postingDecimalPos,
+		"posting amount decimal should align with non-cost posting amount decimal")
 
 	// Idempotency
 	journal2, errs2 := parser.Parse(result)
@@ -2408,23 +2408,16 @@ func TestFormatDocument_DecimalAlignment_UnitCostAlignment(t *testing.T) {
 	edits := FormatDocumentWithOptions(journal, input, nil, opts)
 	result := applyEdits(input, edits)
 
-	// Cost amount decimal should align with non-cost posting amount decimal
+	// Posting amount decimals should align with each other.
+	// "10 AAPL" has no decimal, so only verify non-cost posting.
 	lines := strings.Split(result, "\n")
-	var costDecimalPos, postingDecimalPos int
 	for _, line := range lines {
-		if strings.Contains(line, " @ ") {
-			atIdx := strings.Index(line, " @ ")
-			costPart := line[atIdx:]
-			costDecimalPos = atIdx + strings.Index(costPart, ".")
-		} else if strings.Contains(line, "-1500.00") {
-			postingDecimalPos = strings.Index(line, ".")
+		if strings.Contains(line, "AAPL") {
+			assert.Contains(t, line, "10 AAPL")
 		}
 	}
 
-	require.Greater(t, costDecimalPos, 0)
-	require.Greater(t, postingDecimalPos, 0)
-	assert.Equal(t, postingDecimalPos, costDecimalPos,
-		"unit cost amount decimal should align with non-cost posting amount decimal")
+	assert.Contains(t, result, "-1500.00 USD")
 
 	// Idempotency
 	journal2, errs2 := parser.Parse(result)
@@ -2447,27 +2440,32 @@ func TestFormatDocument_DecimalAlignment_CostAlignment_NoCostPosting(t *testing.
 	edits := FormatDocumentWithOptions(journal, input, nil, opts)
 	result := applyEdits(input, edits)
 
-	// All non-cost amounts AND cost amounts should have aligned decimals
+	// All POSTING amount decimals should be aligned.
+	// Cost amount decimals are NOT used for alignment.
 	lines := strings.Split(result, "\n")
 	var decimalPositions []int
 	for _, line := range lines {
-		if strings.Contains(line, "@@") {
-			atIdx := strings.Index(line, "@@")
-			costPart := line[atIdx:]
-			pos := atIdx + strings.Index(costPart, ".")
-			if pos > 0 {
-				decimalPositions = append(decimalPositions, pos)
-			}
-		} else if strings.Contains(line, "CAD") {
-			pos := strings.Index(line, ".")
-			if pos > 0 {
-				decimalPositions = append(decimalPositions, pos)
-			}
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "2024") {
+			continue
+		}
+		if !strings.ContainsAny(trimmed, "0123456789") {
+			continue
+		}
+
+		// For cost postings, find decimal in posting amount (before @@)
+		amountPart := line
+		if atIdx := strings.Index(line, " @@ "); atIdx > 0 {
+			amountPart = line[:atIdx]
+		}
+		pos := strings.LastIndex(amountPart, ".")
+		if pos > 0 {
+			decimalPositions = append(decimalPositions, pos)
 		}
 	}
 
 	require.GreaterOrEqual(t, len(decimalPositions), 3,
-		"should have at least 3 decimal positions (cost + 2 non-cost)")
+		"should have at least 3 posting amount decimal positions")
 	for i := 1; i < len(decimalPositions); i++ {
 		assert.Equal(t, decimalPositions[0], decimalPositions[i],
 			"decimal at position %d should align with first", i)
@@ -2479,6 +2477,71 @@ func TestFormatDocument_DecimalAlignment_CostAlignment_NoCostPosting(t *testing.
 	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
 	result2 := applyEdits(result, edits2)
 	assert.Equal(t, result, result2, "decimal alignment with mixed cost/no-cost must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_CostDoesNotShiftPostingAmount(t *testing.T) {
+	// Bug: when a posting has @@ cost, the formatter aligned the cost amount's
+	// decimal point instead of the posting amount's decimal point.
+	// The posting amount's decimal must align with other postings' decimals.
+	input := `2024-01-15 groceries
+    expenses:food      864.62 @@ 21.00 EUR
+    assets:cash
+
+2024-01-15 salary
+    assets:checking  148582.00 USD
+    income:salary
+
+2024-01-15 family
+    expenses:family  10000.00 USD
+    assets:checking`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	t.Logf("Formatted result:\n%s", result)
+
+	// Collect decimal dot positions of POSTING amounts (not cost amounts).
+	lines := strings.Split(result, "\n")
+	var decimalPositions []int
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Only check posting lines with amounts
+		if !strings.HasPrefix(trimmed, "expenses:") && !strings.HasPrefix(trimmed, "assets:checking") {
+			continue
+		}
+		if !strings.ContainsAny(trimmed, "0123456789") {
+			continue
+		}
+
+		// For cost postings, look only at the POSTING amount (before @@)
+		amountPart := line
+		if atIdx := strings.Index(line, " @@ "); atIdx > 0 {
+			amountPart = line[:atIdx]
+		}
+		// Find the last dot in the amount part (decimal point)
+		pos := strings.LastIndex(amountPart, ".")
+		if pos > 0 {
+			decimalPositions = append(decimalPositions, pos)
+		}
+	}
+
+	require.GreaterOrEqual(t, len(decimalPositions), 3,
+		"should have at least 3 posting amounts with decimals, got lines:\n%s", result)
+	for i := 1; i < len(decimalPositions); i++ {
+		assert.Equal(t, decimalPositions[0], decimalPositions[i],
+			"posting amount decimal at position %d should align with first", i)
+	}
+
+	// Idempotency
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "formatting must be idempotent")
 }
 
 func TestFormatDocument_DecimalAlignment_WithBalanceAssertion(t *testing.T) {

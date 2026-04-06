@@ -302,9 +302,8 @@ func CalculateAlignmentWithGlobal(postings []ast.Posting, commodityFormats map[s
 
 // CalculateGlobalDecimalCol computes the column where decimal points should align,
 // based on the maximum prefix length (chars before decimal point) across all postings.
-// When a posting has a cost annotation (@ or @@), the cost amount's decimal prefix
-// is also considered, so that cost amounts and non-cost posting amounts can align
-// at the same column.
+// Only the posting amount's decimal prefix is considered — cost annotations (@ or @@)
+// follow after the posting amount and do not participate in alignment.
 func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, accountCol int) int {
 	maxPrefix := 0
 	for i := range transactions {
@@ -313,11 +312,6 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 			if p.Amount != nil {
 				prefix := calculateAmountDecimalPrefix(p, commodityFormats)
 				maxPrefix = max(maxPrefix, prefix)
-
-				if p.Cost != nil {
-					costPrefix := calculateCostDecimalPrefix(p, commodityFormats)
-					maxPrefix = max(maxPrefix, costPrefix)
-				}
 			}
 		}
 	}
@@ -325,27 +319,6 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 		return accountCol + maxPrefix
 	}
 	return 0
-}
-
-// calculateCostDecimalPrefix returns the total prefix from the start of the
-// amount area to the cost amount's decimal point. This includes the posting
-// amount, lot price, cost separator, and cost amount prefix.
-func calculateCostDecimalPrefix(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
-	amountLen := calculateSingleAmountLen(posting.Amount, commodityFormats)
-
-	lotLen := 0
-	if posting.LotPrice != nil {
-		lotLen = calculateLotPriceLen(posting.LotPrice, commodityFormats)
-	}
-
-	costSepLen := 3 // " @ " minimum
-	if posting.Cost.IsTotal {
-		costSepLen = 4 // " @@ " minimum
-	}
-
-	costPrefix := calculateSingleAmountDecimalPrefix(&posting.Cost.Amount, commodityFormats)
-
-	return amountLen + lotLen + costSepLen + costPrefix
 }
 
 func calculateAmountCostLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
@@ -520,16 +493,9 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		spaces := minSpaces
 		if alignAmounts && alignment.DecimalCol > 0 {
 			currentLen := utf8.RuneCountInString(sb.String())
-			if posting.Cost != nil {
-				// Cost alignment: position the posting amount so that the
-				// cost amount's decimal lands at DecimalCol.
-				costFullPrefix := calculateCostDecimalPrefix(posting, commodityFormats)
-				spaces = max(alignment.DecimalCol-currentLen-costFullPrefix, minSpaces)
-			} else {
-				// Decimal alignment: align on the decimal point position
-				prefix := calculateAmountDecimalPrefix(posting, commodityFormats)
-				spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
-			}
+			// Always align the posting amount's decimal point, regardless of cost.
+			prefix := calculateAmountDecimalPrefix(posting, commodityFormats)
+			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
 		} else if alignAmounts && alignment.AccountCol > 0 {
 			currentLen := utf8.RuneCountInString(sb.String())
 			spaces = max(alignment.AccountCol-currentLen, minSpaces)
