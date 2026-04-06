@@ -160,21 +160,48 @@ hledger-lsp registers Enter and Tab as trigger characters for `textDocument/onTy
 - **Enter**: auto-indents new posting lines after transaction headers or existing postings
 - **Tab**: aligns cursor to the amount column after an account name
 
-### Neovim 0.11+
+### Neovim 0.12+
 
-Neovim 0.11 added `textDocument/onTypeFormatting` support ([PR #34637](https://github.com/neovim/vim/pull/34637)). Tab and Enter triggers should work through the standard LSP pipeline.
+Neovim 0.12 added native `textDocument/onTypeFormatting` support ([PR #34637](https://github.com/neovim/neovim/pull/34637)). Enable it explicitly — it is **not active by default**:
 
-If Tab conflicts with `expandtab` or completion plugins, you may need a custom keymap:
+```lua
+vim.lsp.formatting.enable()
+```
+
+See `:h lsp-on_type_formatting` for options.
+
+### Neovim 0.11
+
+Native onTypeFormatting is not available, but you can set up manual keymaps that call `vim.lsp.buf.format()` with a trigger character:
 
 ```lua
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if not client or not client.supports_method("textDocument/onTypeFormatting") then
+      return
+    end
+
+    -- Auto-indent after Enter
+    vim.keymap.set("i", "<CR>", function()
+      -- Insert newline first, then request formatting
+      local key = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
+      vim.api.nvim_feedkeys(key, "n", false)
+      vim.schedule(function()
+        vim.lsp.buf.format({ trigger_character = "\n" })
+      end)
+    end, { buffer = args.buf })
+
+    -- Align amount after Tab
     vim.keymap.set("i", "<Tab>", function()
       vim.lsp.buf.format({ trigger_character = "\t" })
     end, { buffer = args.buf })
   end,
 })
 ```
+
+> **Note:** These keymaps may conflict with completion plugins (nvim-cmp, etc.).
+> Adjust or conditionally enable them based on your setup.
 
 ### Neovim < 0.11
 
