@@ -302,6 +302,9 @@ func CalculateAlignmentWithGlobal(postings []ast.Posting, commodityFormats map[s
 
 // CalculateGlobalDecimalCol computes the column where decimal points should align,
 // based on the maximum prefix length (chars before decimal point) across all postings.
+// When a posting has a cost annotation (@ or @@), the cost amount's decimal prefix
+// is also considered, so that cost amounts and non-cost posting amounts can align
+// at the same column.
 func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, accountCol int) int {
 	maxPrefix := 0
 	for i := range transactions {
@@ -310,6 +313,11 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 			if p.Amount != nil {
 				prefix := calculateAmountDecimalPrefix(p, commodityFormats)
 				maxPrefix = max(maxPrefix, prefix)
+
+				if p.Cost != nil {
+					costPrefix := calculateCostDecimalPrefix(p, commodityFormats)
+					maxPrefix = max(maxPrefix, costPrefix)
+				}
 			}
 		}
 	}
@@ -317,6 +325,27 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 		return accountCol + maxPrefix
 	}
 	return 0
+}
+
+// calculateCostDecimalPrefix returns the total prefix from the start of the
+// amount area to the cost amount's decimal point. This includes the posting
+// amount, lot price, cost separator, and cost amount prefix.
+func calculateCostDecimalPrefix(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
+	amountLen := calculateSingleAmountLen(posting.Amount, commodityFormats)
+
+	lotLen := 0
+	if posting.LotPrice != nil {
+		lotLen = calculateLotPriceLen(posting.LotPrice, commodityFormats)
+	}
+
+	costSepLen := 3 // " @ " minimum
+	if posting.Cost.IsTotal {
+		costSepLen = 4 // " @@ " minimum
+	}
+
+	costPrefix := calculateSingleAmountDecimalPrefix(&posting.Cost.Amount, commodityFormats)
+
+	return amountLen + lotLen + costSepLen + costPrefix
 }
 
 func calculateAmountCostLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
@@ -369,42 +398,58 @@ func calculateAmountDecimalPrefix(posting *ast.Posting, commodityFormats map[str
 	if posting.Amount == nil {
 		return 0
 	}
+	return calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats)
+}
 
-	// Get the quantity string to find decimal position within the number
-	qty := formatAmountQuantity(posting.Amount, commodityFormats)
-	mark := resolveDecimalMark(posting.Amount, commodityFormats)
-
-	// Find decimal position in the quantity string
+// calculateSingleAmountDecimalPrefix returns the number of characters in the rendered
+// amount BEFORE the decimal point. Works on a standalone Amount (not a Posting).
+//
+// The calculation is based on the structural layout of the rendered amount
+// (not by searching for the decimal mark in the rendered string, which would
+// fail when the commodity symbol also contains the decimal mark character,
+// e.g. quoted commodities like "VWXY.Z").
+func calculateSingleAmountDecimalPrefix(amount *ast.Amount, commodityFormats map[string]CommodityFormat) int {
+	qty := formatAmountQuantity(amount, commodityFormats)
+	mark := resolveDecimalMark(amount, commodityFormats)
 	qtyDecimalIdx := strings.LastIndexFunc(qty, func(r rune) bool { return r == mark })
 
-	// Render the full amount to get total prefix length
-	var sb strings.Builder
-	writeAmountWithSign(&sb, posting.Amount, commodityFormats)
-	rendered := sb.String()
+	position, spaceBetween := resolveCommodityDisplay(amount, commodityFormats)
+	symbol := commoditySymbolDisplay(&amount.Commodity)
+
+	// Calculate characters before the quantity digits in the rendered string.
+	// Right-commodity: qty comes first → prefixBeforeQty = 0
+	// Left-commodity:  symbol [space] qty → prefixBeforeQty = len(symbol) [+1]
+	// Left + SignBeforeCommodity: sign symbol [space] qty_without_sign
+	var prefixBeforeQty int
+	effectiveQty := qty
+
+	if position == ast.CommodityLeft {
+		symbolRuneLen := utf8.RuneCountInString(symbol)
+		if amount.SignBeforeCommodity && len(qty) > 0 && (qty[0] == '-' || qty[0] == '+') {
+			prefixBeforeQty = 1 + symbolRuneLen // sign + symbol
+			if spaceBetween {
+				prefixBeforeQty++
+			}
+			effectiveQty = qty[1:]
+			if qtyDecimalIdx > 0 {
+				qtyDecimalIdx-- // adjust for removed sign byte
+			} else {
+				qtyDecimalIdx = -1
+			}
+		} else {
+			prefixBeforeQty = symbolRuneLen
+			if spaceBetween {
+				prefixBeforeQty++
+			}
+		}
+	}
 
 	if qtyDecimalIdx >= 0 {
-		// Has decimal — find it in the rendered string
-		idx := strings.LastIndexFunc(rendered, func(r rune) bool { return r == mark })
-		if idx >= 0 {
-			return utf8.RuneCountInString(rendered[:idx])
-		}
+		return prefixBeforeQty + qtyDecimalIdx
 	}
 
-	// No decimal — prefix is the rendered amount without commodity suffix
-	// For left-commodity ($100) or no commodity, it's the full length
-	// For right-commodity (100 USD), strip " USD" suffix
-	position, spaceBetween := resolveCommodityDisplay(posting.Amount, commodityFormats)
-	symbol := commoditySymbolDisplay(&posting.Amount.Commodity)
-
-	if position == ast.CommodityRight && symbol != "" {
-		suffixLen := utf8.RuneCountInString(symbol)
-		if spaceBetween {
-			suffixLen++
-		}
-		return utf8.RuneCountInString(rendered) - suffixLen
-	}
-
-	return utf8.RuneCountInString(rendered)
+	// No decimal — prefix is the full integer part
+	return prefixBeforeQty + utf8.RuneCountInString(effectiveQty)
 }
 
 func resolveDecimalMark(amount *ast.Amount, commodityFormats map[string]CommodityFormat) rune {
@@ -474,10 +519,17 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	if posting.Amount != nil {
 		spaces := minSpaces
 		if alignAmounts && alignment.DecimalCol > 0 {
-			// Decimal alignment: align on the decimal point position
-			prefix := calculateAmountDecimalPrefix(posting, commodityFormats)
 			currentLen := utf8.RuneCountInString(sb.String())
-			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
+			if posting.Cost != nil {
+				// Cost alignment: position the posting amount so that the
+				// cost amount's decimal lands at DecimalCol.
+				costFullPrefix := calculateCostDecimalPrefix(posting, commodityFormats)
+				spaces = max(alignment.DecimalCol-currentLen-costFullPrefix, minSpaces)
+			} else {
+				// Decimal alignment: align on the decimal point position
+				prefix := calculateAmountDecimalPrefix(posting, commodityFormats)
+				spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
+			}
 		} else if alignAmounts && alignment.AccountCol > 0 {
 			currentLen := utf8.RuneCountInString(sb.String())
 			spaces = max(alignment.AccountCol-currentLen, minSpaces)

@@ -2217,6 +2217,68 @@ func TestFormatDocument_DecimalAlignment(t *testing.T) {
 	assert.Equal(t, result, result2, "decimal alignment must be idempotent")
 }
 
+func TestFormatDocument_DecimalAlignment_QuotedCommodityWithDot(t *testing.T) {
+	input := `2024-01-15 buy
+    assets:investments  0.2222 "VWXY.Z"
+    assets:cash  -5.00 CAD`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	// Find decimal positions — use the CAD line (no dot in commodity) as reference
+	lines := strings.Split(result, "\n")
+	var cadDecimalPos, qtyDecimalPos int
+	for _, line := range lines {
+		if strings.Contains(line, "CAD") {
+			cadDecimalPos = strings.Index(line, ".")
+		}
+		if strings.Contains(line, `"VWXY.Z"`) {
+			// Find the FIRST dot — it's in the quantity, not in the commodity
+			qtyDecimalPos = strings.Index(line, ".")
+		}
+	}
+
+	require.Greater(t, cadDecimalPos, 0, "should find decimal in CAD line")
+	require.Greater(t, qtyDecimalPos, 0, "should find decimal in VWXY.Z line")
+	assert.Equal(t, cadDecimalPos, qtyDecimalPos,
+		"decimal points should be aligned for quoted commodity with dot in symbol")
+
+	// Idempotency
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "formatting must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_QuotedCommodityWithDotAndCost(t *testing.T) {
+	input := `2024-01-15 buy
+    assets:investments  0.2222 "VWXY.Z" @@ 5.00 CAD
+    assets:cash  -5.00 CAD`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	// Posting amounts should have aligned decimal points
+	assert.Contains(t, result, `"VWXY.Z"`)
+	assert.Contains(t, result, "@@ 5.00 CAD")
+
+	// Idempotency
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "formatting must be idempotent")
+}
+
 func TestFormatDocument_DecimalAlignment_NoDot(t *testing.T) {
 	input := `2024-01-15 test
     expenses:food  1000 USD
@@ -2292,7 +2354,7 @@ func TestFormatDocument_DecimalAlignment_LeftCommodity(t *testing.T) {
 	assert.Equal(t, result, result2, "decimal alignment (left commodity) must be idempotent")
 }
 
-func TestFormatDocument_DecimalAlignment_WithCost(t *testing.T) {
+func TestFormatDocument_DecimalAlignment_CostAlignment(t *testing.T) {
 	input := `2024-01-15 buy
     assets:investments  0.8687 BMO @@ 24.24 CAD
     assets:cash  -24.24 CAD`
@@ -2304,9 +2366,27 @@ func TestFormatDocument_DecimalAlignment_WithCost(t *testing.T) {
 	edits := FormatDocumentWithOptions(journal, input, nil, opts)
 	result := applyEdits(input, edits)
 
-	// Cost should not affect amount alignment — amounts should still be decimal-aligned
 	assert.Contains(t, result, "0.8687 BMO")
 	assert.Contains(t, result, "-24.24 CAD")
+
+	// Cost amount decimal should align with non-cost posting amount decimal
+	lines := strings.Split(result, "\n")
+	var costDecimalPos, postingDecimalPos int
+	for _, line := range lines {
+		if strings.Contains(line, "@@") {
+			// Find the decimal in the cost amount (after @@)
+			atIdx := strings.Index(line, "@@")
+			costPart := line[atIdx:]
+			costDecimalPos = atIdx + strings.Index(costPart, ".")
+		} else if strings.Contains(line, "-24.24") {
+			postingDecimalPos = strings.Index(line, ".")
+		}
+	}
+
+	require.Greater(t, costDecimalPos, 0)
+	require.Greater(t, postingDecimalPos, 0)
+	assert.Equal(t, postingDecimalPos, costDecimalPos,
+		"cost amount decimal should align with non-cost posting amount decimal")
 
 	// Idempotency
 	journal2, errs2 := parser.Parse(result)
@@ -2314,6 +2394,91 @@ func TestFormatDocument_DecimalAlignment_WithCost(t *testing.T) {
 	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
 	result2 := applyEdits(result, edits2)
 	assert.Equal(t, result, result2, "decimal alignment with cost must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_UnitCostAlignment(t *testing.T) {
+	input := `2024-01-15 buy
+    assets:investments  10 AAPL @ 150.00 USD
+    assets:cash  -1500.00 USD`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	// Cost amount decimal should align with non-cost posting amount decimal
+	lines := strings.Split(result, "\n")
+	var costDecimalPos, postingDecimalPos int
+	for _, line := range lines {
+		if strings.Contains(line, " @ ") {
+			atIdx := strings.Index(line, " @ ")
+			costPart := line[atIdx:]
+			costDecimalPos = atIdx + strings.Index(costPart, ".")
+		} else if strings.Contains(line, "-1500.00") {
+			postingDecimalPos = strings.Index(line, ".")
+		}
+	}
+
+	require.Greater(t, costDecimalPos, 0)
+	require.Greater(t, postingDecimalPos, 0)
+	assert.Equal(t, postingDecimalPos, costDecimalPos,
+		"unit cost amount decimal should align with non-cost posting amount decimal")
+
+	// Idempotency
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "decimal alignment with unit cost must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_CostAlignment_NoCostPosting(t *testing.T) {
+	input := `2024-01-15 buy
+    assets:investments  0.8687 BMO @@ 24.24 CAD
+    expenses:fees  1.50 CAD
+    assets:cash  -25.74 CAD`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	// All non-cost amounts AND cost amounts should have aligned decimals
+	lines := strings.Split(result, "\n")
+	var decimalPositions []int
+	for _, line := range lines {
+		if strings.Contains(line, "@@") {
+			atIdx := strings.Index(line, "@@")
+			costPart := line[atIdx:]
+			pos := atIdx + strings.Index(costPart, ".")
+			if pos > 0 {
+				decimalPositions = append(decimalPositions, pos)
+			}
+		} else if strings.Contains(line, "CAD") {
+			pos := strings.Index(line, ".")
+			if pos > 0 {
+				decimalPositions = append(decimalPositions, pos)
+			}
+		}
+	}
+
+	require.GreaterOrEqual(t, len(decimalPositions), 3,
+		"should have at least 3 decimal positions (cost + 2 non-cost)")
+	for i := 1; i < len(decimalPositions); i++ {
+		assert.Equal(t, decimalPositions[0], decimalPositions[i],
+			"decimal at position %d should align with first", i)
+	}
+
+	// Idempotency
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "decimal alignment with mixed cost/no-cost must be idempotent")
 }
 
 func TestFormatDocument_DecimalAlignment_WithBalanceAssertion(t *testing.T) {
@@ -2482,6 +2647,16 @@ func TestCalculateAmountDecimalPrefix(t *testing.T) {
 			name:     "small number with decimal",
 			input:    "0.60 USD",
 			expected: 1, // "0"
+		},
+		{
+			name:     "quoted commodity with dot in symbol",
+			input:    `0.2222 "VWXY.Z"`,
+			expected: 1, // "0" — not 12 from finding dot in "VWXY.Z"
+		},
+		{
+			name:     "quoted commodity without dot",
+			input:    `10.50 "VWCE"`,
+			expected: 2, // "10"
 		},
 	}
 
