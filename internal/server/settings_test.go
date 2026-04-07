@@ -74,6 +74,9 @@ func TestDefaultServerSettings(t *testing.T) {
 	if !s.Formatting.AlignAmounts {
 		t.Error("Formatting.AlignAmounts should default to true")
 	}
+	if s.Formatting.MinAlignmentColumn != 0 {
+		t.Errorf("Formatting.MinAlignmentColumn = %d, want 0 (auto from file content)", s.Formatting.MinAlignmentColumn)
+	}
 
 	// CLI settings
 	if !s.CLI.Enabled {

@@ -152,13 +152,13 @@ Pass settings to hledger-lsp via `eglot-workspace-configuration`. Without this, 
 ```elisp
 (setq-default eglot-workspace-configuration
   '(:hledger
-    (:formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 40
+    (:formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0
                   :amountAlignmentMode "right")
      :completion (:maxResults 100 :fuzzyMatching t :includeNotes t)
      :diagnostics (:undeclaredAccounts t :unbalancedTransactions t))))
 ```
 
-For example, to change the amount alignment column to 50:
+By default amounts are aligned to the file's natural column. To pin amounts to a fixed minimum column (e.g. 50):
 
 ```elisp
 (setq-default eglot-workspace-configuration

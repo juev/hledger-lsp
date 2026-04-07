@@ -43,8 +43,30 @@ Enable or disable specific LSP features.
 |---------|---------|-------------|
 | `hledger.formatting.indentSize` | `4` | Number of spaces for posting indent |
 | `hledger.formatting.alignAmounts` | `true` | Align amounts across postings |
-| `hledger.formatting.minAlignmentColumn` | `40` | Minimum column for amount alignment (0 = auto from file) |
+| `hledger.formatting.minAlignmentColumn` | `0` | Minimum column floor for amount alignment. `0` = auto from file content (`indent + longest account + 2 spaces`). Set to a positive integer to enforce a minimum column for visual consistency across files. |
 | `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"right"` (right-align amounts) or `"decimal"` (align on decimal point) |
+
+### Pin amounts to a fixed column (opt-in)
+
+By default the server uses the file's natural alignment column (computed from the longest account name). If you prefer all amounts to be aligned to a fixed column for visual consistency across files, set `minAlignmentColumn` to your desired value:
+
+```json
+{
+  "hledger.formatting.minAlignmentColumn": 40
+}
+```
+
+```lua
+formatting = {
+  minAlignmentColumn = 40,
+}
+```
+
+```elisp
+:formatting (:minAlignmentColumn 40)
+```
+
+The setting acts as a **floor**: if a file has accounts longer than the specified column would accommodate, the alignment column shifts further right to fit them.
 
 ## CLI
 
@@ -82,7 +104,7 @@ Enable or disable specific LSP features.
   "hledger.diagnostics.unbalancedTransactions": true,
   "hledger.formatting.indentSize": 4,
   "hledger.formatting.alignAmounts": true,
-  "hledger.formatting.minAlignmentColumn": 40,
+  "hledger.formatting.minAlignmentColumn": 0,
   "hledger.formatting.amountAlignmentMode": "right",
   "hledger.cli.path": "hledger",
   "hledger.cli.timeout": 30000,
@@ -124,7 +146,7 @@ lspconfig.hledger_lsp.setup({
       formatting = {
         indentSize = 4,
         alignAmounts = true,
-        minAlignmentColumn = 40,
+        minAlignmentColumn = 0,
         amountAlignmentMode = "right",
       },
       cli = {
@@ -153,7 +175,7 @@ lspconfig.hledger_lsp.setup({
      :completion (:maxResults 100 :fuzzyMatching t :showCounts t :includeNotes t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)
-     :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 40
+     :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0
                   :amountAlignmentMode "right")
      :cli (:enabled t :path "hledger" :timeout 30000)
      :limits (:maxFileSizeBytes 20971520 :maxIncludeDepth 100))))

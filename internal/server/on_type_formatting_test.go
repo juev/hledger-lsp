@@ -322,6 +322,31 @@ func TestOnTypeFormatting_Tab_UsesGlobalAlignment(t *testing.T) {
 	assert.Equal(t, col1, col2, "both postings should align to the same global column")
 }
 
+// Regression for issue #21: with default settings, Tab alignment should follow
+// the file's natural alignment column (indent + maxAccountLen + 2), not be
+// forced to a hardcoded minimum. The previous default MinAlignmentColumn=40
+// pushed all amounts to col 39, mismatching files with shorter accounts.
+func TestOnTypeFormatting_Tab_DefaultUsesNaturalAlignment(t *testing.T) {
+	ts := newTestServer()
+	// Intentionally do NOT call setSettings — verify behavior with defaults.
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	// Longest account is "expenses:food:coffee" (20 chars).
+	// Natural alignment = indent(4) + maxAccount(20) + minSpaces(2) = 26.
+	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n\n2024-01-16 coffee shop\n    expenses:food:coffee\t\n    assets:cash\n"
+
+	ts.StoreDocument(uri, content)
+
+	// Tab on the first posting at end of "    expenses:food" (cursor char 17).
+	edits, err := ts.onTypeFormattingTab(uri, 1, 17)
+	require.NoError(t, err)
+	require.Len(t, edits, 1)
+
+	endCol := int(edits[0].Range.Start.Character) + len(edits[0].NewText)
+	assert.Equal(t, 26, endCol,
+		"with default MinAlignmentColumn=0, alignment should use natural column 26 (4+20+2), not the legacy 39")
+}
+
 func TestOnTypeFormatting_Tab_RespectsMinAlignment(t *testing.T) {
 	ts := newTestServer()
 	settings := ts.getSettings()

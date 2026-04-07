@@ -91,7 +91,7 @@ func defaultServerSettings() serverSettings {
 		Formatting: formattingSettings{
 			IndentSize:          4,
 			AlignAmounts:        true,
-			MinAlignmentColumn:  40,
+			MinAlignmentColumn:  0,
 			AmountAlignmentMode: "right",
 		},
 		CLI: cliSettings{
