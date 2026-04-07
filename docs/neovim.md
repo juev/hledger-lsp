@@ -2,7 +2,8 @@
 
 ## Prerequisites
 
-- Neovim 0.11+ (recommended) or Neovim 0.8+
+- Neovim **0.12+** (recommended — full feature support including on-type formatting)
+- Neovim 0.11 (supported — native LSP works, no on-type formatting)
 - `hledger-lsp` binary in PATH (see [main README](../README.md#-installation))
 
 ## Neovim 0.11+ (recommended)
@@ -165,47 +166,25 @@ hledger-lsp registers Enter and Tab as trigger characters for `textDocument/onTy
 Neovim 0.12 added native `textDocument/onTypeFormatting` support ([PR #34637](https://github.com/neovim/neovim/pull/34637)). Enable it explicitly — it is **not active by default**:
 
 ```lua
-vim.lsp.formatting.enable()
+vim.lsp.on_type_formatting.enable()
 ```
 
-See `:h lsp-on_type_formatting` for options.
-
-### Neovim 0.11
-
-Native onTypeFormatting is not available, but you can set up manual keymaps that call `vim.lsp.buf.format()` with a trigger character:
+See `:h lsp-on_type_formatting` for options. To enable for hledger-lsp only:
 
 ```lua
 vim.api.nvim_create_autocmd("LspAttach", {
   callback = function(args)
     local client = vim.lsp.get_client_by_id(args.data.client_id)
-    if not client or not client.supports_method("textDocument/onTypeFormatting") then
-      return
+    if client and client.name == "hledger_lsp" then
+      vim.lsp.on_type_formatting.enable(true, { client_id = args.data.client_id })
     end
-
-    -- Auto-indent after Enter
-    vim.keymap.set("i", "<CR>", function()
-      -- Insert newline first, then request formatting
-      local key = vim.api.nvim_replace_termcodes("<CR>", true, false, true)
-      vim.api.nvim_feedkeys(key, "n", false)
-      vim.schedule(function()
-        vim.lsp.buf.format({ trigger_character = "\n" })
-      end)
-    end, { buffer = args.buf })
-
-    -- Align amount after Tab
-    vim.keymap.set("i", "<Tab>", function()
-      vim.lsp.buf.format({ trigger_character = "\t" })
-    end, { buffer = args.buf })
   end,
 })
 ```
 
-> **Note:** These keymaps may conflict with completion plugins (nvim-cmp, etc.).
-> Adjust or conditionally enable them based on your setup.
+### Older Neovim
 
-### Neovim < 0.11
-
-`onTypeFormatting` is not supported. Enter auto-indent and Tab alignment are not available.
+`textDocument/onTypeFormatting` requires Neovim 0.12+. On 0.11 the LSP server still works (completions, diagnostics, hover, formatting on demand), but Enter auto-indent and Tab alignment are not available.
 
 ## Verify
 
