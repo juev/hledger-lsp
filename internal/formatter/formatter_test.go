@@ -49,6 +49,85 @@ func TestCalculateAlignmentColumn(t *testing.T) {
 	}
 }
 
+func TestDetectExistingAmountColumn(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{
+			name:     "empty journal",
+			input:    "",
+			expected: 0,
+		},
+		{
+			name: "no amounts",
+			input: `2024-01-15 test
+    expenses:food
+    assets:cash`,
+			expected: 0,
+		},
+		{
+			name: "single posting with amount",
+			input: `2024-01-15 test
+    expenses:food  $50.00
+    assets:cash`,
+			// "    expenses:food  $50.00"
+			// 0123456789012345678901
+			// $ at 0-indexed col 19
+			expected: 19,
+		},
+		{
+			name: "multiple postings same column",
+			input: `2024-01-15 test
+    expenses:food  $50.00
+    assets:cash    $-50.00`,
+			// $ at col 19 in both postings (cash padded with extra spaces)
+			expected: 19,
+		},
+		{
+			name: "multiple postings different columns picks MIN",
+			input: `2024-01-15 first
+    expenses:food                $50.00
+    assets:cash
+
+2024-01-16 second
+    expenses:food:coffee          $5.00
+    assets:cash`,
+			// First posting: 4 indent + 13 "expenses:food" + 16 spaces = $ at col 33
+			// Second posting: 4 indent + 20 "expenses:food:coffee" + 10 spaces = $ at col 34
+			// MIN = 33 (canonical accountCol — both amounts end at col 39 in right-align)
+			expected: 33,
+		},
+		{
+			name: "cyrillic account uses rune column",
+			input: `2024-01-15 test
+    активы:наличные  $50`,
+			// 4 indent + 15 runes "активы:наличные" (6+1+8) + 2 spaces = $ at col 21 (0-indexed)
+			expected: 21,
+		},
+		{
+			name: "mix of postings with and without amounts",
+			input: `2024-01-15 test
+    expenses:food
+    assets:cash  $-50.00`,
+			// First has no amount → skip
+			// Second: 4 + 11 + 2 = 17
+			expected: 17,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tt.input)
+			require.Empty(t, errs)
+
+			col := DetectExistingAmountColumn(journal.Transactions)
+			assert.Equal(t, tt.expected, col)
+		})
+	}
+}
+
 func TestFormatPosting(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -376,6 +455,40 @@ func findAmountPosition(s string) int {
 		}
 	}
 	return -1
+}
+
+func TestFormatDocumentWithOptions_PreservesExistingAlignment(t *testing.T) {
+	// Hand-formatted journal with amounts at col 33 and col 34.
+	// Formula natural = 4 + 20 ("expenses:food:coffee") + 2 = 26.
+	// MIN detected from existing amounts = 33 (leftmost = widest amount).
+	// Expected: Format preserves col 33 (canonical accountCol), not collapsing to 26.
+	input := `2024-01-15 * grocery store
+    expenses:food                $50.00
+    assets:cash
+
+2024-01-16 * coffee shop
+    expenses:food:coffee          $5.00
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 0}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+
+	// Find edits that contain a $ amount and check its position
+	foundAmountEdit := false
+	for _, edit := range edits {
+		dollarPos := strings.Index(edit.NewText, "$")
+		if dollarPos < 0 {
+			continue
+		}
+		foundAmountEdit = true
+		// 0-indexed rune col should be 33: leftmost existing amount preserved
+		assert.Equal(t, 33, dollarPos,
+			"Format should preserve detected MIN amount column (33), not collapse to formula natural (26). Edit: %q", edit.NewText)
+	}
+	require.True(t, foundAmountEdit, "expected at least one edit containing a $ amount")
 }
 
 func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {

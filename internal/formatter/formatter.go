@@ -62,6 +62,12 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 		globalDecimalCol := 0
 		if opts.AlignAmounts {
 			globalAccountCol = CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+			// Smart detection: if the file already has hand-aligned amounts,
+			// use the widest existing column as the base. This preserves the
+			// file's visual layout and keeps Format consistent with Tab.
+			if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+				globalAccountCol = detected
+			}
 			if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 				globalAccountCol = opts.MinAlignmentColumn - 1
 			}
@@ -263,6 +269,44 @@ func CalculateGlobalAlignmentColumnWithIndent(transactions []ast.Transaction, in
 		}
 	}
 	return indentSize + maxLen + minSpaces
+}
+
+// DetectExistingAmountColumn returns the leftmost (minimum) 0-indexed rune
+// column where an amount currently begins across all postings, or 0 if no
+// posting has an amount. Used for "smart" alignment detection: when a
+// hand-formatted file has amounts wider than formula natural would compute,
+// this column becomes a floor for new postings via Tab and full document
+// formatting, preserving the file's visual layout.
+//
+// MIN (leftmost) is chosen because:
+//   - For right-align mode, the leftmost amount is the widest one. All other
+//     amounts in a consistently-formatted file end at the same column, so the
+//     widest amount's start column is the canonical accountCol.
+//   - For decimal mode, the leftmost amount is the one with the longest
+//     integer part. After formatting, narrower amounts shift right to align
+//     decimal points; the widest amount's start column stays put. MIN gives
+//     idempotent format runs (MAX would drift wider on each iteration).
+//
+// AST positions from the parser are 1-indexed runes; this function returns
+// 0-indexed runes for direct compatibility with CalculateGlobalAlignmentColumnWithIndent.
+func DetectExistingAmountColumn(transactions []ast.Transaction) int {
+	minCol := -1
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			p := &transactions[i].Postings[j]
+			if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
+				continue
+			}
+			col := p.Amount.Range.Start.Column - 1 // 1-indexed → 0-indexed
+			if minCol < 0 || col < minCol {
+				minCol = col
+			}
+		}
+	}
+	if minCol < 0 {
+		return 0
+	}
+	return minCol
 }
 
 // CalculateAlignment calculates alignment for a single transaction's postings.

@@ -140,6 +140,28 @@ func UTF16OffsetToByteOffset(s string, utf16Offset int) int {
 	return byteOffset
 }
 
+// UTF16OffsetToRuneOffset converts an LSP UTF-16 character offset within s
+// to a rune offset. For BMP characters (ASCII, Latin, Cyrillic, CJK), the
+// result equals the UTF-16 offset. For supplementary characters such as
+// emoji (codepoints > 0xFFFF, surrogate pairs in UTF-16), each character
+// counts as 2 UTF-16 units but 1 rune.
+func UTF16OffsetToRuneOffset(s string, utf16Offset int) int {
+	runeCount := 0
+	utf16Count := 0
+	for _, r := range s {
+		if utf16Count >= utf16Offset {
+			break
+		}
+		if r >= 0x10000 {
+			utf16Count += 2
+		} else {
+			utf16Count++
+		}
+		runeCount++
+	}
+	return runeCount
+}
+
 func ByteOffsetToUTF16(s string, byteOffset int) int {
 	utf16Count := 0
 	currentByte := 0

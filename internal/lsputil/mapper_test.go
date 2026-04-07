@@ -65,6 +65,37 @@ func TestUTF16OffsetToByteOffset(t *testing.T) {
 	}
 }
 
+func TestUTF16OffsetToRuneOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		utf16Offset int
+		expected    int
+	}{
+		{"empty", "", 0, 0},
+		{"ascii_start", "hello", 0, 0},
+		{"ascii_middle", "hello", 3, 3},
+		{"ascii_end", "hello", 5, 5},
+		{"cyrillic_start", "Привет", 0, 0},
+		{"cyrillic_middle", "Привет", 3, 3}, // 1 rune == 1 UTF-16 unit for BMP
+		{"cyrillic_end", "Привет", 6, 6},
+		{"chinese", "hello世界", 7, 7},              // CJK BMP, 1:1
+		{"surrogate_after", "a\U00010400b", 3, 2}, // emoji = 2 UTF-16 units, 1 rune; after = 'a'+emoji = 2 runes
+		{"surrogate_end", "a\U00010400b", 4, 3},   // 'a'+emoji+'b' = 3 runes
+		{"multiple_emoji_one", "😀😀😀", 2, 1},       // after first emoji
+		{"multiple_emoji_all", "😀😀😀", 6, 3},       // after all
+		{"emoji_account", "🍕:food", 7, 6},         // 🍕(2) + :food(5) = 7 utf16, 6 runes
+		{"out_of_bounds", "hello", 100, 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UTF16OffsetToRuneOffset(tt.input, tt.utf16Offset)
+			assert.Equal(t, tt.expected, got, "UTF16OffsetToRuneOffset(%q, %d)", tt.input, tt.utf16Offset)
+		})
+	}
+}
+
 func TestByteOffsetToUTF16(t *testing.T) {
 	tests := []struct {
 		name       string

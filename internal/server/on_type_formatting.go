@@ -148,18 +148,26 @@ func (s *Server) onTypeTab(doc string, params *protocol.DocumentOnTypeFormatting
 	// Note: alignAmount command in VS Code does NOT insert Tab before calling this.
 	// params.Position is the current cursor position WITHOUT Tab in the document.
 	// We insert spaces at current position (empty range = insertion), not replace Tab.
-	cursorChar := int(params.Position.Character)
+	//
+	// alignCol is rune-based (matches lexer.Position.Column units), but
+	// params.Position.Character arrives in LSP UTF-16 units. For BMP characters
+	// (ASCII, Latin, Cyrillic, CJK) the two are 1:1. For supplementary characters
+	// (emoji, codepoint > 0xFFFF) one rune = 2 UTF-16 units, so we must convert
+	// the cursor position to runes before comparing with alignCol.
+	cursorRune := lsputil.UTF16OffsetToRuneOffset(lines[line], int(params.Position.Character))
 
-	if cursorChar >= alignCol {
+	if cursorRune >= alignCol {
 		return nil, nil
 	}
 
-	spacesNeeded := alignCol - cursorChar
+	spacesNeeded := alignCol - cursorRune
 
+	// TextEdit Range stays in LSP UTF-16 (the inserted ASCII spaces have
+	// identical length in runes and UTF-16, so cursor advances correctly).
 	return []protocol.TextEdit{{
 		Range: protocol.Range{
-			Start: protocol.Position{Line: uint32(line), Character: uint32(cursorChar)},
-			End:   protocol.Position{Line: uint32(line), Character: uint32(cursorChar)},
+			Start: protocol.Position{Line: uint32(line), Character: params.Position.Character},
+			End:   protocol.Position{Line: uint32(line), Character: params.Position.Character},
 		},
 		NewText: strings.Repeat(" ", spacesNeeded),
 	}}, nil
@@ -179,6 +187,12 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 
 	settings := s.getSettings()
 	alignCol := formatter.CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, settings.Formatting.IndentSize)
+	// Smart detection: if the file already has hand-aligned amounts, use the
+	// widest existing column as the base. This preserves the file's visual
+	// layout for new postings via Tab and full document formatting.
+	if detected := formatter.DetectExistingAmountColumn(journal.Transactions); detected > alignCol {
+		alignCol = detected
+	}
 	if settings.Formatting.MinAlignmentColumn > 0 && alignCol < settings.Formatting.MinAlignmentColumn-1 {
 		alignCol = settings.Formatting.MinAlignmentColumn - 1
 	}
