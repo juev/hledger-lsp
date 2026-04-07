@@ -161,15 +161,36 @@ hledger-lsp registers Enter and Tab as trigger characters for `textDocument/onTy
 - **Enter**: auto-indents new posting lines after transaction headers or existing postings
 - **Tab**: aligns cursor to the amount column after an account name
 
-### Neovim 0.12+
+A complete setup needs three pieces — and the Tab piece requires a custom keymap because of an LSP protocol limitation explained at the end of this section.
 
-Neovim 0.12 added native `textDocument/onTypeFormatting` support ([PR #34637](https://github.com/neovim/neovim/pull/34637)). Enable it explicitly — it is **not active by default**:
+### 1. Auto-indent after `o` and `<CR>` (`indentexpr`)
+
+`vim.lsp.on_type_formatting` handles `<CR>` (Enter) typed inside insert mode, but it does **not** fire on the `o` normal-mode command (which inserts a newline at the C level, never reaching `vim.on_key`). Without a Vim-side indent rule, `o` after a transaction header drops you on an unindented line. Set `indentexpr` so new posting lines start indented:
 
 ```lua
-vim.lsp.on_type_formatting.enable()
+_G.hledger_indentexpr = function()
+  local lnum = vim.v.lnum
+  if lnum <= 1 then return 0 end
+  local prev = vim.fn.getline(lnum - 1)
+  -- Transaction header (date), periodic (~), auto-rule (=)
+  if prev:match("^[%d~=]") then return vim.bo.shiftwidth end
+  -- Existing posting (whitespace + content)
+  if prev:match("^%s+%S") then return vim.bo.shiftwidth end
+  return 0
+end
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "hledger",
+  callback = function(args)
+    vim.bo[args.buf].autoindent = true
+    vim.bo[args.buf].indentexpr = "v:lua.hledger_indentexpr()"
+  end,
+})
 ```
 
-See `:h lsp-on_type_formatting` for options. To enable for hledger-lsp only:
+### 2. Enable native `onTypeFormatting` for Enter
+
+Neovim 0.12 added native `textDocument/onTypeFormatting` support ([PR #34637](https://github.com/neovim/neovim/pull/34637)). Enable it explicitly per-client — it is **not active by default**:
 
 ```lua
 vim.api.nvim_create_autocmd("LspAttach", {
@@ -181,6 +202,57 @@ vim.api.nvim_create_autocmd("LspAttach", {
   end,
 })
 ```
+
+See `:h lsp-on_type_formatting` for the API. With this, pressing `<CR>` at the end of a posting line inserts a new properly-indented line.
+
+### 3. Custom Tab keymap for amount alignment
+
+Tab alignment cannot use the native `vim.lsp.on_type_formatting` pipeline. The LSP `textDocument/onTypeFormatting` response is a `TextEdit[]` with no field for cursor position ([LSP spec](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/#textDocument_onTypeFormatting), [microsoft/language-server-protocol#724](https://github.com/microsoft/language-server-protocol/issues/724)). The server can insert the alignment spaces, but the client has no standardized way to learn that it should jump the cursor to the end of the inserted text. The native module applies the edit and leaves the cursor where it was — visually it looks like Tab "did nothing".
+
+Use an insert-mode keymap that calls the LSP request synchronously and explicitly moves the cursor afterwards:
+
+```lua
+local function hledger_tab_fallback()
+  local key = vim.api.nvim_replace_termcodes("<Tab>", true, false, true)
+  vim.api.nvim_feedkeys(key, "n", false)
+end
+
+local function hledger_tab()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "hledger_lsp" })
+  if #clients == 0 then return hledger_tab_fallback() end
+  local client = clients[1]
+
+  local pos = vim.api.nvim_win_get_cursor(0)
+  local params = {
+    textDocument = vim.lsp.util.make_text_document_params(),
+    position = { line = pos[1] - 1, character = pos[2] },
+    ch = "\t",
+    options = { tabSize = vim.bo.tabstop, insertSpaces = vim.bo.expandtab },
+  }
+  local resp = client:request_sync("textDocument/onTypeFormatting", params, 500, bufnr)
+  if not resp or not resp.result or #resp.result == 0 then
+    return hledger_tab_fallback()
+  end
+
+  vim.lsp.util.apply_text_edits(resp.result, bufnr, client.offset_encoding)
+
+  local edit = resp.result[#resp.result]
+  local new_col = edit.range.start.character + #edit.newText
+  vim.api.nvim_win_set_cursor(0, { pos[1], new_col })
+end
+
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "hledger",
+  callback = function(args)
+    vim.keymap.set("i", "<Tab>", hledger_tab, { buffer = args.buf })
+  end,
+})
+```
+
+The keymap captures the cursor position **before** Tab is processed (matching the position the server expects), sends a synchronous `onTypeFormatting` request, applies the returned edit, and moves the cursor to `start + len(newText)`. If the LSP is unavailable or returns no edit, it falls back to a literal `<Tab>` (which `expandtab` will convert to spaces).
+
+> **Note (completion plugins):** This keymap intercepts every `<Tab>` in insert mode for `hledger` filetype. If you use a completion plugin (nvim-cmp, blink.cmp, etc.) that maps `<Tab>` to navigate the completion menu, integrate accordingly — for example, only call `hledger_tab()` when the completion popup is not visible, otherwise delegate to the completion plugin.
 
 ### Older Neovim
 
@@ -195,10 +267,12 @@ vim.api.nvim_create_autocmd("LspAttach", {
 ## Troubleshooting
 
 **LSP not attaching:**
+
 - Run `:checkhealth vim.lsp` and check for errors
 - Verify filetype with `:set ft?`
 - Ensure `hledger-lsp` is in PATH
 
 **No completions:**
+
 - Check if completion plugin is configured (nvim-cmp, etc.)
 - Try manual completion with `<C-x><C-o>`
