@@ -3169,6 +3169,99 @@ func TestRulesCompletion_TextEditRange_TopLevel(t *testing.T) {
 	assert.Equal(t, uint32(3), item.TextEdit.Range.End.Character, "End.Character should be 3")
 }
 
+// Regression: issue #23 — inside an `if` block, the LSP should offer
+// %-prefixed field references (from `fields` directive), not top-level
+// directive keywords.
+func TestRulesCompletion_InsideIfBlock_FieldReferences(t *testing.T) {
+	srv := NewServer()
+	content := "fields date, description, amount\nif\n%d"
+	docURI := protocol.DocumentURI("file:///test.rules")
+	srv.documents.Store(docURI, content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 2, Character: 2},
+		},
+	}
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Items)
+
+	labels := make([]string, len(result.Items))
+	for i, it := range result.Items {
+		labels[i] = it.Label
+	}
+
+	assert.Contains(t, labels, "%date", "expected %%date inside if block")
+	assert.Contains(t, labels, "%description", "expected %%description inside if block")
+	assert.Contains(t, labels, "%amount", "expected %%amount inside if block")
+	assert.NotContains(t, labels, "date-format", "did NOT expect date-format inside if block")
+	assert.NotContains(t, labels, "decimal-mark", "did NOT expect decimal-mark inside if block")
+
+	// TextEdit range should cover the '%d' prefix so the completion replaces it.
+	for _, it := range result.Items {
+		require.NotNil(t, it.TextEdit, "item %q must have TextEdit", it.Label)
+		assert.Equal(t, uint32(0), it.TextEdit.Range.Start.Character, "Start should cover the %% prefix")
+		assert.Equal(t, uint32(2), it.TextEdit.Range.End.Character, "End should match cursor col")
+	}
+}
+
+// Regression: issue #23 — without any declared `fields`, fall back to the
+// builtin field names so the user still gets helpful suggestions.
+func TestRulesCompletion_InsideIfBlock_NoFieldsDeclared(t *testing.T) {
+	srv := NewServer()
+	content := "if\n%d"
+	docURI := protocol.DocumentURI("file:///test.rules")
+	srv.documents.Store(docURI, content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 1, Character: 2},
+		},
+	}
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Items)
+
+	labels := make([]string, len(result.Items))
+	for i, it := range result.Items {
+		labels[i] = it.Label
+	}
+
+	assert.Contains(t, labels, "%date", "expected builtin %%date fallback")
+	assert.Contains(t, labels, "%description", "expected builtin %%description fallback")
+	assert.NotContains(t, labels, "date-format", "did NOT expect date-format inside if block")
+}
+
+// Regression: top-level directive completions must still work outside if blocks.
+func TestRulesCompletion_TopLevelStillOffersDirectives(t *testing.T) {
+	srv := NewServer()
+	content := "ski"
+	docURI := protocol.DocumentURI("file:///test.rules")
+	srv.documents.Store(docURI, content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 0, Character: 3},
+		},
+	}
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Items)
+
+	labels := make([]string, len(result.Items))
+	for i, it := range result.Items {
+		labels[i] = it.Label
+	}
+	assert.Contains(t, labels, "skip", "expected 'skip' in top-level directive completions")
+}
+
 func TestCompletion_DigitTriggerOnEmptyLine(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 Apple

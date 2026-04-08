@@ -1153,7 +1153,7 @@ func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) 
 		}
 	}
 
-	rulesItems := rules.Complete(line, col, workspaceAccounts)
+	rulesItems := rules.Complete(doc, lineNum, col, workspaceAccounts)
 	editRange := rulesTextEditRange(line, lineNum, col)
 
 	items := make([]protocol.CompletionItem, len(rulesItems))

@@ -23,13 +23,20 @@ const (
 	KindVariable CompletionItemKind = 6
 )
 
-// Complete returns completion items for the given cursor position in a rules file line.
+// Complete returns completion items for the given cursor position in a rules file.
 //
 // Parameters:
-//   - line: the current line text
+//   - doc: the full document text (required for if-block context detection)
+//   - lineNum: 0-based line number of the cursor
 //   - col: 0-based cursor column in UTF-16 code units (as used by LSP)
 //   - workspaceAccounts: account names from the journal workspace (may be nil)
-func Complete(line string, col int, workspaceAccounts []string) []CompletionItem {
+func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []CompletionItem {
+	lines := strings.Split(doc, "\n")
+	line := ""
+	if lineNum >= 0 && lineNum < len(lines) {
+		line = lines[lineNum]
+	}
+
 	// No completions in comments
 	if len(line) > 0 && (line[0] == '#' || line[0] == ';' || line[0] == '*') {
 		return nil
@@ -37,6 +44,17 @@ func Complete(line string, col int, workspaceAccounts []string) []CompletionItem
 
 	byteCol := lsputil.UTF16OffsetToByteOffset(line, col)
 	prefix := line[:byteCol]
+
+	// Inside an if block, non-indented lines are patterns referencing fields via %name.
+	// Indented lines inside the block are assignments (account1 …) and use the
+	// regular indented-line path so that account value completions still work.
+	if isInsideIfBlock(lines, lineNum) {
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			return completeIndentedLine(prefix, workspaceAccounts)
+		}
+		rf, _ := Parse(doc)
+		return fieldReferenceCompletions(collectDeclaredFields(rf))
+	}
 
 	// Start of line (empty or no significant prefix) -> directives
 	if strings.TrimSpace(prefix) == "" {
@@ -50,6 +68,161 @@ func Complete(line string, col int, workspaceAccounts []string) []CompletionItem
 
 	// Top-level directive value completions
 	return completeDirectiveValue(prefix)
+}
+
+// isInsideIfBlock reports whether the cursor on line lineNum is inside an if block.
+//
+// The `if` line itself is NOT considered "inside" — the block opens for lines
+// below it. Therefore lineNum == 0 can never be inside a block.
+//
+// The cursor line's own content is checked first: if it is clearly a top-level
+// closer (unindented directive or field assignment, not a pattern/continuation),
+// the block is closed and we return false without scanning upward. This lets
+// us correctly handle the transition moment when the user types a new directive
+// that terminates the preceding block.
+//
+// Otherwise, scan lines upward from lineNum-1, skipping lines that can
+// legitimately appear inside an if block (blank, comment, continuation '&',
+// pattern '%', or indented assignment). The first "significant" unindented line
+// we hit decides: if it starts with 'if', the cursor is inside a block; any
+// other top-level directive or field assignment means we were never in one.
+//
+// This scan is intentionally independent of the parser's IfBlock.Range: while
+// the user is typing, the current block may not yet be closed, so the parsed
+// Range can end before the cursor line. Line-level scanning stays correct in
+// that partial-file state.
+func isInsideIfBlock(lines []string, lineNum int) bool {
+	if lineNum <= 0 {
+		return false
+	}
+
+	// The cursor line itself may close the block if it is an unindented
+	// top-level directive / assignment (not a pattern, continuation, comment
+	// or 'if' itself).
+	if lineNum < len(lines) {
+		cursorLine := lines[lineNum]
+		if !isContinuationOfIfBlock(cursorLine) && isTopLevelCloser(cursorLine) {
+			return false
+		}
+	}
+
+	for i := lineNum - 1; i >= 0; i-- {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		// Blank lines and comments do not close an if block.
+		if trimmed == "" || isCommentLine(trimmed) {
+			continue
+		}
+
+		// Indented lines: either assignments inside the block or continuation
+		// of something higher. Keep scanning upward until we hit an unindented
+		// anchor.
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+
+		// Unindented line: this is the decisive anchor.
+		if trimmed == "if" || strings.HasPrefix(trimmed, "if ") {
+			return true
+		}
+		// A continuation '&' or field-reference '%' line means we are still
+		// inside a block opened above — keep scanning upward.
+		if strings.HasPrefix(trimmed, "&") || strings.HasPrefix(trimmed, "%") {
+			continue
+		}
+		// Any other unindented content closes the block.
+		return false
+	}
+	return false
+}
+
+// isContinuationOfIfBlock reports whether the line is a pattern, continuation,
+// comment, blank line, or indented — i.e., it does not itself close an if block.
+func isContinuationOfIfBlock(line string) bool {
+	if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+		return true
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || isCommentLine(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "%") || strings.HasPrefix(trimmed, "&") {
+		return true
+	}
+	return false
+}
+
+// isTopLevelCloser reports whether the line has unindented content that would
+// terminate an if block (a directive, a field assignment, or the 'if' keyword
+// starting a new block).
+func isTopLevelCloser(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+	if line[0] == ' ' || line[0] == '\t' {
+		return false
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || isCommentLine(trimmed) {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "%") || strings.HasPrefix(trimmed, "&") {
+		return false
+	}
+	return true
+}
+
+func isCommentLine(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "*")
+}
+
+// fieldReferenceCompletions returns %-prefixed completion items for the given
+// declared field names. If declared is empty, it falls back to the builtin
+// field names so that users still get meaningful suggestions in an otherwise
+// empty file.
+func fieldReferenceCompletions(declared []string) []CompletionItem {
+	if len(declared) > 0 {
+		items := make([]CompletionItem, 0, len(declared))
+		for _, name := range declared {
+			items = append(items, CompletionItem{
+				Label:  "%" + name,
+				Detail: "field reference",
+				Kind:   KindField,
+			})
+		}
+		return items
+	}
+	items := make([]CompletionItem, 0, len(BuiltinFieldNames))
+	for _, name := range BuiltinFieldNames {
+		items = append(items, CompletionItem{
+			Label:  "%" + name,
+			Detail: "builtin field reference",
+			Kind:   KindField,
+		})
+	}
+	return items
+}
+
+// collectDeclaredFields returns the union of field names declared by all
+// fields directives in the rules file, in first-seen order.
+func collectDeclaredFields(rf *RulesFile) []string {
+	if rf == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, fd := range rf.FieldsDefs {
+		for _, name := range fd.Names {
+			name = strings.TrimSpace(name)
+			if name == "" || seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func completeDirectiveValue(prefix string) []CompletionItem {
