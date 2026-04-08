@@ -618,7 +618,12 @@ func resolveCommodityDisplay(amount *ast.Amount, commodityFormats map[string]Com
 // DefaultSpaceBetween returns the default spacing rule for a commodity.
 // Right-position commodities always get a space. Left-position commodities
 // get a space only for word commodities (not ending with a currency symbol).
+// An empty symbol means there is no commodity at all (plain numbers like
+// `-8`), so there is nothing to space against — return false.
 func DefaultSpaceBetween(position ast.CommodityPosition, symbol string) bool {
+	if symbol == "" {
+		return false
+	}
 	if position == ast.CommodityRight {
 		return true
 	}

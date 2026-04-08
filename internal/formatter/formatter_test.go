@@ -1002,16 +1002,22 @@ func TestFormatDocument_NoCommodityAmount(t *testing.T) {
 		edits := FormatDocument(journal, input)
 		result := applyEdits(input, edits)
 
-		assert.Contains(t, result, "169", "amount should be preserved in formatted output")
+		// Hand-formatted input has amount at 1-indexed col 38 (4 indent + 26 runes
+		// account + 7 spaces). Detection picks col 37 (0-indexed), formula gives 32.
+		// max(32, 37) = 37 → output writes 7 spaces, identical to input (idempotent).
+		expected := `Y2019
 
-		lines := strings.Split(result, "\n")
-		require.GreaterOrEqual(t, len(lines), 4)
+12/31 * Apple
+    Расходы:Развлечения:Музыка       169
+    Активы:Тинькофф:Текущий`
+		assert.Equal(t, expected, result, "format should be idempotent for no-commodity amount")
 
-		postingLine := lines[3]
-		assert.Contains(t, postingLine, "169", "posting line should contain amount 169")
-		assert.Contains(t, postingLine, "Расходы:Развлечения:Музыка", "posting line should contain account name")
-
-		t.Logf("Formatted posting line: %q", postingLine)
+		// Idempotency: re-format result, must equal result.
+		journal2, errs2 := parser.Parse(result)
+		require.Empty(t, errs2)
+		edits2 := FormatDocument(journal2, result)
+		result2 := applyEdits(result, edits2)
+		assert.Equal(t, result, result2, "second format pass must be idempotent")
 	})
 
 	t.Run("no commodity with multiple transactions for global alignment", func(t *testing.T) {
@@ -1031,18 +1037,61 @@ func TestFormatDocument_NoCommodityAmount(t *testing.T) {
 		edits := FormatDocument(journal, input)
 		result := applyEdits(input, edits)
 
-		assert.Contains(t, result, "100", "first amount should be preserved")
-		assert.Contains(t, result, "169", "second amount should be preserved")
+		// maxLen = 26 ("Расходы:Развлечения:Музыка"), formula = 4+26+2 = 32.
+		// Detection MIN: 100 at 0-col 19, 169 at 0-col 37 → MIN=19.
+		// globalAccountCol = max(32, 19) = 32. Both amounts align at 0-col 32 (1-col 33).
+		// Short:Account: 17 prefix runes + 15 spaces = 32. Расходы: 30 runes + 2 spaces = 32.
+		expected := `Y2019
 
-		lines := strings.Split(result, "\n")
-		t.Logf("Formatted result:\n%s", result)
+12/30 * Transaction 1
+    Short:Account               100
+    Assets:Cash
 
-		for i, line := range lines {
-			if strings.Contains(line, "Расходы:Развлечения:Музыка") {
-				assert.Contains(t, line, "169", "line %d should contain amount 169: %q", i, line)
-			}
-		}
+12/31 * Apple
+    Расходы:Развлечения:Музыка  169
+    Активы:Тинькофф:Текущий`
+		assert.Equal(t, expected, result, "format should align both amounts at the same column without extra space")
+
+		// Idempotency: second format pass must produce the same result.
+		journal2, errs2 := parser.Parse(result)
+		require.Empty(t, errs2)
+		edits2 := FormatDocument(journal2, result)
+		result2 := applyEdits(result, edits2)
+		assert.Equal(t, result, result2, "second format pass must be idempotent")
 	})
+}
+
+// TestFormatDocument_Issue22_NoCommodityIdempotent reproduces the bug from
+// https://github.com/juev/hledger-lsp/issues/22 — hand-formatted journals with
+// plain numbers (no commodity symbol) drift to the right by one column on each
+// save. The repro is taken verbatim from the issue report.
+func TestFormatDocument_Issue22_NoCommodityIdempotent(t *testing.T) {
+	input := "2026-04-07 Lunch\n" +
+		"    eliasp:cash                   -8\n" +
+		"    eliasp:expenses:lunch         8\n"
+
+	// eliasp:cash = 11 runes; eliasp:expenses:lunch = 21 runes.
+	// formula = 4 + 21 + 2 = 27. Both amounts at 1-col 35 in input → detection
+	// MIN = 34 (0-indexed). globalAccountCol = max(27, 34) = 34. Output preserves
+	// the hand-formatted alignment exactly: line 1 has 19 spaces, line 2 has 9.
+	expected := input
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	edits := FormatDocument(journal, input)
+	result := applyEdits(input, edits)
+	assert.Equal(t, expected, result, "first format pass must preserve hand alignment")
+
+	// Three additional format passes — drift would compound on each pass if the
+	// bug were still present. Each pass must produce identical output.
+	for i := 2; i <= 4; i++ {
+		journalN, errsN := parser.Parse(result)
+		require.Empty(t, errsN)
+		editsN := FormatDocument(journalN, result)
+		next := applyEdits(result, editsN)
+		assert.Equal(t, result, next, "format pass %d must be idempotent (drift would indicate bug regression)", i)
+		result = next
+	}
 }
 
 func applyEdits(content string, edits []protocol.TextEdit) string {
@@ -1619,6 +1668,8 @@ func TestDefaultSpaceBetween(t *testing.T) {
 		{"left multi-char symbol no space", ast.CommodityLeft, "AU$", false},
 		{"left word commodity spaced", ast.CommodityLeft, "USD", true},
 		{"left word commodity AAPL spaced", ast.CommodityLeft, "AAPL", true},
+		{"empty symbol left no space", ast.CommodityLeft, "", false},
+		{"empty symbol right no space", ast.CommodityRight, "", false},
 	}
 
 	for _, tt := range tests {
