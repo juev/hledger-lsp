@@ -175,6 +175,63 @@ func TestIsInsideIfBlock_EmptyLineInBlock(t *testing.T) {
 	}
 }
 
+func TestIsInsideIfBlock_AmpAmpContinuation(t *testing.T) {
+	// `&&` continuation line is recognised the same way as `&`
+	lines := strings.Split("if\n%payee X\n&& %a", "\n")
+	if !isInsideIfBlock(lines, 2) {
+		t.Error("expected cursor on '&& %a' continuation line to be inside if block")
+	}
+}
+
+func TestIsInsideIfBlock_NegationContinuation(t *testing.T) {
+	// `!` negation line is a pattern, not a top-level closer
+	lines := strings.Split("if\n! %date 2024", "\n")
+	if !isInsideIfBlock(lines, 1) {
+		t.Error("expected cursor on negation line ('! %' date 2024) to be inside if block")
+	}
+}
+
+func TestIsInsideIfBlock_AmpAmpNegationContinuation(t *testing.T) {
+	// `&& !` AND-NOT continuation
+	lines := strings.Split("if\n%payee X\n&& ! %date 2024", "\n")
+	if !isInsideIfBlock(lines, 2) {
+		t.Error("expected cursor on AND-NOT continuation ('&& ! %' date 2024) to be inside if block")
+	}
+}
+
+func TestIsInsideIfBlock_RawRegexFirstPattern(t *testing.T) {
+	// Raw regex (no `%` prefix) on first pattern line, cursor on next
+	// pattern line is still inside the block.
+	lines := strings.Split("if\nsomething\n%date 2024", "\n")
+	if !isInsideIfBlock(lines, 2) {
+		t.Error("expected cursor on field-pattern line below raw regex to be inside if block")
+	}
+}
+
+func TestIsInsideIfBlock_RawRegexOnPatternLine(t *testing.T) {
+	// Cursor sits on the raw-regex pattern line itself.
+	lines := strings.Split("if\nsomething", "\n")
+	if !isInsideIfBlock(lines, 1) {
+		t.Error("expected cursor on raw-regex pattern line itself to be inside if block")
+	}
+}
+
+func TestIsInsideIfBlock_KnownDirectiveStillCloses(t *testing.T) {
+	// Regression: known directive must still close the block.
+	lines := strings.Split("if\n%date 2024\nskip 1", "\n")
+	if isInsideIfBlock(lines, 2) {
+		t.Error("expected cursor on 'skip 1' line to NOT be inside if block (skip is a known directive)")
+	}
+}
+
+func TestIsInsideIfBlock_BuiltinFieldStillCloses(t *testing.T) {
+	// Regression: top-level field assignment must close the block.
+	lines := strings.Split("if\n%date 2024\naccount1 assets:bank", "\n")
+	if isInsideIfBlock(lines, 2) {
+		t.Error("expected cursor on top-level 'account1' assignment to NOT be inside if block")
+	}
+}
+
 // --- if-block field reference completion tests ---
 
 func TestComplete_InsideIfBlock_WithDeclaredFields(t *testing.T) {
@@ -225,6 +282,46 @@ func TestComplete_InsideIfBlock_ContinuationAmpersand(t *testing.T) {
 	}
 }
 
+func TestComplete_InsideIfBlock_ContinuationAmpAmp(t *testing.T) {
+	// Continuation with '&&' — also inside the block
+	doc := "fields payee, date\nif\n%payee FOO\n&& %d"
+	items := Complete(doc, 3, 5, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date completion on '&& %%d' continuation line, got %v", labels)
+	}
+	if contains(labels, "date-format") {
+		t.Errorf("did NOT expect top-level directive date-format on '&& %%d' line, got %v", labels)
+	}
+}
+
+func TestComplete_InsideIfBlock_NegationLine(t *testing.T) {
+	// Negation with '!' — line is a pattern
+	doc := "fields date\nif\n! %d"
+	items := Complete(doc, 2, 4, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date completion on '! %%d' negation line, got %v", labels)
+	}
+	if contains(labels, "date-format") {
+		t.Errorf("did NOT expect top-level directive date-format on '! %%d' line, got %v", labels)
+	}
+}
+
+func TestComplete_InsideIfBlock_AfterRawRegexPattern(t *testing.T) {
+	// Raw regex pattern (no `%`) on first pattern line — cursor on next
+	// pattern line still gets field reference completions.
+	doc := "fields date, payee\nif\nsomething\n%d"
+	items := Complete(doc, 3, 2, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date completion on field-pattern line below raw regex, got %v", labels)
+	}
+	if contains(labels, "date-format") {
+		t.Errorf("did NOT expect top-level directive date-format below raw regex pattern, got %v", labels)
+	}
+}
+
 func TestComplete_InsideIfBlock_IndentedAssignment(t *testing.T) {
 	// Indented line inside if block: value completion for account1 (accounts)
 	// NOT %field completions
@@ -272,6 +369,117 @@ func TestComplete_InsideIfBlock_OnIfLineItself(t *testing.T) {
 	labels := itemLabels(items)
 	if contains(labels, "%date") {
 		t.Errorf("did NOT expect %%date when cursor is on the 'if' line itself, got %v", labels)
+	}
+}
+
+func TestComplete_InsideIfBlock_SameLineAfterIfSpace(t *testing.T) {
+	// `if %d` on a single line — cursor after `if ` should offer field refs.
+	doc := "fields date, payee\nif %d"
+	items := Complete(doc, 1, 5, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date completion on 'if %%d' inline pattern, got %v", labels)
+	}
+	if contains(labels, "date-format") {
+		t.Errorf("did NOT expect top-level directive date-format on 'if %%d' inline pattern, got %v", labels)
+	}
+}
+
+func TestComplete_InsideIfBlock_SameLineMultiPattern(t *testing.T) {
+	// `if %payee X && %a` — cursor inside the second pattern still gets refs.
+	doc := "fields payee, amount\nif %payee X && %a"
+	items := Complete(doc, 1, 17, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%amount") {
+		t.Errorf("expected %%amount completion on 'if %%payee X && %%a' multi-pattern, got %v", labels)
+	}
+}
+
+func TestComplete_InsideIfBlock_SameLineRawRegexThenField(t *testing.T) {
+	// `if something && %d` — cursor inside the named-field part gets refs,
+	// even though the first part is a raw regex.
+	doc := "fields date\nif something && %d"
+	items := Complete(doc, 1, 18, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date completion on 'if something && %%d', got %v", labels)
+	}
+}
+
+func TestComplete_OnBareIfKeywordWithSpace(t *testing.T) {
+	// `if ` with trailing space — cursor right after the space is in pattern
+	// position, should already offer field refs.
+	doc := "fields date\nif "
+	items := Complete(doc, 1, 3, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date right after 'if ' space, got %v", labels)
+	}
+}
+
+// --- field reference interpolation in assignment values ---
+
+func TestComplete_AssignmentValue_FieldRef(t *testing.T) {
+	// `description %p` — cursor in value position typing %-prefixed token,
+	// should offer field references (not nil, not directives).
+	doc := "fields date, payee, description\n  description %p"
+	items := Complete(doc, 1, 16, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%payee") {
+		t.Errorf("expected %%payee in description value completion, got %v", labels)
+	}
+	if !contains(labels, "%date") {
+		t.Errorf("expected %%date in description value completion, got %v", labels)
+	}
+}
+
+func TestComplete_AssignmentValue_AccountValueWithFieldRef(t *testing.T) {
+	// `account1 %p` — cursor on %-token in account1 value should offer
+	// field references, NOT workspace accounts.
+	doc := "fields date, payee\n  account1 %p"
+	accounts := []string{"expenses:food", "assets:bank"}
+	items := Complete(doc, 1, 13, accounts)
+	labels := itemLabels(items)
+	if !contains(labels, "%payee") {
+		t.Errorf("expected %%payee in account1 value completion, got %v", labels)
+	}
+	if contains(labels, "expenses:food") {
+		t.Errorf("did NOT expect account expenses:food when cursor word starts with %%, got %v", labels)
+	}
+}
+
+func TestComplete_AssignmentValue_AccountValueWithoutPercent(t *testing.T) {
+	// Regression: `account1 ex` — cursor on plain word should offer accounts.
+	doc := "fields date, payee\n  account1 ex"
+	accounts := []string{"expenses:food", "assets:bank"}
+	items := Complete(doc, 1, 13, accounts)
+	labels := itemLabels(items)
+	if !contains(labels, "expenses:food") {
+		t.Errorf("expected expenses:food account completion, got %v", labels)
+	}
+	if contains(labels, "%payee") {
+		t.Errorf("did NOT expect %%payee in plain account value completion, got %v", labels)
+	}
+}
+
+func TestComplete_AssignmentValue_FieldRefInsideIfBlock(t *testing.T) {
+	// Same case as TestComplete_AssignmentValue_FieldRef, but the assignment
+	// lives inside an if block.
+	doc := "fields date, payee, description\nif\n%payee Foo\n  description %p"
+	items := Complete(doc, 3, 16, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%payee") {
+		t.Errorf("expected %%payee in description value inside if block, got %v", labels)
+	}
+}
+
+func TestComplete_AssignmentValue_FieldRefBuiltinFallback(t *testing.T) {
+	// No `fields` directive declared — fall back to builtin field names.
+	doc := "  description %p"
+	items := Complete(doc, 0, 16, nil)
+	labels := itemLabels(items)
+	if !contains(labels, "%payee") {
+		t.Errorf("expected builtin %%payee fallback in description value, got %v", labels)
 	}
 }
 

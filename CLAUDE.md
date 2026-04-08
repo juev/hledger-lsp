@@ -65,7 +65,8 @@ Account names contain colons, amounts separated by 2+ spaces from account.
 
 **Documentation references** (use when questions arise about hledger format):
 
-- Local: `docs/hledger.md` — comprehensive format reference
+- Local: `docs/hledger.md` — journal format reference
+- Local: `docs/hledger-csv-rules.md` — CSV rules format reference (for `.rules` files)
 - Official: <https://hledger.org/hledger.html>
 
 ## Task Tracking

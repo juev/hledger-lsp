@@ -45,15 +45,35 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []Co
 	byteCol := lsputil.UTF16OffsetToByteOffset(line, col)
 	prefix := line[:byteCol]
 
+	// Lazy parse: declaredFields is computed on first access. Used by
+	// pattern-context and value-side `%fieldname` completions.
+	var declaredFields []string
+	var declaredFieldsLoaded bool
+	getDeclaredFields := func() []string {
+		if !declaredFieldsLoaded {
+			rf, _ := Parse(doc)
+			declaredFields = collectDeclaredFields(rf)
+			declaredFieldsLoaded = true
+		}
+		return declaredFields
+	}
+
+	// Cursor on the `if` line itself, in pattern position (after `if<space>`
+	// or `if<tab>`). The rest of the inline pattern list — including raw
+	// regex, `&&`, `!`, etc. — is treated as pattern context here, since
+	// hledger allows patterns to begin on the same line as `if`.
+	if isInlineIfPatternPosition(prefix) {
+		return fieldReferenceCompletions(getDeclaredFields())
+	}
+
 	// Inside an if block, non-indented lines are patterns referencing fields via %name.
 	// Indented lines inside the block are assignments (account1 …) and use the
 	// regular indented-line path so that account value completions still work.
 	if isInsideIfBlock(lines, lineNum) {
 		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
-			return completeIndentedLine(prefix, workspaceAccounts)
+			return completeIndentedLine(prefix, workspaceAccounts, getDeclaredFields)
 		}
-		rf, _ := Parse(doc)
-		return fieldReferenceCompletions(collectDeclaredFields(rf))
+		return fieldReferenceCompletions(getDeclaredFields())
 	}
 
 	// Start of line (empty or no significant prefix) -> directives
@@ -63,7 +83,7 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []Co
 
 	// Indented line: field name value
 	if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
-		return completeIndentedLine(prefix, workspaceAccounts)
+		return completeIndentedLine(prefix, workspaceAccounts, getDeclaredFields)
 	}
 
 	// Top-level directive value completions
@@ -76,16 +96,17 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []Co
 // below it. Therefore lineNum == 0 can never be inside a block.
 //
 // The cursor line's own content is checked first: if it is clearly a top-level
-// closer (unindented directive or field assignment, not a pattern/continuation),
+// closer (unindented known directive or field assignment, not a pattern/continuation),
 // the block is closed and we return false without scanning upward. This lets
 // us correctly handle the transition moment when the user types a new directive
 // that terminates the preceding block.
 //
 // Otherwise, scan lines upward from lineNum-1, skipping lines that can
-// legitimately appear inside an if block (blank, comment, continuation '&',
-// pattern '%', or indented assignment). The first "significant" unindented line
-// we hit decides: if it starts with 'if', the cursor is inside a block; any
-// other top-level directive or field assignment means we were never in one.
+// legitimately appear inside an if block (blank, comment, continuation '&'/'&&',
+// pattern '%', negation '!', raw regex, or indented assignment). The first
+// "significant" unindented line we hit decides: if it starts with 'if', the
+// cursor is inside a block; any KnownDirective or builtin field assignment
+// means we were never in one.
 //
 // This scan is intentionally independent of the parser's IfBlock.Range: while
 // the user is typing, the current block may not yet be closed, so the parsed
@@ -123,15 +144,21 @@ func isInsideIfBlock(lines []string, lineNum int) bool {
 		}
 
 		// Unindented line: this is the decisive anchor.
-		if trimmed == "if" || strings.HasPrefix(trimmed, "if ") {
+		if trimmed == "if" || strings.HasPrefix(trimmed, "if ") || strings.HasPrefix(trimmed, "if\t") {
 			return true
 		}
-		// A continuation '&' or field-reference '%' line means we are still
-		// inside a block opened above — keep scanning upward.
-		if strings.HasPrefix(trimmed, "&") || strings.HasPrefix(trimmed, "%") {
+		// A pattern operator line (`%`, `&`, `&&`, `!`, `&& !`) means we are
+		// still inside a block opened above — keep scanning upward.
+		if looksLikePatternLine(trimmed) {
 			continue
 		}
-		// Any other unindented content closes the block.
+		// Raw regex pattern: any unindented text whose first word is not a
+		// known top-level directive or builtin field assignment is treated as
+		// a whole-record pattern, so we keep scanning upward.
+		if !firstWordIsTopLevelKeyword(trimmed) {
+			continue
+		}
+		// Known top-level directive or field assignment: closes the block.
 		return false
 	}
 	return false
@@ -147,15 +174,15 @@ func isContinuationOfIfBlock(line string) bool {
 	if trimmed == "" || isCommentLine(trimmed) {
 		return true
 	}
-	if strings.HasPrefix(trimmed, "%") || strings.HasPrefix(trimmed, "&") {
-		return true
-	}
-	return false
+	return looksLikePatternLine(trimmed)
 }
 
 // isTopLevelCloser reports whether the line has unindented content that would
-// terminate an if block (a directive, a field assignment, or the 'if' keyword
-// starting a new block).
+// terminate an if block (a known directive, a builtin field assignment, or
+// the 'if' keyword starting a new block).
+//
+// Unknown unindented text is NOT a closer — it is treated as a possible
+// raw-regex pattern (whole-record match), per hledger CSV rules grammar.
 func isTopLevelCloser(line string) bool {
 	if len(line) == 0 {
 		return false
@@ -167,10 +194,73 @@ func isTopLevelCloser(line string) bool {
 	if trimmed == "" || isCommentLine(trimmed) {
 		return false
 	}
-	if strings.HasPrefix(trimmed, "%") || strings.HasPrefix(trimmed, "&") {
+	if looksLikePatternLine(trimmed) {
+		return false
+	}
+	// Only known top-level directives or builtin field assignments close
+	// the block. Anything else is a possible raw-regex pattern.
+	return firstWordIsTopLevelKeyword(trimmed)
+}
+
+// firstWordIsTopLevelKeyword reports whether the first word of trimmed is
+// a known top-level keyword (directive, `if`, `end`) or a builtin field name
+// (which would form an unindented field assignment). Anything else is treated
+// as a raw-regex pattern by the if-block heuristic.
+func firstWordIsTopLevelKeyword(trimmed string) bool {
+	word := firstWord(trimmed)
+	if word == "" {
+		return false
+	}
+	if word == "if" || word == "end" {
+		return true
+	}
+	if knownDirectives[word] {
+		return true
+	}
+	return isBuiltinField(word)
+}
+
+// isInlineIfPatternPosition reports whether `prefix` (the part of the cursor
+// line up to the cursor) places the cursor in the inline pattern position of
+// an `if` line — i.e. the line begins with `if` followed by whitespace, and
+// the cursor is past that whitespace.
+//
+// The bare keyword (`if`, `if|`) is intentionally NOT in pattern position:
+// the user is still typing the keyword and should see top-level directive
+// completions there. The space after `if` is the trigger.
+func isInlineIfPatternPosition(prefix string) bool {
+	if len(prefix) < 3 {
+		return false
+	}
+	if prefix[0] != 'i' || prefix[1] != 'f' {
+		return false
+	}
+	if prefix[2] != ' ' && prefix[2] != '\t' {
 		return false
 	}
 	return true
+}
+
+// looksLikePatternLine reports whether a trimmed line looks like a pattern
+// (or pattern operator) that can appear inside an if block. Recognised forms:
+//
+//   - `%fieldname …` — named-field match
+//   - `&  …` / `&& …` — AND continuation (single or double ampersand)
+//   - `!  …` — NOT negation
+//   - `&& !` / `& !` — AND-NOT continuation (covered by the `&` prefix)
+//
+// Raw-regex patterns (`something` without any operator prefix) are NOT
+// classified here; they are handled separately by the blacklist check on
+// top-level keywords because they look identical to unknown directives.
+func looksLikePatternLine(trimmed string) bool {
+	if trimmed == "" {
+		return false
+	}
+	switch trimmed[0] {
+	case '%', '&', '!':
+		return true
+	}
+	return false
 }
 
 func isCommentLine(trimmed string) bool {
@@ -252,7 +342,7 @@ func completeDirectiveValue(prefix string) []CompletionItem {
 	return directiveCompletions()
 }
 
-func completeIndentedLine(prefix string, workspaceAccounts []string) []CompletionItem {
+func completeIndentedLine(prefix string, workspaceAccounts []string, declaredFields func() []string) []CompletionItem {
 	trimmed := strings.TrimLeft(prefix, " \t")
 	if trimmed == "" {
 		return fieldNameCompletions()
@@ -260,7 +350,14 @@ func completeIndentedLine(prefix string, workspaceAccounts []string) []Completio
 
 	word, rest := splitWord(trimmed)
 	if isBuiltinField(word) && rest != "" {
-		// After a field name -> value completions based on field type
+		// After a field name we are in value position. If the user is
+		// currently typing a `%`-prefixed token (interpolation reference),
+		// offer field references — this overrides the account completion
+		// because account names cannot start with `%`.
+		if cursorWordStartsWithPercent(prefix) {
+			return fieldReferenceCompletions(declaredFields())
+		}
+		// Otherwise complete based on the field type.
 		if strings.HasPrefix(word, "account") {
 			return accountCompletions(workspaceAccounts)
 		}
@@ -269,6 +366,26 @@ func completeIndentedLine(prefix string, workspaceAccounts []string) []Completio
 
 	// Partial field name
 	return fieldNameCompletions()
+}
+
+// cursorWordStartsWithPercent reports whether the last whitespace-delimited
+// word in `prefix` (the line up to the cursor) begins with `%`. This is the
+// signal that the user is typing a field reference (`%payee`, `%date`, …).
+func cursorWordStartsWithPercent(prefix string) bool {
+	// Walk back from end of prefix until we hit whitespace.
+	end := len(prefix)
+	start := end
+	for start > 0 {
+		c := prefix[start-1]
+		if c == ' ' || c == '\t' {
+			break
+		}
+		start--
+	}
+	if start == end {
+		return false
+	}
+	return prefix[start] == '%'
 }
 
 func directiveCompletions() []CompletionItem {
