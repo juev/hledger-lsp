@@ -1153,7 +1153,18 @@ func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) 
 		}
 	}
 
-	rulesItems := rules.Complete(doc, lineNum, col, workspaceAccounts)
+	// Resolve the transitive include closure so completion can see `fields`
+	// declared in included .rules files (issue #24). The primary file's
+	// content comes from the editor; child includes go through the loader's
+	// ContentGetter (which prefers open documents over disk).
+	var resolvedIncludes *rules.ResolvedRules
+	if s.rulesLoader != nil {
+		if path := uriToPath(params.TextDocument.URI); path != "" {
+			resolvedIncludes, _ = s.rulesLoader.LoadFromContent(path, doc)
+		}
+	}
+
+	rulesItems := rules.Complete(doc, lineNum, col, workspaceAccounts, resolvedIncludes)
 	editRange := rulesTextEditRange(line, lineNum, col)
 
 	items := make([]protocol.CompletionItem, len(rulesItems))

@@ -30,7 +30,11 @@ const (
 //   - lineNum: 0-based line number of the cursor
 //   - col: 0-based cursor column in UTF-16 code units (as used by LSP)
 //   - workspaceAccounts: account names from the journal workspace (may be nil)
-func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []CompletionItem {
+//   - resolvedIncludes: the transitively-resolved include chain of this .rules
+//     file, produced by rules.Loader. When non-nil, declared-field lookups walk
+//     Primary plus every included file (issue #24). When nil, behaviour is
+//     identical to pre-#24: only fields declared in doc itself are visible.
+func Complete(doc string, lineNum int, col int, workspaceAccounts []string, resolvedIncludes *ResolvedRules) []CompletionItem {
 	lines := strings.Split(doc, "\n")
 	line := ""
 	if lineNum >= 0 && lineNum < len(lines) {
@@ -46,13 +50,15 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string) []Co
 	prefix := line[:byteCol]
 
 	// Lazy parse: declaredFields is computed on first access. Used by
-	// pattern-context and value-side `%fieldname` completions.
+	// pattern-context and value-side `%fieldname` completions. When the
+	// caller supplies a resolved include chain, transitively-declared fields
+	// are merged in (issue #24).
 	var declaredFields []string
 	var declaredFieldsLoaded bool
 	getDeclaredFields := func() []string {
 		if !declaredFieldsLoaded {
 			rf, _ := Parse(doc)
-			declaredFields = collectDeclaredFields(rf)
+			declaredFields = collectDeclaredFieldsResolved(resolvedIncludes, rf)
 			declaredFieldsLoaded = true
 		}
 		return declaredFields
@@ -302,6 +308,38 @@ func collectDeclaredFields(rf *RulesFile) []string {
 	}
 	seen := make(map[string]bool)
 	var out []string
+	appendFieldsFrom(rf, seen, &out)
+	return out
+}
+
+// collectDeclaredFieldsResolved returns the union of field names declared by
+// fields directives across a transitively-resolved include chain. Primary is
+// walked first, then Files in FileOrder, so that the primary file's fields
+// win the first-seen slots and included files contribute only previously
+// unseen names.
+//
+// When resolved is nil, behaviour is identical to collectDeclaredFields(fallback),
+// which guarantees regression safety for callers that do not yet have a
+// resolved include chain (e.g. unit tests that pass a bare document).
+func collectDeclaredFieldsResolved(resolved *ResolvedRules, fallback *RulesFile) []string {
+	if resolved == nil {
+		return collectDeclaredFields(fallback)
+	}
+	seen := make(map[string]bool)
+	var out []string
+	appendFieldsFrom(resolved.Primary, seen, &out)
+	for _, path := range resolved.FileOrder {
+		appendFieldsFrom(resolved.Files[path], seen, &out)
+	}
+	return out
+}
+
+// appendFieldsFrom adds every non-empty field name declared in rf to out,
+// skipping names already present in seen. rf may be nil.
+func appendFieldsFrom(rf *RulesFile, seen map[string]bool, out *[]string) {
+	if rf == nil {
+		return
+	}
 	for _, fd := range rf.FieldsDefs {
 		for _, name := range fd.Names {
 			name = strings.TrimSpace(name)
@@ -309,10 +347,9 @@ func collectDeclaredFields(rf *RulesFile) []string {
 				continue
 			}
 			seen[name] = true
-			out = append(out, name)
+			*out = append(*out, name)
 		}
 	}
-	return out
 }
 
 func completeDirectiveValue(prefix string) []CompletionItem {

@@ -29,6 +29,12 @@ transaction fields.
 LSP filters them out of the journal include tree (`internal/include/loader.go`)
 and parses them through the rules-specific lexer/parser.
 
+A `.rules` file can itself `include` other `.rules` files. The LSP resolves
+this transitive closure via a dedicated rules-include loader
+(`internal/rules/loader.go`) so that completion in the parent file can see
+`fields` (and other directives) declared in any of the included files. See
+[The `include` directive](#the-include-directive) below.
+
 ## Top-Level Directives
 
 The authoritative list lives in `internal/rules/lexer.go` (`KnownDirectives`).
@@ -54,6 +60,41 @@ Plus two structural keywords:
 
 - `if` — open a conditional block (see [If Block Grammar](#if-block-grammar))
 - `end` — terminate the current scope
+
+## The `include` directive
+
+A `.rules` file can pull in another `.rules` file with `include`:
+
+```text
+# common.rules — shared across several bank statements
+fields date, payee, amount, description
+date-format %Y-%m-%d
+```
+
+```text
+# bank-a.rules
+include common.rules
+skip 1
+
+if %payee Amazon
+  account2 expenses:shopping
+```
+
+The LSP resolves the transitive closure of `include` directives (via
+`internal/rules/loader.go`) so that field references typed inside an `if`
+block in `bank-a.rules` — e.g. `%payee`, `%description` — are completed
+using the `fields` list declared in `common.rules`. This works regardless of
+whether the included file is also open in the editor: open-buffer content is
+preferred, with a disk fallback.
+
+Cycles (`a.rules` → `b.rules` → `a.rules`) are detected and broken; the
+cursor's file still gets completion for its directly-reachable `fields`.
+Non-`.rules` includes are reported as an error and their content is not
+merged.
+
+Path resolution follows hledger's own rules: relative paths are anchored to
+the including file's directory, and `~` expands to the user's home. Glob
+patterns are not yet supported in rules-include.
 
 ## Field Assignments
 

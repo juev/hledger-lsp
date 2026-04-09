@@ -26,6 +26,7 @@ type Server struct {
 	documents             sync.Map
 	analyzer              *analyzer.Analyzer
 	loader                *include.Loader
+	rulesLoader           *rules.Loader
 	resolved              sync.Map
 	cliClient             *cli.Client
 	rootURI               string
@@ -39,13 +40,30 @@ type Server struct {
 
 func NewServer() *Server {
 	srv := &Server{
-		analyzer: analyzer.New(),
-		loader:   include.NewLoader(),
+		analyzer:    analyzer.New(),
+		loader:      include.NewLoader(),
+		rulesLoader: rules.NewLoader(),
 	}
+	// Honour unsaved editor content for .rules files that are pulled in via
+	// transitive `include` from a currently-open rules file. The loader first
+	// consults this getter before reading from disk.
+	srv.rulesLoader.SetContentGetter(srv.rulesLoaderContentGetter)
 	defaults := defaultServerSettings()
 	srv.cliClient = cli.NewClient(defaults.CLI.Path, defaults.CLI.Timeout)
 	srv.setSettings(defaults)
 	return srv
+}
+
+// rulesLoaderContentGetter looks up the given filesystem path in the open
+// documents map and returns the editor content if found. When the file is not
+// open in the editor, it returns found=false so the rules Loader falls back to
+// os.ReadFile.
+func (s *Server) rulesLoaderContentGetter(path string) (string, bool, error) {
+	docURI := pathToURI(path)
+	if content, ok := s.GetDocument(docURI); ok {
+		return content, true, nil
+	}
+	return "", false, nil
 }
 
 func (s *Server) reinitCLI(cfg cliSettings) {
@@ -236,6 +254,12 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 				s.loader.InvalidateFile(path)
 			}
 		}
+		// Rules loader cache is independent of the journal workspace — a
+		// .rules file that changes must be evicted so the next completion
+		// re-reads its current content (editor or disk).
+		if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
+			s.rulesLoader.InvalidateFile(path)
+		}
 		go s.publishDiagnostics(ctx, params.TextDocument.URI, content)
 	}
 	return nil
@@ -279,6 +303,9 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 			}
 			s.loader.InvalidateFile(path)
 		}
+	}
+	if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
+		s.rulesLoader.InvalidateFile(path)
 	}
 	return nil
 }
@@ -465,6 +492,9 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		}
 
 		s.loader.InvalidateFile(path)
+		if filetype.IsRules(path) {
+			s.rulesLoader.InvalidateFile(path)
+		}
 
 		if change.Type == protocol.FileChangeTypeChanged || change.Type == protocol.FileChangeTypeCreated {
 			if data, err := os.ReadFile(path); err == nil {
