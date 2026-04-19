@@ -17,8 +17,9 @@ import (
 )
 
 type mockClient struct {
-	mu          sync.Mutex
-	diagnostics []protocol.PublishDiagnosticsParams
+	mu            sync.Mutex
+	diagnostics   []protocol.PublishDiagnosticsParams
+	registrations []protocol.Registration
 }
 
 func (m *mockClient) Progress(ctx context.Context, params *protocol.ProgressParams) error {
@@ -53,6 +54,9 @@ func (m *mockClient) Telemetry(ctx context.Context, params interface{}) error {
 }
 
 func (m *mockClient) RegisterCapability(ctx context.Context, params *protocol.RegistrationParams) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.registrations = append(m.registrations, params.Registrations...)
 	return nil
 }
 
@@ -77,6 +81,14 @@ func (m *mockClient) getDiagnostics() []protocol.PublishDiagnosticsParams {
 	defer m.mu.Unlock()
 	result := make([]protocol.PublishDiagnosticsParams, len(m.diagnostics))
 	copy(result, m.diagnostics)
+	return result
+}
+
+func (m *mockClient) getRegistrations() []protocol.Registration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]protocol.Registration, len(m.registrations))
+	copy(result, m.registrations)
 	return result
 }
 
@@ -116,6 +128,37 @@ func TestServer_Initialized_NonBlocking(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("Initialized blocked on Configuration call - should return immediately")
 	}
+}
+
+func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	srv.registerFileWatchers()
+
+	registrations := client.getRegistrations()
+	require.Len(t, registrations, 1)
+
+	var watchedOptions protocol.DidChangeWatchedFilesRegistrationOptions
+	switch opts := registrations[0].RegisterOptions.(type) {
+	case protocol.DidChangeWatchedFilesRegistrationOptions:
+		watchedOptions = opts
+	case *protocol.DidChangeWatchedFilesRegistrationOptions:
+		watchedOptions = *opts
+	default:
+		t.Fatalf("unexpected registration options type %T", registrations[0].RegisterOptions)
+	}
+
+	assert.Len(t, watchedOptions.Watchers, 6)
+
+	gotPricesPattern := false
+	for _, watcher := range watchedOptions.Watchers {
+		if watcher.GlobPattern == "**/*.prices" {
+			gotPricesPattern = true
+		}
+	}
+	assert.True(t, gotPricesPattern, "expected .prices watcher pattern to be registered")
 }
 
 // TestServer_DidChangeConfiguration_NonBlocking verifies that DidChangeConfiguration

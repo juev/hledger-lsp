@@ -33,6 +33,7 @@ hledger recognizes these file extensions:
 - `.j` - Short form
 - `.hledger` - Alternative
 - `.ledger` - Ledger compatibility
+- `.prices` - Price directives data for journal imports
 
 ### Basic Structure
 

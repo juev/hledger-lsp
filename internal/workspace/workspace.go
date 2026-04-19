@@ -167,8 +167,7 @@ func (w *Workspace) findJournalFiles() ([]string, error) {
 			}
 			return nil
 		}
-		ext := filepath.Ext(path)
-		if ext == ".journal" || ext == ".j" || ext == ".hledger" || ext == ".ledger" {
+		if filetype.IsJournalPath(path) {
 			files = append(files, path)
 		}
 		return nil

@@ -631,3 +631,42 @@ fields date,description,amount
 		assert.Contains(t, warnings[0].Message, "bank.rules")
 	}
 }
+
+func TestIntegration_JournalIncludesPricesFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	pricesContent := `P 2024-01-01 USD  1.25 EUR
+P 2024-01-02 EUR  0.85 GBP
+`
+	mainContent := `include 2026.prices
+
+2024-01-15 grocery store
+    expenses:food  $50.00
+    assets:cash
+`
+	pricesPath := filepath.Join(tmpDir, "2026.prices")
+	mainPath := filepath.Join(tmpDir, "main.journal")
+
+	require.NoError(t, os.WriteFile(pricesPath, []byte(pricesContent), 0644))
+	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
+
+	ts := newTestServer()
+	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+
+	diags, err := ts.openAndWait(uri, mainContent)
+	require.NoError(t, err)
+
+	// Should NOT have non-journal include warning
+	for _, d := range diags {
+		if d.Severity == protocol.DiagnosticSeverityWarning && strings.Contains(d.Message, "not a journal file") {
+			t.Errorf("unexpected non-journal warning: %s", d.Message)
+		}
+	}
+
+	// Should NOT have unexpected parser errors from included prices directives
+	for _, d := range diags {
+		if strings.Contains(d.Message, "unexpected content") {
+			t.Errorf("unexpected content error from included prices file: %s", d.Message)
+		}
+	}
+}

@@ -74,7 +74,7 @@ hledger-lsp --version
 
 1. Install hledger-lsp (see above)
 2. Configure your editor (see below)
-3. Open a `.journal` or `.hledger` file
+3. Open a `.journal`, `.hledger`, or `.prices` file
 4. Start typing and enjoy completions!
 
 ```hledger

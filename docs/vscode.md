@@ -6,7 +6,7 @@ hledger-lsp provides LSP features for VS Code through two setup options:
 |---------|----------------|------------------|
 | Completions, diagnostics, formatting | ✓ | ✓ |
 | Per-language semantic token colors | ✓ | ✗ (global only) |
-| File association (.journal, .hledger) | ✓ | ✓ |
+| File association (.journal, .hledger, .prices) | ✓ | ✓ |
 | Setup complexity | Lower | Higher |
 
 ## Option 1: hledger-vscode Extension (Recommended)
@@ -56,7 +56,8 @@ Add to your `settings.json`:
       "name": "hledger-lsp",
       "document_selector": [
         {"pattern": "**/*.journal"},
-        {"pattern": "**/*.hledger"}
+        {"pattern": "**/*.hledger"},
+        {"pattern": "**/*.prices"}
       ],
       "command": ["hledger-lsp"]
     }
@@ -199,7 +200,7 @@ If no semantic token type appears, the LSP server may not be running or semantic
 
 **No completions:**
 
-- Ensure the file has `.journal` or `.hledger` extension
+- Ensure the file has `.journal`, `.hledger`, or `.prices` extension
 - Check that the LSP client is configured for these extensions
 
 **Enter auto-indent not working:**

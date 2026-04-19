@@ -620,3 +620,55 @@ fields date,description,amount
 		t.Errorf("expected 1 transaction, got %d", len(result.Primary.Transactions))
 	}
 }
+
+func TestLoader_IncludePricesFile(t *testing.T) {
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.journal")
+	pricesFile := filepath.Join(dir, "2026.prices")
+
+	mainContent := `include 2026.prices
+
+2024-01-15 * grocery store
+    expenses:food  $50.00
+    assets:cash
+`
+	pricesContent := `P 2024-01-01 USD  1.25 EUR
+P 2024-01-02 EUR  0.85 GBP
+`
+	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pricesFile, []byte(pricesContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := NewLoader()
+	result, errs := loader.Load(mainFile)
+
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	// .prices file should be treated as journal include
+	if _, ok := result.Files[pricesFile]; !ok {
+		t.Error("prices file should be in ResolvedJournal.Files")
+	}
+
+	// Should have no non-journal errors
+	for _, e := range errs {
+		if e.Kind == ErrorNotJournal {
+			t.Errorf("unexpected ErrorNotJournal: %s", e.Message)
+		}
+	}
+
+	// Main file transactions should be parsed
+	if len(result.Primary.Transactions) != 1 {
+		t.Errorf("expected 1 transaction, got %d", len(result.Primary.Transactions))
+	}
+
+	// Parsed directives should include price directives from included file
+	directives := result.AllDirectives()
+	if len(directives) == 0 {
+		t.Error("expected directives from included prices file")
+	}
+}

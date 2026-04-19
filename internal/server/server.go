@@ -197,8 +197,8 @@ func (s *Server) registerFileWatchers() {
 	if s.client == nil {
 		return
 	}
-	watchers := make([]protocol.FileSystemWatcher, 0, 5)
-	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.rules"} {
+	watchers := make([]protocol.FileSystemWatcher, 0, 6)
+	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.prices", "**/*.rules"} {
 		watchers = append(watchers, protocol.FileSystemWatcher{
 			GlobPattern: pattern,
 		})

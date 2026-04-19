@@ -41,7 +41,7 @@ Search order within the opened folder:
 
 1. `main.journal` at the workspace root
 2. `.hledger.journal` at the workspace root
-3. Scan all `*.journal`, `*.j`, `*.hledger`, `*.ledger` files →
+3. Scan all `*.journal`, `*.j`, `*.hledger`, `*.ledger`, `*.prices` files →
    build include graph → pick the file with no incoming edges (not
    included by anything else)
 
