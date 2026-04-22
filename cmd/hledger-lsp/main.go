@@ -96,7 +96,7 @@ func (d *serverDispatcher) SetTrace(ctx context.Context, params *protocol.SetTra
 }
 
 func (d *serverDispatcher) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CodeAction, error) {
-	return nil, nil
+	return d.srv.CodeAction(ctx, params)
 }
 
 func (d *serverDispatcher) CodeLens(ctx context.Context, params *protocol.CodeLensParams) ([]protocol.CodeLens, error) {
@@ -176,7 +176,7 @@ func (d *serverDispatcher) DocumentSymbol(ctx context.Context, params *protocol.
 }
 
 func (d *serverDispatcher) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
-	return nil, nil
+	return d.srv.ExecuteCommand(ctx, params)
 }
 
 func (d *serverDispatcher) FoldingRanges(ctx context.Context, params *protocol.FoldingRangeParams) ([]protocol.FoldingRange, error) {
