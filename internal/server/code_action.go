@@ -68,8 +68,9 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 		commodityFormats = s.workspace.GetCommodityFormatsForFile(uriToPath(params.TextDocument.URI))
 	}
 
-	actions := make([]protocol.CodeAction, 0, len(params.Context.Diagnostics))
-	for _, diag := range params.Context.Diagnostics {
+	diagnostics := s.quickFixDiagnostics(params, doc)
+	actions := make([]protocol.CodeAction, 0, len(diagnostics))
+	for _, diag := range diagnostics {
 		journal, _ := parser.Parse(doc)
 		if journal == nil {
 			continue
@@ -81,6 +82,24 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 	}
 
 	return actions
+}
+
+func (s *Server) quickFixDiagnostics(params *protocol.CodeActionParams, doc string) []protocol.Diagnostic {
+	if len(params.Context.Diagnostics) > 0 {
+		return params.Context.Diagnostics
+	}
+
+	diagnostics := s.analyze(uriToPath(params.TextDocument.URI), doc)
+	filtered := make([]protocol.Diagnostic, 0, len(diagnostics))
+	for _, diag := range diagnostics {
+		if fmt.Sprint(diag.Code) != "UNBALANCED" {
+			continue
+		}
+		if rangesOverlap(diag.Range, params.Range) {
+			filtered = append(filtered, diag)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) quickFixForUnbalanced(

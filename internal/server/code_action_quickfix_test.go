@@ -56,6 +56,33 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
+	ts := newTestServer()
+	ts.cliClient = nil
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := `2024-01-15 lunch
+    expenses:food  $10.00
+    assets:cash    $-9.00`
+
+	diagnostics, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+	diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+
+	actions, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Range:        diag.Range,
+		Context:      protocol.CodeActionContext{},
+	})
+	require.NoError(t, err)
+
+	action := requireQuickFixAction(t, actions)
+	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
+	assert.Equal(t, `2024-01-15 lunch
+    expenses:food  $10.00
+    assets:cash    $-10.00`, fixed)
+}
+
 func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
 	tests := []struct {
 		name       string
