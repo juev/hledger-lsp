@@ -166,6 +166,7 @@ func (ts *testServer) changeAndWait(uri protocol.DocumentURI, changes []protocol
 	return last.Diagnostics, nil
 }
 
+//nolint:unparam // test helper keeps the URI explicit at call sites
 func (ts *testServer) replaceAndWait(uri protocol.DocumentURI, newContent string) ([]protocol.Diagnostic, error) {
 	return ts.changeAndWait(uri, []protocol.TextDocumentContentChangeEvent{
 		{Text: newContent},
