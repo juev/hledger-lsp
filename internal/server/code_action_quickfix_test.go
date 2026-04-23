@@ -45,10 +45,14 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	require.Len(t, action.Diagnostics, 1)
 	assert.Equal(t, "UNBALANCED", action.Diagnostics[0].Code)
 
+	// Quick Fix is a local edit (issue #25): it absorbs the amount-width
+	// delta into the pre-amount whitespace, so `$-9.00` (6 runes) → `$-10.00`
+	// (7 runes) eats one space before the amount, keeping the line's end
+	// column stable. Alignment across postings is the Format Document's job.
 	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
 	assert.Equal(t, `2024-01-15 lunch
     expenses:food  $10.00
-    assets:cash    $-10.00`, fixed)
+    assets:cash   $-10.00`, fixed)
 
 	diagnostics, err = ts.replaceAndWait(uri, fixed)
 	require.NoError(t, err)
@@ -80,53 +84,70 @@ func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
 	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
 	assert.Equal(t, `2024-01-15 lunch
     expenses:food  $10.00
-    assets:cash    $-10.00`, fixed)
+    assets:cash   $-10.00`, fixed)
 }
 
-func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
+// Quick Fix is a local edit (issue #25): it does not invoke the formatter
+// and therefore does not re-align postings across a transaction. The
+// formatter settings (AmountAlignmentMode, MinAlignmentColumn) apply only
+// to Format Document. What Quick Fix must guarantee:
+//   - lines other than the edited posting remain byte-equal to the input;
+//   - the edited posting's commodity format is honoured (via extracted
+//     commodity formats from the journal's D/commodity directives).
+func TestServer_CodeAction_QuickFix_IsLocalAndPreservesFormats(t *testing.T) {
 	tests := []struct {
 		name       string
 		content    string
 		configure  func(serverSettings) serverSettings
-		assertEdit func(t *testing.T, fixed string)
+		assertEdit func(t *testing.T, content, fixed string)
 	}{
 		{
-			name: "right alignment keeps amount column",
+			name: "untouched postings remain byte-equal in right mode",
 			content: `2024-01-15 groceries
     expenses:food:groceries  $10.00
-    assets:cash  $-9.00`,
+    assets:cash              $-9.00`,
 			configure: func(settings serverSettings) serverSettings {
 				settings.Formatting.AmountAlignmentMode = "right"
 				return settings
 			},
-			assertEdit: func(t *testing.T, fixed string) {
-				lines := strings.Split(fixed, "\n")
-				require.Len(t, lines, 3)
-				assert.Equal(t, strings.Index(lines[1], "$"), strings.Index(lines[2], "$"))
+			assertEdit: func(t *testing.T, content, fixed string) {
+				in := strings.Split(content, "\n")
+				out := strings.Split(fixed, "\n")
+				require.Len(t, out, 3)
+				assert.Equal(t, in[0], out[0], "date line untouched")
+				assert.Equal(t, in[1], out[1], "first posting untouched")
+				assert.Contains(t, out[2], "$-10.00")
 			},
 		},
 		{
-			name: "decimal alignment keeps decimal column",
+			name: "same-width fix preserves decimal column in decimal mode",
 			content: `D $1,000.00
 
 2024-01-15 groceries
     expenses:small      $12.30
     expenses:big     $1,200.00
-    assets:cash  $-1210.00`,
+    assets:cash      $-1210.00`,
 			configure: func(settings serverSettings) serverSettings {
 				settings.Formatting.AmountAlignmentMode = "decimal"
 				return settings
 			},
-			assertEdit: func(t *testing.T, fixed string) {
-				lines := strings.Split(fixed, "\n")
-				require.Len(t, lines, 6)
-				decimalCol := strings.LastIndex(lines[3], ".")
-				assert.Equal(t, decimalCol, strings.LastIndex(lines[4], "."))
-				assert.Equal(t, decimalCol, strings.LastIndex(lines[5], "."))
+			assertEdit: func(t *testing.T, content, fixed string) {
+				in := strings.Split(content, "\n")
+				out := strings.Split(fixed, "\n")
+				require.Len(t, out, 6)
+				// Lines other than the fixed posting must be byte-equal.
+				for i := 0; i < 5; i++ {
+					assert.Equal(t, in[i], out[i], "line %d untouched", i)
+				}
+				// Fix: -1210.00 → -1,212.30 (D directive adds a thousands separator,
+				// making the new amount one rune wider). The local edit eats one
+				// pre-amount space so the decimal column stays put.
+				assert.Equal(t, strings.LastIndex(in[5], "."), strings.LastIndex(out[5], "."))
+				assert.Contains(t, out[5], "$-1,212.30")
 			},
 		},
 		{
-			name: "min alignment column widens posting",
+			name: "min alignment column is ignored (applies only in Format Document)",
 			content: `2024-01-15 groceries
     a  $10
     b  $-9`,
@@ -134,10 +155,16 @@ func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
 				settings.Formatting.MinAlignmentColumn = 30
 				return settings
 			},
-			assertEdit: func(t *testing.T, fixed string) {
-				lines := strings.Split(fixed, "\n")
-				require.Len(t, lines, 3)
-				assert.Equal(t, 29, strings.Index(lines[2], "$"))
+			assertEdit: func(t *testing.T, content, fixed string) {
+				in := strings.Split(content, "\n")
+				out := strings.Split(fixed, "\n")
+				require.Len(t, out, 3)
+				assert.Equal(t, in[0], out[0])
+				assert.Equal(t, in[1], out[1])
+				// $-9 (3 runes) → $-10 (4 runes). Pre-space already at minSpaces=2,
+				// so the amount grows in place, keeping $ at its original column.
+				assert.Equal(t, strings.Index(in[2], "$"), strings.Index(out[2], "$"))
+				assert.Contains(t, out[2], "$-10")
 			},
 		},
 		{
@@ -150,7 +177,7 @@ func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
 			configure: func(settings serverSettings) serverSettings {
 				return settings
 			},
-			assertEdit: func(t *testing.T, fixed string) {
+			assertEdit: func(t *testing.T, _, fixed string) {
 				assert.Contains(t, fixed, "$-10.00")
 			},
 		},
@@ -165,7 +192,7 @@ func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
 			configure: func(settings serverSettings) serverSettings {
 				return settings
 			},
-			assertEdit: func(t *testing.T, fixed string) {
+			assertEdit: func(t *testing.T, _, fixed string) {
 				assert.Contains(t, fixed, "-1 234,56 RUB")
 			},
 		},
@@ -187,9 +214,157 @@ func TestServer_CodeAction_QuickFixRespectsFormattingSettings(t *testing.T) {
 
 			action := requireQuickFixAction(t, actions)
 			fixed := applyWorkspaceEditToContent(t, tt.content, uri, action.Edit)
-			tt.assertEdit(t, fixed)
+			tt.assertEdit(t, tt.content, fixed)
 		})
 	}
+}
+
+// Issue #25: Quick Fix must preserve user's hand-formatted layout.
+// For commodity-on-right amounts users align by USD end column.
+// The edit must not shift surrounding postings.
+func TestServer_CodeAction_QuickFix_CommodityRight_PreservesLayout(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "same width amount preserves end column",
+			content: "2024-01-15 lunch\n" +
+				"    food      -12.60 USD\n" +
+				"    cash       12.00 USD",
+			want: "2024-01-15 lunch\n" +
+				"    food      -12.60 USD\n" +
+				"    cash       12.60 USD",
+		},
+		{
+			name: "wider amount eats one pre-amount space",
+			content: "2024-01-15 a\n" +
+				"    food     -10 USD\n" +
+				"    cash       9 USD",
+			want: "2024-01-15 a\n" +
+				"    food     -10 USD\n" +
+				"    cash      10 USD",
+		},
+		{
+			name: "narrower amount adds one pre-amount space",
+			content: "2024-01-15 b\n" +
+				"    food     -10 USD\n" +
+				"    cash     100 USD",
+			want: "2024-01-15 b\n" +
+				"    food     -10 USD\n" +
+				"    cash      10 USD",
+		},
+		{
+			name: "untouched postings remain byte-equal",
+			content: "2024-01-15 multi\n" +
+				"    a         1.00 USD\n" +
+				"    b         2.00 USD\n" +
+				"    c        -2.50 USD",
+			want: "2024-01-15 multi\n" +
+				"    a         1.00 USD\n" +
+				"    b         2.00 USD\n" +
+				"    c        -3.00 USD",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer()
+			ts.cliClient = nil
+
+			uri := protocol.DocumentURI("file:///issue25.journal")
+			diagnostics, err := ts.openAndWait(uri, tt.content)
+			require.NoError(t, err)
+
+			diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+			actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+			require.NoError(t, err)
+
+			action := requireQuickFixAction(t, actions)
+			fixed := applyWorkspaceEditToContent(t, tt.content, uri, action.Edit)
+			assert.Equal(t, tt.want, fixed)
+		})
+	}
+}
+
+// Issue #25 follow-ups: Quick Fix must cope with posting comments, CRLF
+// line endings, and non-ASCII (CJK, Cyrillic) account names without
+// corrupting the surrounding text.
+func TestServer_CodeAction_QuickFix_EdgeCases(t *testing.T) {
+	t.Run("posting comment is preserved", func(t *testing.T) {
+		ts := newTestServer()
+		ts.cliClient = nil
+		uri := protocol.DocumentURI("file:///comment.journal")
+		content := "2024-01-15 lunch\n" +
+			"    food      -12.60 USD\n" +
+			"    cash       12.00 USD  ; note: salary"
+
+		diagnostics, err := ts.openAndWait(uri, content)
+		require.NoError(t, err)
+		diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+
+		actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+		require.NoError(t, err)
+		action := requireQuickFixAction(t, actions)
+		fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
+
+		want := "2024-01-15 lunch\n" +
+			"    food      -12.60 USD\n" +
+			"    cash       12.60 USD  ; note: salary"
+		assert.Equal(t, want, fixed)
+	})
+
+	t.Run("CRLF line endings", func(t *testing.T) {
+		ts := newTestServer()
+		ts.cliClient = nil
+		uri := protocol.DocumentURI("file:///crlf.journal")
+		content := "2024-01-15 lunch\r\n" +
+			"    food      -12.60 USD\r\n" +
+			"    cash       12.00 USD"
+
+		diagnostics, err := ts.openAndWait(uri, content)
+		require.NoError(t, err)
+		diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+
+		actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+		require.NoError(t, err)
+		action := requireQuickFixAction(t, actions)
+		// The server normalizes ingestion to LF; the edit is against the
+		// normalized document, so the applied result uses LF.
+		normalized := "2024-01-15 lunch\n" +
+			"    food      -12.60 USD\n" +
+			"    cash       12.00 USD"
+		fixed := applyWorkspaceEditToContent(t, normalized, uri, action.Edit)
+
+		want := "2024-01-15 lunch\n" +
+			"    food      -12.60 USD\n" +
+			"    cash       12.60 USD"
+		assert.Equal(t, want, fixed)
+	})
+
+	t.Run("Cyrillic account names", func(t *testing.T) {
+		ts := newTestServer()
+		ts.cliClient = nil
+		uri := protocol.DocumentURI("file:///cyrillic.journal")
+		content := "2024-01-15 обед\n" +
+			"    расходы:еда      -12.60 USD\n" +
+			"    активы:наличные   12.00 USD"
+
+		diagnostics, err := ts.openAndWait(uri, content)
+		require.NoError(t, err)
+		diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+
+		actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+		require.NoError(t, err)
+		action := requireQuickFixAction(t, actions)
+		fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
+
+		want := "2024-01-15 обед\n" +
+			"    расходы:еда      -12.60 USD\n" +
+			"    активы:наличные   12.60 USD"
+		assert.Equal(t, want, fixed)
+	})
 }
 
 func TestServer_CodeAction_QuickFixGuards(t *testing.T) {

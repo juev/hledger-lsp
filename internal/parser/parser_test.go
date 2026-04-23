@@ -146,6 +146,62 @@ func TestParser_DescriptionRange(t *testing.T) {
 	}
 }
 
+func TestParser_PostingAccountRangeEnd(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		postingIdx int
+		wantName   string
+		wantStart  ast.Position
+		wantEnd    ast.Position
+	}{
+		{
+			name: "ASCII account",
+			input: `2024-01-15 x
+    expenses:food  $50`,
+			postingIdx: 0,
+			wantName:   "expenses:food",
+			wantStart:  ast.Position{Line: 2, Column: 5, Offset: 17},
+			wantEnd:    ast.Position{Line: 2, Column: 18, Offset: 30},
+		},
+		{
+			name: "Cyrillic account",
+			input: `2024-01-15 x
+    расходы:еда  50 RUB`,
+			postingIdx: 0,
+			wantName:   "расходы:еда",
+			wantStart:  ast.Position{Line: 2, Column: 5, Offset: 17},
+			// Column = 5 + 11 runes ("расходы:еда") = 16
+			wantEnd: ast.Position{Line: 2, Column: 16, Offset: 39},
+		},
+		{
+			name: "virtual balanced posting",
+			input: `2024-01-15 x
+    [assets:budget]  $10`,
+			postingIdx: 0,
+			wantName:   "assets:budget",
+			// Account range excludes the brackets: starts at col 6, ends at col 19
+			wantStart: ast.Position{Line: 2, Column: 6, Offset: 18},
+			wantEnd:   ast.Position{Line: 2, Column: 19, Offset: 31},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+			require.Greater(t, len(journal.Transactions[0].Postings), tt.postingIdx)
+
+			p := journal.Transactions[0].Postings[tt.postingIdx]
+			assert.Equal(t, tt.wantName, p.Account.Name)
+			assert.Equal(t, tt.wantStart.Line, p.Account.Range.Start.Line, "Start.Line")
+			assert.Equal(t, tt.wantStart.Column, p.Account.Range.Start.Column, "Start.Column")
+			assert.Equal(t, tt.wantEnd.Line, p.Account.Range.End.Line, "End.Line")
+			assert.Equal(t, tt.wantEnd.Column, p.Account.Range.End.Column, "End.Column")
+		})
+	}
+}
+
 func TestParser_TransactionWithPayeeAndNote(t *testing.T) {
 	input := `2024-01-15 Grocery Store | weekly shopping
     expenses:food  $50

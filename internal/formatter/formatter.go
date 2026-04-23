@@ -32,6 +32,12 @@ type AlignmentInfo struct {
 	AccountCol          int
 	BalanceAssertionCol int
 	DecimalCol          int
+	// AmountEndCol, when > 0, enables true right-alignment: amounts are
+	// padded so that the column right after the last rune of the rendered
+	// amount equals AmountEndCol. Used when AmountAlignmentMode = "right"
+	// and every amount in the document has a right-side commodity (issue
+	// #25). Zero disables end-column alignment.
+	AmountEndCol int
 }
 
 func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
@@ -60,6 +66,7 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 	if len(journal.Transactions) > 0 {
 		globalAccountCol := 0
 		globalDecimalCol := 0
+		globalAmountEndCol := 0
 		if opts.AlignAmounts {
 			globalAccountCol = CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
 			// Smart detection: if the file already has hand-aligned amounts,
@@ -71,8 +78,23 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 			if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 				globalAccountCol = opts.MinAlignmentColumn - 1
 			}
-			if opts.AmountAlignmentMode == "decimal" {
+			switch opts.AmountAlignmentMode {
+			case "decimal":
 				globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol)
+			default:
+				// Right-alignment: when every amount has a right-side
+				// commodity, anchor by end column so the commodity symbol
+				// (USD / EUR / …) aligns at the rightmost column even with
+				// mixed-sign amounts. Mixed commodity positions fall back to
+				// start-column alignment (issue #25). An explicit
+				// MinAlignmentColumn also falls back to start-column —
+				// that setting is a start-column constraint by definition
+				// and takes priority over automatic end-column anchoring.
+				if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
+					if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats); endCol > 0 {
+						globalAmountEndCol = endCol
+					}
+				}
 			}
 		}
 
@@ -81,7 +103,7 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 			for j := range tx.Postings {
 				postingLines[tx.Postings[j].Range.Start.Line-1] = true
 			}
-			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, globalDecimalCol, opts)
+			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, globalDecimalCol, globalAmountEndCol, opts)
 			edits = append(edits, txEdits...)
 		}
 	}
@@ -186,7 +208,7 @@ func extractCommodityFormats(journal *ast.Journal) map[string]CommodityFormat {
 	return ExtractCommodityFormats(journal.Directives)
 }
 
-func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, opts Options) []protocol.TextEdit {
+func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, opts Options) []protocol.TextEdit {
 	if len(tx.Postings) == 0 {
 		return nil
 	}
@@ -199,6 +221,9 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 		alignment = CalculateAlignmentWithGlobal(tx.Postings, commodityFormats, globalAccountCol)
 		if globalDecimalCol > 0 {
 			alignment.DecimalCol = globalDecimalCol
+		}
+		if globalAmountEndCol > 0 {
+			alignment.AmountEndCol = globalAmountEndCol
 		}
 	}
 
@@ -307,6 +332,64 @@ func DetectExistingAmountColumn(transactions []ast.Transaction) int {
 		return 0
 	}
 	return minCol
+}
+
+// DetectExistingAmountEndColumn returns the rightmost (maximum) 0-indexed
+// rune column right after the last rune of any commodity-right amount
+// across all postings, or 0 if no such amount exists.
+//
+// The end column is computed as `(Amount.Range.Start.Column - 1) +
+// renderedAmountLen` rather than read from `Amount.Range.End.Column`,
+// because the parser extends `Amount.Range.End` through trailing
+// whitespace up to the next token (e.g. `=` of a balance assertion),
+// which would shift the detected column one or two positions too far
+// right and break format idempotency.
+//
+// Used for right-alignment of commodity-on-right amounts (issue #25):
+// aligning by end column keeps the commodity symbol (USD / EUR / …) in a
+// fixed column regardless of sign or integer-part width. Commodity-left
+// amounts are ignored — those are aligned by start column via the sibling
+// DetectExistingAmountColumn so the commodity symbol (e.g. $) stays put.
+func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+	maxCol := 0
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			p := &transactions[i].Postings[j]
+			if p.Amount == nil || p.Amount.Commodity.Position != ast.CommodityRight {
+				continue
+			}
+			if p.Amount.Range.Start.Column <= 0 {
+				continue
+			}
+			startCol := p.Amount.Range.Start.Column - 1
+			endCol := startCol + calculateSingleAmountLen(p.Amount, commodityFormats)
+			if endCol > maxCol {
+				maxCol = endCol
+			}
+		}
+	}
+	return maxCol
+}
+
+// allAmountsCommodityRight reports whether every posting that carries an
+// amount has a right-position commodity. Used as a guard for end-column
+// alignment — mixed positions fall back to start-column semantics so
+// commodity-left amounts (`$10.00`) keep their `$` column aligned.
+func allAmountsCommodityRight(transactions []ast.Transaction) bool {
+	seenAny := false
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			p := &transactions[i].Postings[j]
+			if p.Amount == nil {
+				continue
+			}
+			seenAny = true
+			if p.Amount.Commodity.Position != ast.CommodityRight {
+				return false
+			}
+		}
+	}
+	return seenAny
 }
 
 // CalculateAlignment calculates alignment for a single transaction's postings.
@@ -535,12 +618,17 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 
 	if posting.Amount != nil {
 		spaces := minSpaces
-		if alignAmounts && alignment.DecimalCol > 0 {
+		switch {
+		case alignAmounts && alignment.DecimalCol > 0:
 			currentLen := utf8.RuneCountInString(sb.String())
 			// Always align the posting amount's decimal point, regardless of cost.
 			prefix := calculateAmountDecimalPrefix(posting, commodityFormats)
 			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
-		} else if alignAmounts && alignment.AccountCol > 0 {
+		case alignAmounts && alignment.AmountEndCol > 0:
+			currentLen := utf8.RuneCountInString(sb.String())
+			amountLen := calculateSingleAmountLen(posting.Amount, commodityFormats)
+			spaces = max(alignment.AmountEndCol-currentLen-amountLen, minSpaces)
+		case alignAmounts && alignment.AccountCol > 0:
 			currentLen := utf8.RuneCountInString(sb.String())
 			spaces = max(alignment.AccountCol-currentLen, minSpaces)
 		}

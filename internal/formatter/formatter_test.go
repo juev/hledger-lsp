@@ -492,6 +492,9 @@ func TestFormatDocumentWithOptions_PreservesExistingAlignment(t *testing.T) {
 }
 
 func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
+	// Issue #25 Phase 2: commodity-right amounts align by END column,
+	// not start column. Mixed amount widths therefore start at different
+	// columns but all end at the same column.
 	t.Run("transactions with different posting counts", func(t *testing.T) {
 		input := `2024-01-15 single posting
     very:long:account:name  100 RUB
@@ -507,16 +510,16 @@ func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
 		edits := FormatDocument(journal, input)
 		require.NotEmpty(t, edits)
 
-		var positions []int
+		var ends []int
 		for _, edit := range edits {
-			if pos := findAmountPosition(edit.NewText); pos > 0 {
-				positions = append(positions, pos)
+			if pos := findAmountEndPosition(edit.NewText); pos > 0 {
+				ends = append(ends, pos)
 			}
 		}
 
-		require.GreaterOrEqual(t, len(positions), 4)
-		for i, pos := range positions {
-			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		require.GreaterOrEqual(t, len(ends), 4)
+		for i, pos := range ends {
+			assert.Equal(t, ends[0], pos, "posting %d end-column misaligned", i)
 		}
 	})
 
@@ -535,16 +538,16 @@ func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
 		edits := FormatDocument(journal, input)
 		require.NotEmpty(t, edits)
 
-		var positions []int
+		var ends []int
 		for _, edit := range edits {
-			if pos := findAmountPosition(edit.NewText); pos > 0 {
-				positions = append(positions, pos)
+			if pos := findAmountEndPosition(edit.NewText); pos > 0 {
+				ends = append(ends, pos)
 			}
 		}
 
-		require.GreaterOrEqual(t, len(positions), 2)
-		for i, pos := range positions {
-			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		require.GreaterOrEqual(t, len(ends), 2)
+		for i, pos := range ends {
+			assert.Equal(t, ends[0], pos, "posting %d end-column misaligned", i)
 		}
 	})
 
@@ -563,18 +566,45 @@ func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
 		edits := FormatDocument(journal, input)
 		require.NotEmpty(t, edits)
 
-		var positions []int
+		var ends []int
 		for _, edit := range edits {
-			if pos := findAmountPosition(edit.NewText); pos > 0 {
-				positions = append(positions, pos)
+			if pos := findAmountEndPosition(edit.NewText); pos > 0 {
+				ends = append(ends, pos)
 			}
 		}
 
-		require.GreaterOrEqual(t, len(positions), 2)
-		for i, pos := range positions {
-			assert.Equal(t, positions[0], pos, "posting %d misaligned", i)
+		require.GreaterOrEqual(t, len(ends), 2)
+		for i, pos := range ends {
+			assert.Equal(t, ends[0], pos, "posting %d end-column misaligned", i)
 		}
 	})
+}
+
+// findAmountEndPosition returns the rune index one past the last rune of
+// the first amount token in the rendered posting line (number + optional
+// decimal + optional right-side commodity), ignoring trailing balance
+// assertions / cost annotations. Returns -1 if no amount is found.
+func findAmountEndPosition(s string) int {
+	inAmount := false
+	end := -1
+	for i, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			if !inAmount {
+				inAmount = true
+			}
+			end = i + 1
+		case inAmount && (r == '.' || r == ',' || r == '-' || r == '+'):
+			end = i + 1
+		case inAmount && r == ' ':
+			// continue scanning into optional right-side commodity symbol
+		case inAmount && r >= 'A' && r <= 'Z':
+			end = i + 1
+		case inAmount:
+			return end
+		}
+	}
+	return end
 }
 
 func TestFormatDocumentWithOptions_IndentSize(t *testing.T) {
@@ -2901,4 +2931,106 @@ func TestCalculateAmountDecimalPrefix(t *testing.T) {
 			assert.Equal(t, tt.expected, prefix, "prefix for %q", tt.input)
 		})
 	}
+}
+
+// Issue #25 Phase 2: right-alignment for commodity-right amounts must
+// align the end column, not the start column, so that the commodity
+// symbol (e.g. USD) stays in a fixed rightmost column across postings.
+func TestDetectExistingAmountEndColumn(t *testing.T) {
+	t.Run("single commodity-right posting", func(t *testing.T) {
+		input := `2024-01-15 x
+    food  -12.60 USD`
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+		col := DetectExistingAmountEndColumn(journal.Transactions, nil)
+		// Amount ends after "USD" at 1-indexed col 21 → 0-indexed 20.
+		assert.Equal(t, 20, col)
+	})
+
+	t.Run("MAX across two commodity-right postings", func(t *testing.T) {
+		input := `2024-01-15 x
+    food  -12.60 USD
+    cash   12.00 USD`
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+		col := DetectExistingAmountEndColumn(journal.Transactions, nil)
+		// Both end at the same user-formatted column — MAX equals that col.
+		assert.Equal(t, 20, col)
+	})
+
+	t.Run("zero when no amounts", func(t *testing.T) {
+		input := `2024-01-15 x
+    food
+    cash`
+		journal, _ := parser.Parse(input)
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil))
+	})
+
+	t.Run("commodity-left amounts are ignored", func(t *testing.T) {
+		input := `2024-01-15 x
+    food  $10.00
+    cash  $-10.00`
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil))
+	})
+}
+
+func TestFormatDocument_RightAlignment_CommodityRight(t *testing.T) {
+	input := "2024-01-15 lunch\n" +
+		"    food      -12.60 USD\n" +
+		"    cash       12.00 USD"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocumentWithOptions(journal, input, nil, Options{
+		IndentSize:          4,
+		AlignAmounts:        true,
+		AmountAlignmentMode: "right",
+	})
+	got := applyEdits(input, edits)
+
+	// USD ends must align on both posting lines.
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 3)
+	end1 := len(lines[1])
+	end2 := len(lines[2])
+	assert.Equal(t, end1, end2, "USD end columns differ:\n%s", got)
+
+	// Idempotency: formatting the formatted output must yield no further edits.
+	journal2, errs := parser.Parse(got)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, got, nil, Options{
+		IndentSize:          4,
+		AlignAmounts:        true,
+		AmountAlignmentMode: "right",
+	})
+	got2 := applyEdits(got, edits2)
+	assert.Equal(t, got, got2, "format must be idempotent")
+}
+
+func TestFormatDocument_RightAlignment_MixedCommodity(t *testing.T) {
+	// Mixed commodity-left ($) and commodity-right (EUR) in the same doc →
+	// fallback to start-column alignment (current behaviour).
+	input := "2024-01-15 mixed\n" +
+		"    expenses:food     $10.00\n" +
+		"    assets:cash      -10 EUR"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocumentWithOptions(journal, input, nil, Options{
+		IndentSize:          4,
+		AlignAmounts:        true,
+		AmountAlignmentMode: "right",
+	})
+	got := applyEdits(input, edits)
+
+	// Amount starts align (`$` and `-` on the same column).
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 3)
+	dollarCol := strings.Index(lines[1], "$")
+	signCol := strings.Index(lines[2], "-")
+	assert.Equal(t, dollarCol, signCol, "mixed-commodity falls back to start-column:\n%s", got)
 }

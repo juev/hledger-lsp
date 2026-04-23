@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func TestIntegration_OpenEditDiagnostics(t *testing.T) {
@@ -311,27 +313,31 @@ func applyTextEdits(content string, edits []protocol.TextEdit) string {
 		lines := strings.Split(content, "\n")
 
 		startLine := int(edit.Range.Start.Line)
-		startChar := int(edit.Range.Start.Character)
 		endLine := int(edit.Range.End.Line)
-		endChar := int(edit.Range.End.Character)
 
 		if startLine >= len(lines) {
 			continue
 		}
 		if endLine >= len(lines) {
 			endLine = len(lines) - 1
-			endChar = len(lines[endLine])
 		}
 
-		before := ""
-		if startLine < len(lines) && startChar <= len(lines[startLine]) {
-			before = lines[startLine][:startChar]
+		startByte := lsputil.UTF16OffsetToByteOffset(lines[startLine], int(edit.Range.Start.Character))
+		if startByte > len(lines[startLine]) {
+			startByte = len(lines[startLine])
+		}
+		endChar := int(edit.Range.End.Character)
+		if endLine != int(edit.Range.End.Line) {
+			// end clamped above; take whole line
+			endChar = lsputil.UTF16Len(lines[endLine])
+		}
+		endByte := lsputil.UTF16OffsetToByteOffset(lines[endLine], endChar)
+		if endByte > len(lines[endLine]) {
+			endByte = len(lines[endLine])
 		}
 
-		after := ""
-		if endLine < len(lines) && endChar <= len(lines[endLine]) {
-			after = lines[endLine][endChar:]
-		}
+		before := lines[startLine][:startByte]
+		after := lines[endLine][endByte:]
 
 		newLines := strings.Split(edit.NewText, "\n")
 		newLines[0] = before + newLines[0]

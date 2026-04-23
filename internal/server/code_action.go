@@ -12,6 +12,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -56,12 +57,6 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 	}
 
 	settings := s.getSettings()
-	opts := formatter.Options{
-		IndentSize:          settings.Formatting.IndentSize,
-		AlignAmounts:        settings.Formatting.AlignAmounts,
-		MinAlignmentColumn:  settings.Formatting.MinAlignmentColumn,
-		AmountAlignmentMode: settings.Formatting.AmountAlignmentMode,
-	}
 
 	var commodityFormats map[string]formatter.CommodityFormat
 	if s.workspace != nil {
@@ -70,12 +65,17 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 
 	diagnostics := s.quickFixDiagnostics(params, doc)
 	actions := make([]protocol.CodeAction, 0, len(diagnostics))
+	mapper := lsputil.NewPositionMapper(doc)
 	for _, diag := range diagnostics {
 		journal, _ := parser.Parse(doc)
 		if journal == nil {
 			continue
 		}
-		action, ok := s.quickFixForUnbalanced(params.TextDocument.URI, doc, journal, commodityFormats, opts, settings.Diagnostics.BalanceTolerance, diag)
+		formats := commodityFormats
+		if formats == nil {
+			formats = formatter.ExtractCommodityFormats(journal.Directives)
+		}
+		action, ok := s.quickFixForUnbalanced(params.TextDocument.URI, doc, mapper, journal, formats, settings.Diagnostics.BalanceTolerance, diag)
 		if ok {
 			actions = append(actions, action)
 		}
@@ -105,9 +105,9 @@ func (s *Server) quickFixDiagnostics(params *protocol.CodeActionParams, doc stri
 func (s *Server) quickFixForUnbalanced(
 	uri protocol.DocumentURI,
 	doc string,
+	mapper *lsputil.PositionMapper,
 	journal *ast.Journal,
 	commodityFormats map[string]formatter.CommodityFormat,
-	opts formatter.Options,
 	balanceTolerance float64,
 	diag protocol.Diagnostic,
 ) (protocol.CodeAction, bool) {
@@ -140,18 +140,16 @@ func (s *Server) quickFixForUnbalanced(
 	}
 
 	posting := &tx.Postings[postingIndex]
-	updatedAmount := *posting.Amount
-	updatedAmount.Quantity = updatedAmount.Quantity.Sub(signedSum)
-	updatedAmount.RawQuantity = adjustedRawQuantity(posting.Amount.RawQuantity, updatedAmount.Quantity)
+	newAmount := *posting.Amount
+	newAmount.Quantity = newAmount.Quantity.Sub(signedSum)
+	newAmount.RawQuantity = adjustedRawQuantity(posting.Amount.RawQuantity, newAmount.Quantity)
 
-	tx.Postings[postingIndex].Amount = &updatedAmount
-
-	lineEdit, ok := formattedPostingLineEdit(journal, doc, commodityFormats, opts, posting.Range.Start.Line-1)
+	lineEdit, ok := buildQuickFixEdit(doc, mapper, posting, &newAmount, commodityFormats)
 	if !ok {
 		return protocol.CodeAction{}, false
 	}
 
-	title := fmt.Sprintf("Fix final posting amount to %s", formatter.FormatAmount(&updatedAmount, commodityFormats))
+	title := fmt.Sprintf("Fix final posting amount to %s", formatter.FormatAmount(&newAmount, commodityFormats))
 	return protocol.CodeAction{
 		Title:       title,
 		Kind:        protocol.QuickFix,
@@ -338,20 +336,4 @@ func adjustedRawQuantity(raw string, quantity decimal.Decimal) string {
 	}
 
 	return formatter.FormatNumber(quantity, format)
-}
-
-func formattedPostingLineEdit(
-	journal *ast.Journal,
-	doc string,
-	commodityFormats map[string]formatter.CommodityFormat,
-	opts formatter.Options,
-	line int,
-) (protocol.TextEdit, bool) {
-	edits := formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts)
-	for _, edit := range edits {
-		if int(edit.Range.Start.Line) == line && edit.Range.Start.Character == 0 {
-			return edit, true
-		}
-	}
-	return protocol.TextEdit{}, false
 }
