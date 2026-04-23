@@ -144,7 +144,7 @@ func (s *Server) quickFixForUnbalanced(
 	newAmount.Quantity = newAmount.Quantity.Sub(signedSum)
 	newAmount.RawQuantity = adjustedRawQuantity(posting.Amount.RawQuantity, newAmount.Quantity)
 
-	lineEdit, ok := buildQuickFixEdit(doc, mapper, posting, &newAmount, commodityFormats)
+	lineEdit, ok := buildQuickFixEdit(doc, mapper, tx, postingIndex, &newAmount, commodityFormats)
 	if !ok {
 		return protocol.CodeAction{}, false
 	}

@@ -45,14 +45,14 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	require.Len(t, action.Diagnostics, 1)
 	assert.Equal(t, "UNBALANCED", action.Diagnostics[0].Code)
 
-	// Quick Fix is a local edit (issue #25): it absorbs the amount-width
-	// delta into the pre-amount whitespace, so `$-9.00` (6 runes) → `$-10.00`
-	// (7 runes) eats one space before the amount, keeping the line's end
-	// column stable. Alignment across postings is the Format Document's job.
+	// Quick Fix is a local edit (issue #25). For commodity-left amounts
+	// (`$`) the `$` column is preserved, so `$-9.00` → `$-10.00` grows
+	// the line by one rune at the tail (pre-amount whitespace is kept
+	// intact). Alignment across postings is the Format Document's job.
 	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
 	assert.Equal(t, `2024-01-15 lunch
     expenses:food  $10.00
-    assets:cash   $-10.00`, fixed)
+    assets:cash    $-10.00`, fixed)
 
 	diagnostics, err = ts.replaceAndWait(uri, fixed)
 	require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
 	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
 	assert.Equal(t, `2024-01-15 lunch
     expenses:food  $10.00
-    assets:cash   $-10.00`, fixed)
+    assets:cash    $-10.00`, fixed)
 }
 
 // Quick Fix is a local edit (issue #25): it does not invoke the formatter
@@ -121,12 +121,10 @@ func TestServer_CodeAction_QuickFix_IsLocalAndPreservesFormats(t *testing.T) {
 		},
 		{
 			name: "same-width fix preserves decimal column in decimal mode",
-			content: `D $1,000.00
-
-2024-01-15 groceries
-    expenses:small      $12.30
-    expenses:big     $1,200.00
-    assets:cash      $-1210.00`,
+			content: `2024-01-15 groceries
+    expenses:small     $12.30
+    expenses:big    $1200.00
+    assets:cash     $-1210.00`,
 			configure: func(settings serverSettings) serverSettings {
 				settings.Formatting.AmountAlignmentMode = "decimal"
 				return settings
@@ -134,16 +132,16 @@ func TestServer_CodeAction_QuickFix_IsLocalAndPreservesFormats(t *testing.T) {
 			assertEdit: func(t *testing.T, content, fixed string) {
 				in := strings.Split(content, "\n")
 				out := strings.Split(fixed, "\n")
-				require.Len(t, out, 6)
+				require.Len(t, out, 4)
 				// Lines other than the fixed posting must be byte-equal.
-				for i := 0; i < 5; i++ {
+				for i := 0; i < 3; i++ {
 					assert.Equal(t, in[i], out[i], "line %d untouched", i)
 				}
-				// Fix: -1210.00 → -1,212.30 (D directive adds a thousands separator,
-				// making the new amount one rune wider). The local edit eats one
-				// pre-amount space so the decimal column stays put.
-				assert.Equal(t, strings.LastIndex(in[5], "."), strings.LastIndex(out[5], "."))
-				assert.Contains(t, out[5], "$-1,212.30")
+				// Fix: -1210.00 → -1212.30 (same width, 8 runes). For
+				// commodity-left the `$` column is preserved and the
+				// decimal column therefore stays put.
+				assert.Equal(t, strings.LastIndex(in[3], "."), strings.LastIndex(out[3], "."))
+				assert.Contains(t, out[3], "$-1212.30")
 			},
 		},
 		{
@@ -274,6 +272,97 @@ func TestServer_CodeAction_QuickFix_CommodityRight_PreservesLayout(t *testing.T)
 			ts.cliClient = nil
 
 			uri := protocol.DocumentURI("file:///issue25.journal")
+			diagnostics, err := ts.openAndWait(uri, tt.content)
+			require.NoError(t, err)
+
+			diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+			actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+			require.NoError(t, err)
+
+			action := requireQuickFixAction(t, actions)
+			fixed := applyWorkspaceEditToContent(t, tt.content, uri, action.Edit)
+			assert.Equal(t, tt.want, fixed)
+		})
+	}
+}
+
+// Issue #25: commodity-right amounts always align their commodity symbol
+// with sibling postings. Even when the user's original input had amounts
+// aligned by start column (because signs pushed one amount further left),
+// Quick Fix produces a result aligned by end column — the same
+// invariant the Format Document would enforce. Pre-amount whitespace is
+// recomputed to hit the sibling's end column.
+func TestServer_CodeAction_QuickFix_CommodityRight_AlignsWithSibling(t *testing.T) {
+	ts := newTestServer()
+	ts.cliClient = nil
+
+	uri := protocol.DocumentURI("file:///start-aligned.journal")
+	content := "commodity RUB\n" +
+		"  format 1 000,00 RUB\n" +
+		"\n" +
+		"2024-01-15 groceries\n" +
+		"    expenses:food  1 234,56 RUB\n" +
+		"    assets:cash    -1234 RUB"
+
+	diagnostics, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+	diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
+
+	actions, err := codeActionsForDiagnostics(ts, uri, []protocol.Diagnostic{diag})
+	require.NoError(t, err)
+	action := requireQuickFixAction(t, actions)
+	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
+
+	// RUB ends at the same column on both postings (col 31 in 1-indexed
+	// runes), matching what Format Document would produce — no post-fix
+	// reformatting needed.
+	want := "commodity RUB\n" +
+		"  format 1 000,00 RUB\n" +
+		"\n" +
+		"2024-01-15 groceries\n" +
+		"    expenses:food  1 234,56 RUB\n" +
+		"    assets:cash   -1 234,56 RUB"
+	assert.Equal(t, want, fixed)
+	// RUB end column matches on both postings.
+	lines := strings.Split(fixed, "\n")
+	assert.Equal(t, strings.LastIndex(lines[4], "RUB")+3, strings.LastIndex(lines[5], "RUB")+3)
+}
+
+// Issue #25: for commodity-left amounts (`$`, `€`) Quick Fix preserves
+// the commodity-symbol column (start of amount). Width changes grow or
+// shrink the line at the tail, not the start.
+func TestServer_CodeAction_QuickFix_CommodityLeft_PreservesStartColumn(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "wider amount grows tail, $ column stable",
+			content: "2024-01-15 lunch\n" +
+				"    expenses:food  $10.00\n" +
+				"    assets:cash    $-9.00",
+			want: "2024-01-15 lunch\n" +
+				"    expenses:food  $10.00\n" +
+				"    assets:cash    $-10.00",
+		},
+		{
+			name: "narrower amount shrinks tail, $ column stable",
+			content: "2024-01-15 x\n" +
+				"    a  $100.00\n" +
+				"    b  $-99.50",
+			want: "2024-01-15 x\n" +
+				"    a  $100.00\n" +
+				"    b  $-100.00",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer()
+			ts.cliClient = nil
+
+			uri := protocol.DocumentURI("file:///left.journal")
 			diagnostics, err := ts.openAndWait(uri, tt.content)
 			require.NoError(t, err)
 
