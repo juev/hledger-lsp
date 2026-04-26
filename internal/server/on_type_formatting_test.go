@@ -47,6 +47,51 @@ func TestOnTypeFormatting_AfterPosting(t *testing.T) {
 	assert.Equal(t, "    ", edits[0].NewText)
 }
 
+func TestOnTypeFormatting_EnterFormatsPreviousPostingRightMode(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 40
+	ts.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
+
+	ts.StoreDocument(uri, content)
+
+	edits, err := ts.onTypeFormatting(uri, 2, "\n")
+	require.NoError(t, err)
+	require.Len(t, edits, 2)
+
+	assert.Equal(t, uint32(1), edits[0].Range.Start.Line)
+	assert.Equal(t, 40, len(edits[0].NewText))
+	assert.Contains(t, edits[0].NewText, "12.00 USD")
+	assert.Equal(t, uint32(2), edits[1].Range.Start.Line)
+	assert.Equal(t, "    ", edits[1].NewText)
+}
+
+func TestOnTypeFormatting_EnterFormatsPreviousPostingDecimalMode(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.AmountAlignmentMode = "decimal"
+	settings.Formatting.AmountAlignmentColumn = 30
+	ts.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
+
+	ts.StoreDocument(uri, content)
+
+	edits, err := ts.onTypeFormatting(uri, 2, "\n")
+	require.NoError(t, err)
+	require.Len(t, edits, 2)
+
+	assert.Equal(t, uint32(1), edits[0].Range.Start.Line)
+	assert.Equal(t, 30, strings.Index(edits[0].NewText, "."))
+	assert.Equal(t, uint32(2), edits[1].Range.Start.Line)
+	assert.Equal(t, "    ", edits[1].NewText)
+}
+
 func TestOnTypeFormatting_AfterEmptyLine(t *testing.T) {
 	ts := newTestServer()
 	uri := protocol.DocumentURI("file:///test.journal")

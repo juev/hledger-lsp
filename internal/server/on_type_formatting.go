@@ -110,6 +110,9 @@ func (s *Server) onTypeNewline(doc string, params *protocol.DocumentOnTypeFormat
 	}
 
 	if currentLineContent == newIndent {
+		if prevEdit := s.formatPreviousPostingLine(doc, params.TextDocument.URI, line-1); prevEdit != nil {
+			return []protocol.TextEdit{*prevEdit}, nil
+		}
 		return nil, nil
 	}
 
@@ -118,13 +121,51 @@ func (s *Server) onTypeNewline(doc string, params *protocol.DocumentOnTypeFormat
 		currentLineLen = uint32(lsputil.UTF16Len(currentLineContent))
 	}
 
-	return []protocol.TextEdit{{
+	edits := make([]protocol.TextEdit, 0, 2)
+	if prevEdit := s.formatPreviousPostingLine(doc, params.TextDocument.URI, line-1); prevEdit != nil {
+		edits = append(edits, *prevEdit)
+	}
+
+	edits = append(edits, protocol.TextEdit{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: uint32(line), Character: 0},
 			End:   protocol.Position{Line: uint32(line), Character: currentLineLen},
 		},
 		NewText: newIndent,
-	}}, nil
+	})
+	return edits, nil
+}
+
+func (s *Server) formatPreviousPostingLine(doc string, uri protocol.DocumentURI, line int) *protocol.TextEdit {
+	lines := splitLines(doc)
+	if line < 0 || line >= len(lines) || classifyLine(lines[line]) != linePosting {
+		return nil
+	}
+
+	journal, _ := parser.Parse(doc)
+	var commodityFormats map[string]formatter.CommodityFormat
+	if s.workspace != nil {
+		commodityFormats = s.workspace.GetCommodityFormatsForFile(uriToPath(uri))
+	}
+
+	settings := s.getSettings()
+	opts := formatter.Options{
+		IndentSize:            settings.Formatting.IndentSize,
+		AlignAmounts:          settings.Formatting.AlignAmounts,
+		MinAlignmentColumn:    settings.Formatting.MinAlignmentColumn,
+		AmountAlignmentColumn: settings.Formatting.AmountAlignmentColumn,
+		AmountAlignmentMode:   settings.Formatting.AmountAlignmentMode,
+	}
+	for _, edit := range formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts) {
+		if int(edit.Range.Start.Line) == line {
+			if edit.NewText == lines[line] {
+				return nil
+			}
+			lineEdit := edit
+			return &lineEdit
+		}
+	}
+	return nil
 }
 
 func (s *Server) onTypeTab(doc string, params *protocol.DocumentOnTypeFormattingParams) ([]protocol.TextEdit, error) {

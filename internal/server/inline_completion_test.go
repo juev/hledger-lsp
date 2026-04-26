@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,6 +77,89 @@ func TestInlineCompletion_EnabledOnEmptyLineAfterPayee(t *testing.T) {
 	assert.Contains(t, item.InsertText, "expenses:food")
 	assert.Contains(t, item.InsertText, "assets:cash")
 	assert.Contains(t, item.InsertText, "$50.00")
+}
+
+func TestInlineCompletion_AlignedGhostTextRightMode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 40
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, 40, len(lines[0]))
+	assert.Contains(t, lines[0], "12.00 USD")
+}
+
+func TestInlineCompletion_AlignedGhostTextDecimalModeDeterministic(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "decimal"
+	settings.Formatting.AmountAlignmentColumn = 30
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	var first string
+	for i := range 5 {
+		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		require.NoError(t, err)
+		require.Len(t, result.Items, 1, "iteration %d", i)
+
+		if i == 0 {
+			first = result.Items[0].InsertText
+			lines := strings.Split(first, "\n")
+			require.Len(t, lines, 2)
+			assert.Equal(t, 30, strings.Index(lines[0], "."))
+		} else {
+			assert.Equal(t, first, result.Items[0].InsertText, "iteration %d", i)
+		}
+	}
 }
 
 func TestInlineCompletion_NotOnNonEmptyLine(t *testing.T) {

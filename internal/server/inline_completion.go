@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 
@@ -88,7 +89,7 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
 	}
 
-	insertText := buildInlinePostingsText(postings, settings.Formatting.IndentSize)
+	insertText := buildInlinePostingsText(postings, settings.Formatting)
 
 	item := InlineCompletionItem{
 		InsertText: insertText,
@@ -175,9 +176,9 @@ func extractPayeeFromHeader(line string) string {
 	return afterDate
 }
 
-func buildInlinePostingsText(postings []analyzer.PostingTemplate, indentSize int) string {
+func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting formattingSettings) string {
 	var sb strings.Builder
-	indent := strings.Repeat(" ", indentSize)
+	indent := strings.Repeat(" ", formatting.IndentSize)
 
 	for i, p := range postings {
 		if i > 0 {
@@ -186,18 +187,59 @@ func buildInlinePostingsText(postings []analyzer.PostingTemplate, indentSize int
 		sb.WriteString(indent)
 		sb.WriteString(p.Account)
 
-		if p.Amount != "" || p.Commodity != "" {
-			sb.WriteString("  ")
-			if p.CommodityLeft && p.Commodity != "" {
-				sb.WriteString(p.Commodity)
-			}
-			sb.WriteString(p.Amount)
-			if !p.CommodityLeft && p.Commodity != "" {
-				sb.WriteString(" ")
-				sb.WriteString(p.Commodity)
-			}
+		amountText := renderInlineAmount(p)
+		if amountText != "" {
+			spaces := inlineAmountSpaces(p, amountText, formatting, indent)
+			sb.WriteString(strings.Repeat(" ", spaces))
+			sb.WriteString(amountText)
 		}
 	}
 
 	return sb.String()
+}
+
+func renderInlineAmount(p analyzer.PostingTemplate) string {
+	if p.Amount == "" && p.Commodity == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	if p.CommodityLeft && p.Commodity != "" {
+		sb.WriteString(p.Commodity)
+	}
+	sb.WriteString(p.Amount)
+	if !p.CommodityLeft && p.Commodity != "" {
+		sb.WriteString(" ")
+		sb.WriteString(p.Commodity)
+	}
+	return sb.String()
+}
+
+func inlineAmountSpaces(p analyzer.PostingTemplate, amountText string, formatting formattingSettings, indent string) int {
+	spaces := 2
+	if !formatting.AlignAmounts || formatting.AmountAlignmentColumn <= 0 {
+		return spaces
+	}
+
+	currentLen := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
+	switch formatting.AmountAlignmentMode {
+	case "decimal":
+		prefix := inlineDecimalPrefix(amountText)
+		spaces = max(formatting.AmountAlignmentColumn-currentLen-prefix, spaces)
+	default:
+		amountLen := utf8.RuneCountInString(amountText)
+		spaces = max(formatting.AmountAlignmentColumn-currentLen-amountLen, spaces)
+	}
+	return spaces
+}
+
+func inlineDecimalPrefix(amountText string) int {
+	if idx := strings.Index(amountText, "."); idx >= 0 {
+		return utf8.RuneCountInString(amountText[:idx])
+	}
+	fields := strings.Fields(amountText)
+	if len(fields) == 0 {
+		return utf8.RuneCountInString(amountText)
+	}
+	return utf8.RuneCountInString(fields[0])
 }

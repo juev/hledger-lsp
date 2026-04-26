@@ -225,8 +225,11 @@ func TestParseSettingsFromRaw_Formatting_AmountAlignmentColumn(t *testing.T) {
 	if !result.Formatting.AlignAmounts {
 		t.Error("Formatting.AlignAmounts should be true")
 	}
-	if result.Formatting.MinAlignmentColumn != 45 {
-		t.Errorf("Formatting.MinAlignmentColumn = %d, want 45 (from amountAlignmentColumn)", result.Formatting.MinAlignmentColumn)
+	if result.Formatting.AmountAlignmentColumn != 45 {
+		t.Errorf("Formatting.AmountAlignmentColumn = %d, want 45", result.Formatting.AmountAlignmentColumn)
+	}
+	if result.Formatting.MinAlignmentColumn != 0 {
+		t.Errorf("Formatting.MinAlignmentColumn = %d, want 0 when amountAlignmentColumn is used", result.Formatting.MinAlignmentColumn)
 	}
 }
 
@@ -243,8 +246,11 @@ func TestParseSettingsFromRaw_Formatting_FlatAmountAlignmentColumn(t *testing.T)
 	if result.Formatting.IndentSize != 8 {
 		t.Errorf("Formatting.IndentSize = %d, want 8", result.Formatting.IndentSize)
 	}
-	if result.Formatting.MinAlignmentColumn != 42 {
-		t.Errorf("Formatting.MinAlignmentColumn = %d, want 42 (from flat formatting.amountAlignmentColumn)", result.Formatting.MinAlignmentColumn)
+	if result.Formatting.AmountAlignmentColumn != 42 {
+		t.Errorf("Formatting.AmountAlignmentColumn = %d, want 42", result.Formatting.AmountAlignmentColumn)
+	}
+	if result.Formatting.MinAlignmentColumn != 0 {
+		t.Errorf("Formatting.MinAlignmentColumn = %d, want 0 when flat amountAlignmentColumn is used", result.Formatting.MinAlignmentColumn)
 	}
 }
 

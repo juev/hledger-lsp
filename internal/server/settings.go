@@ -41,10 +41,11 @@ type diagnosticsSettings struct {
 }
 
 type formattingSettings struct {
-	IndentSize          int
-	AlignAmounts        bool
-	MinAlignmentColumn  int
-	AmountAlignmentMode string
+	IndentSize            int
+	AlignAmounts          bool
+	MinAlignmentColumn    int
+	AmountAlignmentColumn int
+	AmountAlignmentMode   string
 }
 
 type cliSettings struct {
@@ -149,6 +150,7 @@ func (s *Server) setSettings(settings serverSettings) {
 	}
 	if oldSettings.Formatting.IndentSize != settings.Formatting.IndentSize ||
 		oldSettings.Formatting.MinAlignmentColumn != settings.Formatting.MinAlignmentColumn ||
+		oldSettings.Formatting.AmountAlignmentColumn != settings.Formatting.AmountAlignmentColumn ||
 		oldSettings.Formatting.AmountAlignmentMode != settings.Formatting.AmountAlignmentMode {
 		s.clearAlignmentCache()
 	}
@@ -333,7 +335,7 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 			settings.Formatting.MinAlignmentColumn = value
 		}
 		if value, ok := toInt(formattingRaw["amountAlignmentColumn"]); ok {
-			settings.Formatting.MinAlignmentColumn = value
+			settings.Formatting.AmountAlignmentColumn = value
 		}
 		if value, ok := toString(formattingRaw["amountAlignmentMode"]); ok {
 			settings.Formatting.AmountAlignmentMode = value
@@ -349,7 +351,7 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		settings.Formatting.MinAlignmentColumn = value
 	}
 	if value, ok := toInt(raw["formatting.amountAlignmentColumn"]); ok {
-		settings.Formatting.MinAlignmentColumn = value
+		settings.Formatting.AmountAlignmentColumn = value
 	}
 	if value, ok := toString(raw["formatting.amountAlignmentMode"]); ok {
 		settings.Formatting.AmountAlignmentMode = value
