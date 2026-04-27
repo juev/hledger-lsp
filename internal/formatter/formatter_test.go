@@ -911,6 +911,63 @@ func TestFormatDocumentWithOptions_AmountAlignmentColumnDecimalMode(t *testing.T
 	assert.Equal(t, got, got2, "fixed-column decimal alignment must be idempotent")
 }
 
+func TestFormatDocumentWithOptions_AmountAlignmentColumnLeftMode(t *testing.T) {
+	input := "2024-01-15 lunch\n" +
+		"    food  -12.60 USD\n" +
+		"    cash  12.00 USD"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{
+		IndentSize:            4,
+		AlignAmounts:          true,
+		AmountAlignmentMode:   "left",
+		AmountAlignmentColumn: 30,
+	}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	got := applyEdits(input, edits)
+
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, 30, strings.Index(lines[1], "-12.60"), "first amount should start at configured column")
+	assert.Equal(t, 30, strings.Index(lines[2], "12.00"), "second amount should start at configured column")
+	assert.NotEqual(t, 30, len(lines[1]), "left mode must not align the amount end to the configured column")
+
+	journal2, errs := parser.Parse(got)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, got, nil, opts)
+	got2 := applyEdits(got, edits2)
+	assert.Equal(t, got, got2, "fixed-column left alignment must be idempotent")
+}
+
+func TestFormatDocumentWithOptions_AmountAlignmentColumnLeftModeAutoUsesStartColumn(t *testing.T) {
+	input := strings.Join([]string{
+		"2024-01-15 * grocery store",
+		"    expenses:food                $50.00",
+		"    assets:cash                         $-50.00",
+		"    liabilities:card                    $-5.00",
+	}, "\n")
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{
+		IndentSize:            4,
+		AlignAmounts:          true,
+		AmountAlignmentMode:   "left",
+		AmountAlignmentColumn: 0,
+	}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	got := applyEdits(input, edits)
+
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 4)
+	assert.Equal(t, 40, strings.Index(lines[1], "$50.00"))
+	assert.Equal(t, 40, strings.Index(lines[2], "$-50.00"))
+	assert.Equal(t, 40, strings.Index(lines[3], "$-5.00"))
+}
+
 func TestFormatDocumentWithOptions_AmountAlignmentColumnWithZeroNoCommodity(t *testing.T) {
 	input := "2026-01-01 * Testpayee\n" +
 		"    Asset:Spending  -1,000. USD\n" +

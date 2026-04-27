@@ -27,7 +27,7 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 - Balance checks and syntax errors
 
 ### Other
-- **Formatting** — Automatic alignment of amounts (right-aligned or decimal-point aligned)
+- **Formatting** — Automatic alignment of amounts (left-, right-, or decimal-point aligned)
 - **Hover** — Account balances on hover
 - **Semantic Tokens** — Syntax highlighting with delta support
 - **Document Symbols** — Outline navigation

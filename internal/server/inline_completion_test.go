@@ -162,6 +162,44 @@ func TestInlineCompletion_AlignedGhostTextDecimalModeDeterministic(t *testing.T)
 	}
 }
 
+func TestInlineCompletion_AlignedGhostTextLeftMode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "left"
+	settings.Formatting.AmountAlignmentColumn = 30
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context: InlineCompletionContext{
+			TriggerKind: InlineCompletionTriggerAutomatic,
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, 30, strings.Index(lines[0], "12.00 USD"))
+	assert.NotEqual(t, 30, len(lines[0]))
+}
+
 func TestInlineCompletion_NotOnNonEmptyLine(t *testing.T) {
 	srv := NewServer()
 

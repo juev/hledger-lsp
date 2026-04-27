@@ -226,6 +226,8 @@ func inlineAmountSpaces(p analyzer.PostingTemplate, amountText string, formattin
 	case "decimal":
 		prefix := inlineDecimalPrefix(amountText)
 		spaces = max(formatting.AmountAlignmentColumn-currentLen-prefix, spaces)
+	case "left":
+		spaces = max(formatting.AmountAlignmentColumn-currentLen, spaces)
 	default:
 		amountLen := utf8.RuneCountInString(amountText)
 		spaces = max(formatting.AmountAlignmentColumn-currentLen-amountLen, spaces)

@@ -238,6 +238,10 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 		alignCol = settings.Formatting.MinAlignmentColumn - 1
 	}
 
+	if settings.Formatting.AmountAlignmentMode == "left" && settings.Formatting.AmountAlignmentColumn > 0 {
+		alignCol = settings.Formatting.AmountAlignmentColumn
+	}
+
 	if settings.Formatting.AmountAlignmentMode == "decimal" {
 		commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
 		if s.workspace != nil {

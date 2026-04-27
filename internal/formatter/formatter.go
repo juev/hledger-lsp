@@ -85,6 +85,12 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 						globalDecimalCol = detected
 					}
 				}
+			case "left":
+				if opts.AmountAlignmentColumn > 0 {
+					globalAccountCol = opts.AmountAlignmentColumn
+				} else if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+					globalAccountCol = detected
+				}
 			default:
 				// Smart detection: if the file already has hand-aligned
 				// amounts, use the most common existing start column as the

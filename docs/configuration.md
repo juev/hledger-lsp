@@ -44,8 +44,8 @@ Enable or disable specific LSP features.
 | `hledger.formatting.indentSize` | `4` | Number of spaces for posting indent |
 | `hledger.formatting.alignAmounts` | `true` | Align amounts across postings |
 | `hledger.formatting.minAlignmentColumn` | `0` | Minimum column floor for amount alignment. `0` = auto from file content (`indent + longest account + 2 spaces`). Set to a positive integer to enforce a minimum column for visual consistency across files. |
-| `hledger.formatting.amountAlignmentColumn` | `0` | Fixed mode-specific alignment target. In `"right"` mode this is the amount end column; in `"decimal"` mode this is the decimal-point column. `0` disables the fixed target. |
-| `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"right"` (right-align amounts) or `"decimal"` (align on decimal point) |
+| `hledger.formatting.amountAlignmentColumn` | `0` | Fixed mode-specific alignment target. In `"left"` mode this is the amount start column; in `"right"` mode this is the amount end column; in `"decimal"` mode this is the decimal-point column. `0` disables the fixed target. |
+| `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"left"` (align amount starts), `"right"` (right-align amounts), or `"decimal"` (align on decimal point) |
 
 ### Pin amounts to a fixed column (opt-in)
 
@@ -84,6 +84,15 @@ With `"right"`, amounts end at the configured column. With `"decimal"`, decimal 
 {
   "hledger.formatting.amountAlignmentMode": "decimal",
   "hledger.formatting.amountAlignmentColumn": 60
+}
+```
+
+With `"left"`, amount starts align at the configured column:
+
+```json
+{
+  "hledger.formatting.amountAlignmentMode": "left",
+  "hledger.formatting.amountAlignmentColumn": 40
 }
 ```
 

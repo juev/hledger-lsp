@@ -113,7 +113,7 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 		settings.Formatting.IndentSize = defaults.Formatting.IndentSize
 	}
 	switch settings.Formatting.AmountAlignmentMode {
-	case "right", "decimal":
+	case "right", "decimal", "left":
 		// valid
 	default:
 		settings.Formatting.AmountAlignmentMode = defaults.Formatting.AmountAlignmentMode

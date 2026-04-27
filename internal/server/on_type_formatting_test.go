@@ -118,6 +118,29 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingDecimalMode(t *testing.T) {
 	assert.Equal(t, "    ", edits[1].NewText)
 }
 
+func TestOnTypeFormatting_EnterFormatsPreviousPostingLeftMode(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.AmountAlignmentMode = "left"
+	settings.Formatting.AmountAlignmentColumn = 30
+	ts.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
+
+	ts.StoreDocument(uri, content)
+
+	edits, err := ts.onTypeFormatting(uri, 2, "\n")
+	require.NoError(t, err)
+	require.Len(t, edits, 2)
+
+	assert.Equal(t, uint32(1), edits[0].Range.Start.Line)
+	assert.Equal(t, 30, strings.Index(edits[0].NewText, "12.00 USD"))
+	assert.NotEqual(t, 30, len(edits[0].NewText))
+	assert.Equal(t, uint32(2), edits[1].Range.Start.Line)
+	assert.Equal(t, "    ", edits[1].NewText)
+}
+
 func TestOnTypeFormatting_AfterEmptyLine(t *testing.T) {
 	ts := newTestServer()
 	uri := protocol.DocumentURI("file:///test.journal")
@@ -391,6 +414,26 @@ func TestOnTypeFormatting_Tab_UsesGlobalAlignment(t *testing.T) {
 	col1 := int(edits1[0].Range.Start.Character) + len(edits1[0].NewText)
 	col2 := int(edits2[0].Range.Start.Character) + len(edits2[0].NewText)
 	assert.Equal(t, col1, col2, "both postings should align to the same global column")
+}
+
+func TestOnTypeFormatting_Tab_UsesFixedLeftAlignmentColumn(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.AmountAlignmentMode = "left"
+	settings.Formatting.AmountAlignmentColumn = 30
+	ts.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n"
+
+	ts.StoreDocument(uri, content)
+
+	edits, err := ts.onTypeFormattingTab(uri, 1, 17)
+	require.NoError(t, err)
+	require.Len(t, edits, 1)
+
+	endCol := int(edits[0].Range.Start.Character) + len(edits[0].NewText)
+	assert.Equal(t, 30, endCol)
 }
 
 // Emoji-bearing accounts: cursor position from LSP is in UTF-16 units, where
