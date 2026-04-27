@@ -423,27 +423,23 @@ func TestOnTypeFormatting_Tab_EmojiAccountAlignment(t *testing.T) {
 		"spacesNeeded must be computed in runes (alignCol=29 - cursorRune=10 = 19), not in mixed units")
 }
 
-// Smart alignment detection: when the file already has hand-formatted amounts,
-// Tab should respect the existing widest column instead of compressing to formula.
-// This is the issue #21 v2 case (after smart detection was added on top of the
-// initial default change).
+// Smart alignment detection: when the file already has hand-formatted
+// amounts, Tab should respect the most common existing column instead of
+// compressing to formula.
 func TestOnTypeFormatting_Tab_RespectsExistingAlignment(t *testing.T) {
 	ts := newTestServer()
 	// Default settings (MinAlignmentColumn=0, no setSettings).
 
 	uri := protocol.DocumentURI("file:///test.journal")
-	// Hand-formatted journal:
-	//   "    expenses:food                $50.00"
-	//    0123456789012345678901234567890123
-	//                                    ^ $ at col 33 (0-indexed)
-	//   "    expenses:food:coffee          $5.00"
-	//    01234567890123456789012345678901234
-	//                                     ^ $ at col 34 (0-indexed)
-	// MIN detected = 33 (leftmost = widest amount; both end at col 39 right-aligned).
-	// Formula natural = 4 + 20 ("expenses:food:coffee") + 2 = 26.
-	// alignCol should be max(detected=33, formula=26) = 33.
-	content := "2024-01-15 * grocery store\n    expenses:food                $50.00\n    assets:cash\n\n" +
-		"2024-01-16 * coffee shop\n    expenses:food:coffee          $5.00\n    assets:cash\n"
+	lineAt33 := "    expenses:food" + strings.Repeat(" ", 16) + "$50.00"
+	lineAt40A := "    assets:cash" + strings.Repeat(" ", 25) + "$-50.00"
+	lineAt40B := "    liabilities:card" + strings.Repeat(" ", 20) + "$-5.00"
+	content := strings.Join([]string{
+		"2024-01-15 * grocery store",
+		lineAt33,
+		lineAt40A,
+		lineAt40B,
+	}, "\n")
 
 	ts.StoreDocument(uri, content)
 
@@ -453,8 +449,8 @@ func TestOnTypeFormatting_Tab_RespectsExistingAlignment(t *testing.T) {
 	require.Len(t, edits, 1)
 
 	endCol := int(edits[0].Range.Start.Character) + len(edits[0].NewText)
-	assert.Equal(t, 33, endCol,
-		"Tab should align to detected MIN column (33) from existing $50.00, preserving the file's right-edge alignment at col 39")
+	assert.Equal(t, 40, endCol,
+		"Tab should align to modal existing column 40, not MIN column 33")
 }
 
 // Regression for the fallback path: when the file has no real amounts (e.g.

@@ -70,13 +70,8 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 		globalDecimalCol := 0
 		globalAmountEndCol := 0
 		if opts.AlignAmounts {
-			globalAccountCol = CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
-			// Smart detection: if the file already has hand-aligned amounts,
-			// use the widest existing column as the base. This preserves the
-			// file's visual layout and keeps Format consistent with Tab.
-			if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
-				globalAccountCol = detected
-			}
+			naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
+			globalAccountCol = naturalAccountCol
 			if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 				globalAccountCol = opts.MinAlignmentColumn - 1
 			}
@@ -86,8 +81,17 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 					globalDecimalCol = opts.AmountAlignmentColumn
 				} else {
 					globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol)
+					if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats); detected > globalDecimalCol {
+						globalDecimalCol = detected
+					}
 				}
 			default:
+				// Smart detection: if the file already has hand-aligned
+				// amounts, use the most common existing start column as the
+				// base. Decimal mode uses decimal-target detection instead.
+				if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+					globalAccountCol = detected
+				}
 				if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(journal.Transactions) {
 					globalAmountEndCol = opts.AmountAlignmentColumn
 					break
@@ -102,7 +106,8 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 				// and takes priority over automatic end-column anchoring.
 				if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
 					if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats); endCol > 0 {
-						globalAmountEndCol = endCol
+						naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats)
+						globalAmountEndCol = max(naturalEndCol, endCol)
 					}
 				}
 			}
@@ -306,26 +311,34 @@ func CalculateGlobalAlignmentColumnWithIndent(transactions []ast.Transaction, in
 	return indentSize + maxLen + minSpaces
 }
 
-// DetectExistingAmountColumn returns the leftmost (minimum) 0-indexed rune
-// column where an amount currently begins across all postings, or 0 if no
-// posting has an amount. Used for "smart" alignment detection: when a
-// hand-formatted file has amounts wider than formula natural would compute,
-// this column becomes a floor for new postings via Tab and full document
-// formatting, preserving the file's visual layout.
-//
-// MIN (leftmost) is chosen because:
-//   - For right-align mode, the leftmost amount is the widest one. All other
-//     amounts in a consistently-formatted file end at the same column, so the
-//     widest amount's start column is the canonical accountCol.
-//   - For decimal mode, the leftmost amount is the one with the longest
-//     integer part. After formatting, narrower amounts shift right to align
-//     decimal points; the widest amount's start column stays put. MIN gives
-//     idempotent format runs (MAX would drift wider on each iteration).
+func selectModalColumn(columns []int) int {
+	counts := make(map[int]int)
+	bestCol := 0
+	bestCount := 0
+	for _, col := range columns {
+		if col <= 0 {
+			continue
+		}
+		counts[col]++
+		if counts[col] > bestCount || (counts[col] == bestCount && col > bestCol) {
+			bestCol = col
+			bestCount = counts[col]
+		}
+	}
+	return bestCol
+}
+
+// DetectExistingAmountColumn returns the most common 0-indexed rune column
+// where an amount currently begins across all postings, or 0 if no posting has
+// an amount. Ties choose the larger column to avoid compressing hand-formatted
+// files. Used for "smart" alignment detection: when a file already has a
+// dominant visual layout, this column becomes a floor for new postings via Tab
+// and full document formatting.
 //
 // AST positions from the parser are 1-indexed runes; this function returns
 // 0-indexed runes for direct compatibility with CalculateGlobalAlignmentColumnWithIndent.
 func DetectExistingAmountColumn(transactions []ast.Transaction) int {
-	minCol := -1
+	var columns []int
 	for i := range transactions {
 		for j := range transactions[i].Postings {
 			p := &transactions[i].Postings[j]
@@ -333,27 +346,22 @@ func DetectExistingAmountColumn(transactions []ast.Transaction) int {
 				continue
 			}
 			col := p.Amount.Range.Start.Column - 1 // 1-indexed → 0-indexed
-			if minCol < 0 || col < minCol {
-				minCol = col
-			}
+			columns = append(columns, col)
 		}
 	}
-	if minCol < 0 {
-		return 0
-	}
-	return minCol
+	return selectModalColumn(columns)
 }
 
-// DetectExistingAmountEndColumn returns the rightmost (maximum) 0-indexed
-// rune column right after the last rune of any commodity-right amount
-// across all postings, or 0 if no such amount exists.
+// DetectExistingAmountEndColumn returns the most common 0-indexed rune column
+// right after the last rune of any commodity-right alignment target across all
+// postings, or 0 if no such amount exists. Ties choose the larger column.
 //
 // The end column is computed as `(Amount.Range.Start.Column - 1) +
-// renderedAmountLen` rather than read from `Amount.Range.End.Column`,
-// because the parser extends `Amount.Range.End` through trailing
-// whitespace up to the next token (e.g. `=` of a balance assertion),
-// which would shift the detected column one or two positions too far
-// right and break format idempotency.
+// renderedAlignmentTargetLen` rather than read from `Amount.Range.End.Column`,
+// because the parser extends `Amount.Range.End` through trailing whitespace up
+// to the next token (e.g. `=` of a balance assertion), which would shift the
+// detected column one or two positions too far right and break format
+// idempotency.
 //
 // Used for right-alignment of commodity-on-right amounts (issue #25):
 // aligning by end column keeps the commodity symbol (USD / EUR / …) in a
@@ -361,7 +369,7 @@ func DetectExistingAmountColumn(transactions []ast.Transaction) int {
 // amounts are ignored — those are aligned by start column via the sibling
 // DetectExistingAmountColumn so the commodity symbol (e.g. $) stays put.
 func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
-	maxCol := 0
+	var columns []int
 	for i := range transactions {
 		for j := range transactions[i].Postings {
 			p := &transactions[i].Postings[j]
@@ -372,13 +380,26 @@ func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityForm
 				continue
 			}
 			startCol := p.Amount.Range.Start.Column - 1
-			endCol := startCol + calculateSingleAmountLen(p.Amount, commodityFormats)
-			if endCol > maxCol {
-				maxCol = endCol
-			}
+			endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats)
+			columns = append(columns, endCol)
 		}
 	}
-	return maxCol
+	return selectModalColumn(columns)
+}
+
+func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+	var columns []int
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			p := &transactions[i].Postings[j]
+			if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
+				continue
+			}
+			startCol := p.Amount.Range.Start.Column - 1
+			columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats))
+		}
+	}
+	return selectModalColumn(columns)
 }
 
 // allAmountsCommodityRight reports whether every posting that carries an
@@ -499,6 +520,16 @@ func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[stri
 		length += calculateSingleAmountLen(&posting.Cost.Amount, commodityFormats)
 	}
 	return length
+}
+
+func calculateGlobalAlignmentTargetLen(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+	maxLen := 0
+	for i := range transactions {
+		for j := range transactions[i].Postings {
+			maxLen = max(maxLen, calculateAlignmentTargetLen(&transactions[i].Postings[j], commodityFormats))
+		}
+	}
+	return maxLen
 }
 
 func calculateLotPriceLen(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) int {

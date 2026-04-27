@@ -49,6 +49,41 @@ func TestCalculateAlignmentColumn(t *testing.T) {
 	}
 }
 
+func TestSelectModalColumn(t *testing.T) {
+	tests := []struct {
+		name     string
+		columns  []int
+		expected int
+	}{
+		{
+			name:     "empty",
+			columns:  nil,
+			expected: 0,
+		},
+		{
+			name:     "most frequent wins",
+			columns:  []int{33, 40, 40, 33, 40},
+			expected: 40,
+		},
+		{
+			name:     "larger column wins tie",
+			columns:  []int{33, 40, 33, 40},
+			expected: 40,
+		},
+		{
+			name:     "ignores non-positive columns",
+			columns:  []int{0, -1, 28},
+			expected: 28,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, selectModalColumn(tt.columns))
+		})
+	}
+}
+
 func TestDetectExistingAmountColumn(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -86,7 +121,7 @@ func TestDetectExistingAmountColumn(t *testing.T) {
 			expected: 19,
 		},
 		{
-			name: "multiple postings different columns picks MIN",
+			name: "multiple postings different columns tie picks larger",
 			input: `2024-01-15 first
     expenses:food                $50.00
     assets:cash
@@ -96,8 +131,8 @@ func TestDetectExistingAmountColumn(t *testing.T) {
     assets:cash`,
 			// First posting: 4 indent + 13 "expenses:food" + 16 spaces = $ at col 33
 			// Second posting: 4 indent + 20 "expenses:food:coffee" + 10 spaces = $ at col 34
-			// MIN = 33 (canonical accountCol — both amounts end at col 39 in right-align)
-			expected: 33,
+			// Tie between 33 and 34 → larger target wins to avoid compressing spacing.
+			expected: 34,
 		},
 		{
 			name: "cyrillic account uses rune column",
@@ -460,8 +495,8 @@ func findAmountPosition(s string) int {
 func TestFormatDocumentWithOptions_PreservesExistingAlignment(t *testing.T) {
 	// Hand-formatted journal with amounts at col 33 and col 34.
 	// Formula natural = 4 + 20 ("expenses:food:coffee") + 2 = 26.
-	// MIN detected from existing amounts = 33 (leftmost = widest amount).
-	// Expected: Format preserves col 33 (canonical accountCol), not collapsing to 26.
+	// Existing modal tie chooses the larger column 34.
+	// Expected: Format preserves existing spacing, not collapsing to 26.
 	input := `2024-01-15 * grocery store
     expenses:food                $50.00
     assets:cash
@@ -484,11 +519,82 @@ func TestFormatDocumentWithOptions_PreservesExistingAlignment(t *testing.T) {
 			continue
 		}
 		foundAmountEdit = true
-		// 0-indexed rune col should be 33: leftmost existing amount preserved
-		assert.Equal(t, 33, dollarPos,
-			"Format should preserve detected MIN amount column (33), not collapse to formula natural (26). Edit: %q", edit.NewText)
+		assert.Equal(t, 34, dollarPos,
+			"Format should preserve modal amount column (34), not collapse to formula natural (26). Edit: %q", edit.NewText)
 	}
 	require.True(t, foundAmountEdit, "expected at least one edit containing a $ amount")
+}
+
+func TestFormatDocumentWithOptions_PreservesModalExistingStartColumn(t *testing.T) {
+	lineAt33 := "    expenses:food" + strings.Repeat(" ", 16) + "$50.00"
+	lineAt40A := "    assets:cash" + strings.Repeat(" ", 25) + "$-50.00"
+	lineAt40B := "    liabilities:card" + strings.Repeat(" ", 20) + "$-5.00"
+	input := strings.Join([]string{
+		"2024-01-15 * grocery store",
+		lineAt33,
+		lineAt40A,
+		lineAt40B,
+	}, "\n")
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	require.Equal(t, 33, strings.Index(lineAt33, "$"))
+	require.Equal(t, 40, strings.Index(lineAt40A, "$"))
+	require.Equal(t, 40, strings.Index(lineAt40B, "$"))
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 0}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	got := applyEdits(input, edits)
+
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 4)
+	for i := 1; i < len(lines); i++ {
+		assert.Equal(t, 40, strings.Index(lines[i], "$"),
+			"amount start in posting line %d should use modal existing column:\n%s", i, got)
+	}
+
+	journal2, errs := parser.Parse(got)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, got, nil, opts)
+	got2 := applyEdits(got, edits2)
+	assert.Equal(t, got, got2, "modal start-column alignment must be idempotent")
+}
+
+func TestFormatDocumentWithOptions_PreservesModalExistingEndColumn(t *testing.T) {
+	lineEnd40A := "    expenses:food" + strings.Repeat(" ", 13) + "-50.00 USD"
+	lineEnd40B := "    assets:cash" + strings.Repeat(" ", 16) + "50.00 USD"
+	lineEnd50 := "    liabilities:card" + strings.Repeat(" ", 21) + "-5.00 USD"
+	input := strings.Join([]string{
+		"2024-01-15 * grocery store",
+		lineEnd40A,
+		lineEnd40B,
+		lineEnd50,
+	}, "\n")
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	require.Equal(t, 40, len(lineEnd40A))
+	require.Equal(t, 40, len(lineEnd40B))
+	require.Equal(t, 50, len(lineEnd50))
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, MinAlignmentColumn: 0, AmountAlignmentMode: "right"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	got := applyEdits(input, edits)
+
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 4)
+	for i := 1; i < len(lines); i++ {
+		assert.Equal(t, 40, len(lines[i]),
+			"amount end in posting line %d should use modal existing column:\n%s", i, got)
+	}
+
+	journal2, errs := parser.Parse(got)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, got, nil, opts)
+	got2 := applyEdits(got, edits2)
+	assert.Equal(t, got, got2, "modal end-column alignment must be idempotent")
 }
 
 func TestFormatDocument_GlobalAlignment_EdgeCases(t *testing.T) {
@@ -1211,17 +1317,16 @@ func TestFormatDocument_NoCommodityAmount(t *testing.T) {
 		result := applyEdits(input, edits)
 
 		// maxLen = 26 ("Расходы:Развлечения:Музыка"), formula = 4+26+2 = 32.
-		// Detection MIN: 100 at 0-col 19, 169 at 0-col 37 → MIN=19.
-		// globalAccountCol = max(32, 19) = 32. Both amounts align at 0-col 32 (1-col 33).
-		// Short:Account: 17 prefix runes + 15 spaces = 32. Расходы: 30 runes + 2 spaces = 32.
+		// Existing columns: 100 at 0-col 19, 169 at 0-col 37. Tie picks larger 37.
+		// globalAccountCol = max(32, 37) = 37. Both amounts align at 0-col 37.
 		expected := `Y2019
 
 12/30 * Transaction 1
-    Short:Account               100
+    Short:Account                    100
     Assets:Cash
 
 12/31 * Apple
-    Расходы:Развлечения:Музыка  169
+    Расходы:Развлечения:Музыка       169
     Активы:Тинькофф:Текущий`
 		assert.Equal(t, expected, result, "format should align both amounts at the same column without extra space")
 
@@ -2552,6 +2657,78 @@ func TestFormatDocument_DecimalAlignment(t *testing.T) {
 	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
 	result2 := applyEdits(result, edits2)
 	assert.Equal(t, result, result2, "decimal alignment must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_PreservesModalExistingDecimalColumn(t *testing.T) {
+	lineAt40A := "    expenses:food" + strings.Repeat(" ", 19) + "1000.00 USD"
+	lineAt40B := "    expenses:drink" + strings.Repeat(" ", 21) + "5.76 USD"
+	lineAt50 := "    assets:cash" + strings.Repeat(" ", 32) + "-20.00 USD"
+	input := strings.Join([]string{
+		"2024-01-15 test",
+		lineAt40A,
+		lineAt40B,
+		lineAt50,
+	}, "\n")
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	require.Equal(t, 40, strings.Index(lineAt40A, "."))
+	require.Equal(t, 40, strings.Index(lineAt40B, "."))
+	require.Equal(t, 50, strings.Index(lineAt50, "."))
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 4)
+	for i := 1; i < len(lines); i++ {
+		assert.Equal(t, 40, strings.Index(lines[i], "."),
+			"decimal target in posting line %d should use modal existing column:\n%s", i, result)
+	}
+
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "modal decimal alignment must be idempotent")
+}
+
+func TestFormatDocument_DecimalAlignment_PreservesModalExistingCostDecimalColumn(t *testing.T) {
+	costLine := "    assets:investments" + strings.Repeat(" ", 10) + "2.36 EUR @@ 3.12 USD"
+	cashLine := "    assets:cash" + strings.Repeat(" ", 28) + "-3.12 USD"
+	input := strings.Join([]string{
+		"2024-01-15 buy",
+		costLine,
+		cashLine,
+	}, "\n")
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	costToken := " @@ "
+	costPart := costLine[strings.Index(costLine, costToken)+len(costToken):]
+	require.Equal(t, 45, strings.Index(costLine, costToken)+len(costToken)+strings.Index(costPart, "."))
+	require.Equal(t, 45, strings.Index(cashLine, "."))
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal"}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	costPart = lines[1][strings.Index(lines[1], costToken)+len(costToken):]
+	costDecimal := strings.Index(lines[1], costToken) + len(costToken) + strings.Index(costPart, ".")
+	cashDecimal := strings.Index(lines[2], ".")
+	assert.Equal(t, 45, costDecimal, "cost decimal should preserve modal existing target:\n%s", result)
+	assert.Equal(t, costDecimal, cashDecimal, "cash decimal should align to cost decimal:\n%s", result)
+
+	journal2, errs2 := parser.Parse(result)
+	require.Empty(t, errs2)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "modal cost decimal alignment must be idempotent")
 }
 
 func TestFormatDocument_DecimalAlignment_QuotedCommodityWithDot(t *testing.T) {

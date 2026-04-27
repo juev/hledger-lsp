@@ -229,7 +229,7 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 	settings := s.getSettings()
 	alignCol := formatter.CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, settings.Formatting.IndentSize)
 	// Smart detection: if the file already has hand-aligned amounts, use the
-	// widest existing column as the base. This preserves the file's visual
+	// most common existing column as the base. This preserves the file's visual
 	// layout for new postings via Tab and full document formatting.
 	if detected := formatter.DetectExistingAmountColumn(journal.Transactions); detected > alignCol {
 		alignCol = detected
