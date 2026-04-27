@@ -70,6 +70,32 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingRightMode(t *testing.T) {
 	assert.Equal(t, "    ", edits[1].NewText)
 }
 
+func TestOnTypeFormatting_EnterFormatsPreviousPostingRightModeZeroNoCommodity(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 40
+	ts.setSettings(settings)
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := "2026-01-01 * Testpayee\n" +
+		"    Asset:Spending  -1,000. USD\n" +
+		"    Expenses:Services  1,000. USD\n" +
+		"    Expenses:Fees  0\n"
+
+	ts.StoreDocument(uri, content)
+
+	edits, err := ts.onTypeFormatting(uri, 4, "\n")
+	require.NoError(t, err)
+	require.Len(t, edits, 2)
+
+	assert.Equal(t, uint32(3), edits[0].Range.Start.Line)
+	assert.Equal(t, 40, len(edits[0].NewText))
+	assert.Contains(t, edits[0].NewText, "0")
+	assert.Equal(t, uint32(4), edits[1].Range.Start.Line)
+	assert.Equal(t, "    ", edits[1].NewText)
+}
+
 func TestOnTypeFormatting_EnterFormatsPreviousPostingDecimalMode(t *testing.T) {
 	ts := newTestServer()
 	settings := ts.getSettings()

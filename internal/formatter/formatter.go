@@ -394,6 +394,9 @@ func allAmountsCommodityRight(transactions []ast.Transaction) bool {
 				continue
 			}
 			seenAny = true
+			if p.Amount.Commodity.Symbol == "" {
+				continue
+			}
 			if p.Amount.Commodity.Position != ast.CommodityRight {
 				return false
 			}

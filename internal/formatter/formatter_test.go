@@ -805,6 +805,66 @@ func TestFormatDocumentWithOptions_AmountAlignmentColumnDecimalMode(t *testing.T
 	assert.Equal(t, got, got2, "fixed-column decimal alignment must be idempotent")
 }
 
+func TestFormatDocumentWithOptions_AmountAlignmentColumnWithZeroNoCommodity(t *testing.T) {
+	input := "2026-01-01 * Testpayee\n" +
+		"    Asset:Spending  -1,000. USD\n" +
+		"    Expenses:Services  1,000. USD\n" +
+		"    Expenses:Fees  0"
+
+	t.Run("right mode", func(t *testing.T) {
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		opts := Options{
+			IndentSize:            4,
+			AlignAmounts:          true,
+			AmountAlignmentMode:   "right",
+			AmountAlignmentColumn: 80,
+		}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+		got := applyEdits(input, edits)
+
+		lines := strings.Split(got, "\n")
+		require.Len(t, lines, 4)
+		assert.Equal(t, 80, len(lines[1]), "first amount target should end at configured column")
+		assert.Equal(t, 80, len(lines[2]), "second amount target should end at configured column")
+		assert.Equal(t, 80, len(lines[3]), "zero without commodity should end at configured column")
+		assert.Contains(t, lines[3], "0")
+
+		journal2, errs := parser.Parse(got)
+		require.Empty(t, errs)
+		edits2 := FormatDocumentWithOptions(journal2, got, nil, opts)
+		got2 := applyEdits(got, edits2)
+		assert.Equal(t, got, got2, "right alignment with commodity-less zero must be idempotent")
+	})
+
+	t.Run("decimal mode", func(t *testing.T) {
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		opts := Options{
+			IndentSize:            4,
+			AlignAmounts:          true,
+			AmountAlignmentMode:   "decimal",
+			AmountAlignmentColumn: 60,
+		}
+		edits := FormatDocumentWithOptions(journal, input, nil, opts)
+		got := applyEdits(input, edits)
+
+		lines := strings.Split(got, "\n")
+		require.Len(t, lines, 4)
+		assert.Equal(t, 60, strings.LastIndex(lines[1], "."), "first decimal should be at configured column")
+		assert.Equal(t, 60, strings.LastIndex(lines[2], "."), "second decimal should be at configured column")
+		assert.Equal(t, 60, strings.Index(lines[3], "0")+len("0"), "zero without decimal should end at configured column")
+
+		journal2, errs := parser.Parse(got)
+		require.Empty(t, errs)
+		edits2 := FormatDocumentWithOptions(journal2, got, nil, opts)
+		got2 := applyEdits(got, edits2)
+		assert.Equal(t, got, got2, "decimal alignment with commodity-less zero must be idempotent")
+	})
+}
+
 func TestFormatDocument_TrimsTrailingSpaces(t *testing.T) {
 	input := "2024-01-15 test   \n    expenses:food  $50  \n    assets:cash   "
 
