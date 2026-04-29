@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"go.lsp.dev/jsonrpc2"
@@ -40,9 +42,16 @@ func main() {
 	conn.Go(ctx, handler)
 	<-conn.Done()
 
-	if err := conn.Err(); err != nil {
-		os.Exit(1)
+	if code := exitCodeForConnErr(conn.Err()); code != 0 {
+		os.Exit(code)
 	}
+}
+
+func exitCodeForConnErr(err error) int {
+	if err == nil || errors.Is(err, io.EOF) {
+		return 0
+	}
+	return 1
 }
 
 type stdrwc struct{}

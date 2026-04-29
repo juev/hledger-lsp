@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,4 +53,34 @@ func TestServerDispatcher_ExecuteCommand_DelegatesToServer(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command")
+}
+
+func TestExitCodeForConnErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{
+			name: "nil",
+			err:  nil,
+			want: 0,
+		},
+		{
+			name: "closed stdin EOF",
+			err:  fmt.Errorf("failed reading header line: %w", io.EOF),
+			want: 0,
+		},
+		{
+			name: "protocol error",
+			err:  errors.New("missing Content-Length header"),
+			want: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, exitCodeForConnErr(tt.err))
+		})
+	}
 }
