@@ -31,9 +31,8 @@ func DefaultOptions() Options {
 }
 
 type AlignmentInfo struct {
-	AccountCol          int
-	BalanceAssertionCol int
-	DecimalCol          int
+	AccountCol int
+	DecimalCol int
 	// AmountEndCol, when > 0, enables true right-alignment: amounts are
 	// padded so that the column right after the last rune of the rendered
 	// amount equals AmountEndCol. Used when AmountAlignmentMode = "right"
@@ -442,29 +441,8 @@ func CalculateAlignment(postings []ast.Posting, commodityFormats map[string]Comm
 
 // CalculateAlignmentWithGlobal calculates alignment using a provided account column.
 // Use this with CalculateGlobalAlignmentColumn for file-wide consistent alignment.
-func CalculateAlignmentWithGlobal(postings []ast.Posting, commodityFormats map[string]CommodityFormat, accountCol int) AlignmentInfo {
-
-	hasBalanceAssertion := false
-	maxAmountCostLen := 0
-	for i := range postings {
-		p := &postings[i]
-		if p.BalanceAssertion != nil {
-			hasBalanceAssertion = true
-		}
-		if p.Amount != nil {
-			amountCostLen := calculateAmountCostLen(p, commodityFormats)
-			maxAmountCostLen = max(maxAmountCostLen, amountCostLen)
-		}
-	}
-
-	if !hasBalanceAssertion {
-		return AlignmentInfo{AccountCol: accountCol, BalanceAssertionCol: 0}
-	}
-
-	return AlignmentInfo{
-		AccountCol:          accountCol,
-		BalanceAssertionCol: accountCol + maxAmountCostLen + minAssertionSpaces,
-	}
+func CalculateAlignmentWithGlobal(_ []ast.Posting, _ map[string]CommodityFormat, accountCol int) AlignmentInfo {
+	return AlignmentInfo{AccountCol: accountCol}
 }
 
 // CalculateGlobalDecimalCol computes the column where decimal points should align,
@@ -486,29 +464,6 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 		return accountCol + maxPrefix
 	}
 	return 0
-}
-
-func calculateAmountCostLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
-	if posting.Amount == nil {
-		return 0
-	}
-
-	length := calculateSingleAmountLen(posting.Amount, commodityFormats)
-
-	if posting.LotPrice != nil {
-		length += calculateLotPriceLen(posting.LotPrice, commodityFormats)
-	}
-
-	if posting.Cost != nil {
-		if posting.Cost.IsTotal {
-			length += 4 // " @@ "
-		} else {
-			length += 3 // " @ "
-		}
-		length += calculateSingleAmountLen(&posting.Cost.Amount, commodityFormats)
-	}
-
-	return length
 }
 
 func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
@@ -536,25 +491,6 @@ func calculateGlobalAlignmentTargetLen(transactions []ast.Transaction, commodity
 		}
 	}
 	return maxLen
-}
-
-func calculateLotPriceLen(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) int {
-	length := 0
-	if lot.Cost != nil {
-		if lot.IsTotal {
-			length += 5 // " {{" + "}}"
-		} else {
-			length += 3 // " {" + "}"
-		}
-		length += calculateSingleAmountLen(lot.Cost, commodityFormats)
-	}
-	if lot.Date != "" {
-		length += 3 + utf8.RuneCountInString(lot.Date) // " [" + date + "]"
-	}
-	if lot.Label != "" {
-		length += 3 + utf8.RuneCountInString(lot.Label) // " (" + label + ")"
-	}
-	return length
 }
 
 // calculateAmountDecimalPrefix returns the number of characters in the rendered
@@ -735,13 +671,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	}
 
 	if posting.BalanceAssertion != nil {
-		if alignAmounts && alignment.BalanceAssertionCol > 0 {
-			currentLen := utf8.RuneCountInString(sb.String())
-			spaces := max(alignment.BalanceAssertionCol-currentLen, minAssertionSpaces)
-			sb.WriteString(strings.Repeat(" ", spaces))
-		} else {
-			sb.WriteString(strings.Repeat(" ", minAssertionSpaces))
-		}
+		sb.WriteString(strings.Repeat(" ", minAssertionSpaces))
 
 		switch {
 		case posting.BalanceAssertion.IsStrict && posting.BalanceAssertion.IsInclusive:

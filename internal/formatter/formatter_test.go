@@ -373,12 +373,8 @@ func TestFormatDocument_BalanceAssertionAlignment(t *testing.T) {
 	line1 := formattedLines[0]
 	line2 := formattedLines[1]
 
-	idx1 := findEqualSignIndex(line1)
-	idx2 := findEqualSignIndex(line2)
-
-	require.NotEqual(t, -1, idx1, "First line should have = sign")
-	require.NotEqual(t, -1, idx2, "Second line should have = sign")
-	assert.Equal(t, idx1, idx2, "= signs should be aligned at the same column, got %d and %d", idx1, idx2)
+	assertSingleBalanceAssertionSeparator(t, line1)
+	assertSingleBalanceAssertionSeparator(t, line2)
 }
 
 func findEqualSignIndex(s string) int {
@@ -388,6 +384,17 @@ func findEqualSignIndex(s string) int {
 		}
 	}
 	return -1
+}
+
+func assertSingleBalanceAssertionSeparator(t *testing.T, line string) {
+	t.Helper()
+	idx := findEqualSignIndex(line)
+	require.NotEqual(t, -1, idx, "line should have a balance assertion: %q", line)
+	require.Greater(t, idx, 0, "balance assertion should not start the line: %q", line)
+	assert.Equal(t, byte(' '), line[idx-1], "balance assertion should have one separator space: %q", line)
+	if idx >= 2 {
+		assert.NotEqual(t, byte(' '), line[idx-2], "balance assertion should not be padded: %q", line)
+	}
 }
 
 func TestFormatDocument_InclusiveBalanceAssertion(t *testing.T) {
@@ -2386,7 +2393,7 @@ func TestFormatDocument_MixedQuotedAndUnquotedAlignment(t *testing.T) {
 		"mixed quoted/unquoted alignment must be idempotent")
 }
 
-func TestFormatDocument_LotPriceBalanceAssertionAlignment(t *testing.T) {
+func TestFormatDocument_LotPriceBalanceAssertionSeparator(t *testing.T) {
 	input := `2024-01-15 buy stocks
     assets:stocks  10 AAPL {$150} = 10 AAPL
     assets:cash  -$1500 = -$1500`
@@ -2400,20 +2407,19 @@ func TestFormatDocument_LotPriceBalanceAssertionAlignment(t *testing.T) {
 	lines := strings.Split(result, "\n")
 	require.True(t, len(lines) >= 3)
 
-	eqCol1 := strings.Index(lines[1], "= ")
-	eqCol2 := strings.Index(lines[2], "= ")
-	require.NotEqual(t, -1, eqCol1, "posting 1 must have balance assertion")
-	require.NotEqual(t, -1, eqCol2, "posting 2 must have balance assertion")
-	assert.Equal(t, eqCol1, eqCol2, "balance assertions must align at same column")
+	assertSingleBalanceAssertionSeparator(t, lines[1])
+	assertSingleBalanceAssertionSeparator(t, lines[2])
+	assert.Contains(t, lines[1], "10 AAPL {$150} = 10 AAPL")
+	assert.Contains(t, lines[2], "-$1500 = -$1500")
 
 	journal2, errs := parser.Parse(result)
 	require.Empty(t, errs)
 	edits2 := FormatDocument(journal2, result)
 	result2 := applyEdits(result, edits2)
-	assert.Equal(t, result, result2, "lot price BA alignment must be idempotent")
+	assert.Equal(t, result, result2, "lot price BA separator must be idempotent")
 }
 
-func TestFormatDocument_TotalLotPriceBalanceAssertionAlignment(t *testing.T) {
+func TestFormatDocument_TotalLotPriceBalanceAssertionSeparator(t *testing.T) {
 	input := `2024-01-15 buy stocks
     assets:stocks  10 AAPL {{$1500}} = 10 AAPL
     assets:cash  -$1500 = -$1500`
@@ -2427,17 +2433,16 @@ func TestFormatDocument_TotalLotPriceBalanceAssertionAlignment(t *testing.T) {
 	lines := strings.Split(result, "\n")
 	require.True(t, len(lines) >= 3)
 
-	eqCol1 := strings.Index(lines[1], "= ")
-	eqCol2 := strings.Index(lines[2], "= ")
-	require.NotEqual(t, -1, eqCol1, "posting 1 must have balance assertion")
-	require.NotEqual(t, -1, eqCol2, "posting 2 must have balance assertion")
-	assert.Equal(t, eqCol1, eqCol2, "balance assertions must align at same column")
+	assertSingleBalanceAssertionSeparator(t, lines[1])
+	assertSingleBalanceAssertionSeparator(t, lines[2])
+	assert.Contains(t, lines[1], "10 AAPL {{$1500}} = 10 AAPL")
+	assert.Contains(t, lines[2], "-$1500 = -$1500")
 
 	journal2, errs := parser.Parse(result)
 	require.Empty(t, errs)
 	edits2 := FormatDocument(journal2, result)
 	result2 := applyEdits(result, edits2)
-	assert.Equal(t, result, result2, "total lot price BA alignment must be idempotent")
+	assert.Equal(t, result, result2, "total lot price BA separator must be idempotent")
 }
 
 func TestFormatDocument_WithLotPrice(t *testing.T) {
@@ -3184,6 +3189,80 @@ func TestFormatDocument_BalanceAssertionKeepsSingleSeparatorSpace(t *testing.T) 
 	edits2 := FormatDocument(journal2, result)
 	result2 := applyEdits(result, edits2)
 	assert.Equal(t, result, result2, "balance assertion spacing must be idempotent")
+}
+
+func TestFormatDocumentWithOptions_BalanceAssertionSeparatorIgnoresAlignmentPadding(t *testing.T) {
+	input := strings.Join([]string{
+		"2024-01-15 check",
+		"    Assets:Test  11.00 USD  ; Comment test",
+		"    Assets:Test2  11.00 USD",
+		"    Assets:Cash  10.00 USD = 10.00 USD  ; Comment test",
+		"    Assets:Card  -15.00 USD = -10.00 USD",
+		"    Assets:Forex  2.00 GBP @@ 4.00 USD = 4.00 GBP",
+	}, "\n")
+
+	tests := []struct {
+		name string
+		opts Options
+	}{
+		{
+			name: "right fixed column",
+			opts: Options{
+				IndentSize:            4,
+				AlignAmounts:          true,
+				AmountAlignmentMode:   "right",
+				AmountAlignmentColumn: 40,
+			},
+		},
+		{
+			name: "left fixed column",
+			opts: Options{
+				IndentSize:            4,
+				AlignAmounts:          true,
+				AmountAlignmentMode:   "left",
+				AmountAlignmentColumn: 30,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := parser.Parse(input)
+			require.Empty(t, errs)
+
+			edits := FormatDocumentWithOptions(journal, input, nil, tt.opts)
+			result := applyEdits(input, edits)
+			lines := strings.Split(result, "\n")
+			require.Len(t, lines, 6)
+
+			for _, line := range lines[3:] {
+				assertSingleBalanceAssertionSeparator(t, line)
+			}
+			assert.Contains(t, lines[3], "10.00 USD = 10.00 USD  ; Comment test")
+			assert.Contains(t, lines[4], "-15.00 USD = -10.00 USD")
+			assert.Contains(t, lines[5], "4.00 USD = 4.00 GBP")
+
+			switch tt.opts.AmountAlignmentMode {
+			case "right":
+				for i := 1; i < len(lines); i++ {
+					assert.Equal(t, 40, findAlignmentTargetEndPosition(lines[i]),
+						"alignment target should end at configured column on line %d:\n%s", i, result)
+				}
+			case "left":
+				assert.Equal(t, 30, strings.Index(lines[1], "11.00 USD"))
+				assert.Equal(t, 30, strings.Index(lines[2], "11.00 USD"))
+				assert.Equal(t, 30, strings.Index(lines[3], "10.00 USD"))
+				assert.Equal(t, 30, strings.Index(lines[4], "-15.00 USD"))
+				assert.Equal(t, 30, strings.Index(lines[5], "2.00 GBP @@ 4.00 USD"))
+			}
+
+			journal2, errs := parser.Parse(result)
+			require.Empty(t, errs)
+			edits2 := FormatDocumentWithOptions(journal2, result, nil, tt.opts)
+			result2 := applyEdits(result, edits2)
+			assert.Equal(t, result, result2, "balance assertion spacing must be idempotent")
+		})
+	}
 }
 
 func TestFormatDocument_DecimalAlignment_WithBalanceAssertion(t *testing.T) {
