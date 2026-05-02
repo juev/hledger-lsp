@@ -193,6 +193,7 @@ func (ts *testServer) hover(uri protocol.DocumentURI, line uint32) (*protocol.Ho
 	return ts.Hover(context.Background(), params)
 }
 
+//nolint:unparam // test helper keeps the URI explicit at call sites
 func (ts *testServer) format(uri protocol.DocumentURI) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},

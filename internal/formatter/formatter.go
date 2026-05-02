@@ -671,7 +671,15 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	}
 
 	if posting.BalanceAssertion != nil {
-		sb.WriteString(strings.Repeat(" ", minAssertionSpaces))
+		spaces := minAssertionSpaces
+		if posting.Amount == nil {
+			spaces = minSpaces
+			if alignAmounts && alignment.AccountCol > 0 {
+				currentLen := utf8.RuneCountInString(sb.String())
+				spaces = max(alignment.AccountCol-currentLen, minSpaces)
+			}
+		}
+		sb.WriteString(strings.Repeat(" ", spaces))
 
 		switch {
 		case posting.BalanceAssertion.IsStrict && posting.BalanceAssertion.IsInclusive:

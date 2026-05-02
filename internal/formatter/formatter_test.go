@@ -3191,6 +3191,48 @@ func TestFormatDocument_BalanceAssertionKeepsSingleSeparatorSpace(t *testing.T) 
 	assert.Equal(t, result, result2, "balance assertion spacing must be idempotent")
 }
 
+func TestFormatDocument_BalanceAssertionOnlyKeepsAccountSeparator(t *testing.T) {
+	input := `2026-05-02 balance check
+    资产:微信wx  100 CNY = 100 CNY
+    资产:待报销费用bx    = 1800 CNY  ; date:2026-05-02
+    equity:opening`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	edits := FormatDocument(journal, input)
+	result := applyEdits(input, edits)
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 4)
+
+	assert.Contains(t, lines[1], "100 CNY = 100 CNY")
+	assert.NotContains(t, lines[1], "100 CNY  = 100 CNY")
+	assert.NotContains(t, lines[2], "资产:待报销费用bx = 1800 CNY")
+	assert.Contains(t, lines[2], "= 1800 CNY  ; date:2026-05-02")
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	require.Len(t, journal2.Transactions, 1)
+
+	var assertionOnly *ast.Posting
+	for i := range journal2.Transactions[0].Postings {
+		posting := &journal2.Transactions[0].Postings[i]
+		if posting.Account.Name == "资产:待报销费用bx" {
+			assertionOnly = posting
+			break
+		}
+	}
+	require.NotNil(t, assertionOnly, "formatted assertion-only posting must keep the original account name")
+	assert.Nil(t, assertionOnly.Amount)
+	require.NotNil(t, assertionOnly.BalanceAssertion)
+	assert.Equal(t, "CNY", assertionOnly.BalanceAssertion.Amount.Commodity.Symbol)
+	assert.Equal(t, " date:2026-05-02", assertionOnly.Comment)
+
+	edits2 := FormatDocument(journal2, result)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "assertion-only balance assertion spacing must be idempotent")
+}
+
 func TestFormatDocumentWithOptions_BalanceAssertionSeparatorIgnoresAlignmentPadding(t *testing.T) {
 	input := strings.Join([]string{
 		"2024-01-15 check",

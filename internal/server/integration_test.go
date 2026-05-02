@@ -195,6 +195,38 @@ func TestIntegration_FormatPreservesSemantics(t *testing.T) {
 	assert.Contains(t, formattedContent, "assets:cash")
 }
 
+func TestIntegration_FormatDocumentKeepsBalanceAssertionOnlyIndentation(t *testing.T) {
+	ts := newTestServer()
+	uri := protocol.DocumentURI("file:///test.journal")
+
+	content := `2026-05-02 balance check
+    资产:微信wx  100 CNY = 100 CNY
+    资产:待报销费用bx    = 1800 CNY  ; date:2026-05-02
+    equity:opening`
+
+	_, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+
+	edits, err := ts.format(uri)
+	require.NoError(t, err)
+
+	formattedContent := applyTextEdits(content, edits)
+	lines := strings.Split(formattedContent, "\n")
+	require.Len(t, lines, 4)
+
+	assert.Contains(t, lines[1], "100 CNY = 100 CNY")
+	assert.NotContains(t, lines[1], "100 CNY  = 100 CNY")
+
+	account := "资产:待报销费用bx"
+	accountIdx := strings.Index(lines[2], account)
+	require.NotEqual(t, -1, accountIdx, "formatted line should keep the original account name: %q", lines[2])
+	afterAccount := lines[2][accountIdx+len(account):]
+	eqIdx := strings.Index(afterAccount, "=")
+	require.NotEqual(t, -1, eqIdx, "formatted line should keep the balance assertion: %q", lines[2])
+	assert.GreaterOrEqual(t, eqIdx, 2, "balance assertion must remain separated from account by 2+ spaces: %q", lines[2])
+	assert.Contains(t, lines[2], "= 1800 CNY  ; date:2026-05-02")
+}
+
 func TestIntegration_ErrorRecovery(t *testing.T) {
 	ts := newTestServer()
 	uri := protocol.DocumentURI("file:///test.journal")
