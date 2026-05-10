@@ -2774,6 +2774,42 @@ func TestParser_PermissiveAccountNames(t *testing.T) {
 	})
 }
 
+func TestParser_Issue27_VirtualPostingWithoutColon(t *testing.T) {
+	t.Run("ascii single-letter virtual unbalanced account", func(t *testing.T) {
+		input := "2020-01-01\n    Real        $0\n    (A:B)\n    (C)\n"
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs, "virtual posting (C) without colon should parse cleanly")
+		require.Len(t, journal.Transactions, 1)
+
+		tx := journal.Transactions[0]
+		require.Len(t, tx.Postings, 3)
+
+		assert.Equal(t, ast.VirtualNone, tx.Postings[0].Virtual)
+		assert.Equal(t, "Real", tx.Postings[0].Account.Name)
+
+		assert.Equal(t, ast.VirtualUnbalanced, tx.Postings[1].Virtual)
+		assert.Equal(t, "A:B", tx.Postings[1].Account.Name)
+
+		assert.Equal(t, ast.VirtualUnbalanced, tx.Postings[2].Virtual)
+		assert.Equal(t, "C", tx.Postings[2].Account.Name)
+	})
+
+	t.Run("non-ascii cyrillic virtual unbalanced account", func(t *testing.T) {
+		input := "2020-01-01\n    Real        $0\n    (Дом)\n"
+
+		journal, errs := Parse(input)
+		require.Empty(t, errs, "virtual posting (Дом) without colon should parse cleanly")
+		require.Len(t, journal.Transactions, 1)
+
+		tx := journal.Transactions[0]
+		require.Len(t, tx.Postings, 2)
+
+		assert.Equal(t, ast.VirtualUnbalanced, tx.Postings[1].Virtual)
+		assert.Equal(t, "Дом", tx.Postings[1].Account.Name)
+	})
+}
+
 func TestParser_VirtualPostingsWithPermissiveNames(t *testing.T) {
 	input := `2024-01-15 transaction with virtual postings
     expenses:food           $50

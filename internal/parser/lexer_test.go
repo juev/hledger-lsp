@@ -2122,6 +2122,26 @@ func TestLexer_CodeWithColon(t *testing.T) {
 		tok := findToken(tokens, TokenLParen)
 		require.NotNil(t, tok, "expected TokenLParen for virtual account on posting line")
 	})
+
+	t.Run("virtual account without colon on posting line emits LParen+Account+RParen", func(t *testing.T) {
+		input := "2024-01-15 test\n    (C)  $50"
+		lexer := NewLexer(input)
+		tokens := collectTokens(lexer)
+
+		want := []Token{
+			{Type: TokenDate, Value: "2024-01-15"},
+			{Type: TokenText, Value: "test"},
+			{Type: TokenNewline, Value: "\n"},
+			{Type: TokenIndent, Value: "    "},
+			{Type: TokenLParen, Value: "("},
+			{Type: TokenAccount, Value: "C"},
+			{Type: TokenRParen, Value: ")"},
+			{Type: TokenCommodity, Value: "$"},
+			{Type: TokenNumber, Value: "50"},
+			{Type: TokenEOF},
+		}
+		assertTokenTypesAndValues(t, want, tokens)
+	})
 }
 
 func TestLexer_PermissiveAccountNames(t *testing.T) {
