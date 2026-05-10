@@ -65,65 +65,14 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 	postingLines := make(map[int]bool)
 
 	if len(journal.Transactions) > 0 {
-		globalAccountCol := 0
-		globalDecimalCol := 0
-		globalAmountEndCol := 0
-		if opts.AlignAmounts {
-			naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, opts.IndentSize)
-			globalAccountCol = naturalAccountCol
-			if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
-				globalAccountCol = opts.MinAlignmentColumn - 1
-			}
-			switch opts.AmountAlignmentMode {
-			case "decimal":
-				if opts.AmountAlignmentColumn > 0 {
-					globalDecimalCol = opts.AmountAlignmentColumn
-				} else {
-					globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol)
-					if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats); detected > globalDecimalCol {
-						globalDecimalCol = detected
-					}
-				}
-			case "left":
-				if opts.AmountAlignmentColumn > 0 {
-					globalAccountCol = opts.AmountAlignmentColumn
-				} else if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
-					globalAccountCol = detected
-				}
-			default:
-				// Smart detection: if the file already has hand-aligned
-				// amounts, use the most common existing start column as the
-				// base. Decimal mode uses decimal-target detection instead.
-				if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
-					globalAccountCol = detected
-				}
-				if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(journal.Transactions) {
-					globalAmountEndCol = opts.AmountAlignmentColumn
-					break
-				}
-				// Right-alignment: when every amount has a right-side
-				// commodity, anchor by end column so the commodity symbol
-				// (USD / EUR / …) aligns at the rightmost column even with
-				// mixed-sign amounts. Mixed commodity positions fall back to
-				// start-column alignment (issue #25). An explicit
-				// MinAlignmentColumn also falls back to start-column —
-				// that setting is a start-column constraint by definition
-				// and takes priority over automatic end-column anchoring.
-				if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
-					if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats); endCol > 0 {
-						naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats)
-						globalAmountEndCol = max(naturalEndCol, endCol)
-					}
-				}
-			}
-		}
+		alignment := ComputeAlignment(journal, commodityFormats, opts)
 
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
 			for j := range tx.Postings {
 				postingLines[tx.Postings[j].Range.Start.Line-1] = true
 			}
-			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, globalAccountCol, globalDecimalCol, globalAmountEndCol, opts)
+			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, opts)
 			edits = append(edits, txEdits...)
 		}
 	}
@@ -132,6 +81,81 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 	edits = append(edits, trimEdits...)
 
 	return edits
+}
+
+// ComputeAlignment derives the alignment columns used to render postings,
+// matching the semantics of FormatDocumentWithOptions. Returns a zero
+// AlignmentInfo when alignment is disabled or the journal has no transactions.
+//
+// Reused by both the formatter and inline completion (ghost text) so the
+// columns ghost text targets always match what Format Document would produce
+// for the same document.
+func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
+	if journal == nil || len(journal.Transactions) == 0 || !opts.AlignAmounts {
+		return AlignmentInfo{}
+	}
+
+	indentSize := opts.IndentSize
+	if indentSize <= 0 {
+		indentSize = defaultIndentSize
+	}
+
+	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, indentSize)
+	globalAccountCol := naturalAccountCol
+	if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
+		globalAccountCol = opts.MinAlignmentColumn - 1
+	}
+	globalDecimalCol := 0
+	globalAmountEndCol := 0
+
+	switch opts.AmountAlignmentMode {
+	case "decimal":
+		if opts.AmountAlignmentColumn > 0 {
+			globalDecimalCol = opts.AmountAlignmentColumn
+		} else {
+			globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol)
+			if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats); detected > globalDecimalCol {
+				globalDecimalCol = detected
+			}
+		}
+	case "left":
+		if opts.AmountAlignmentColumn > 0 {
+			globalAccountCol = opts.AmountAlignmentColumn
+		} else if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+			globalAccountCol = detected
+		}
+	default:
+		// Smart detection: if the file already has hand-aligned
+		// amounts, use the most common existing start column as the
+		// base. Decimal mode uses decimal-target detection instead.
+		if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+			globalAccountCol = detected
+		}
+		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(journal.Transactions) {
+			globalAmountEndCol = opts.AmountAlignmentColumn
+			break
+		}
+		// Right-alignment: when every amount has a right-side
+		// commodity, anchor by end column so the commodity symbol
+		// (USD / EUR / …) aligns at the rightmost column even with
+		// mixed-sign amounts. Mixed commodity positions fall back to
+		// start-column alignment (issue #25). An explicit
+		// MinAlignmentColumn also falls back to start-column —
+		// that setting is a start-column constraint by definition
+		// and takes priority over automatic end-column anchoring.
+		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
+			if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats); endCol > 0 {
+				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats)
+				globalAmountEndCol = max(naturalEndCol, endCol)
+			}
+		}
+	}
+
+	return AlignmentInfo{
+		AccountCol:   globalAccountCol,
+		DecimalCol:   globalDecimalCol,
+		AmountEndCol: globalAmountEndCol,
+	}
 }
 
 func trimTrailingSpacesEdits(content string, mapper *lsputil.PositionMapper, postingLines map[int]bool) []protocol.TextEdit {

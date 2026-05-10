@@ -15,6 +15,100 @@ import (
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
+func TestComputeAlignment(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  12.00 USD
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	commodityFormats := ExtractCommodityFormats(journal.Directives)
+
+	tests := []struct {
+		name     string
+		opts     Options
+		expected AlignmentInfo
+	}{
+		{
+			name:     "alignment disabled returns zero",
+			opts:     Options{IndentSize: 4, AlignAmounts: false},
+			expected: AlignmentInfo{},
+		},
+		{
+			name: "right mode column 0 detects existing end col",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "right", AmountAlignmentColumn: 0},
+			expected: AlignmentInfo{
+				AccountCol:   19, // "    expenses:food  " => 19
+				DecimalCol:   0,
+				AmountEndCol: 28, // 19 + len("12.00 USD") = 28
+			},
+		},
+		{
+			name: "right mode column 80 anchors end at 80",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "right", AmountAlignmentColumn: 80},
+			expected: AlignmentInfo{
+				AccountCol:   19,
+				DecimalCol:   0,
+				AmountEndCol: 80,
+			},
+		},
+		{
+			name: "decimal mode column 0 detects existing decimal col",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentColumn: 0},
+			expected: AlignmentInfo{
+				AccountCol:   19,
+				DecimalCol:   21, // "    expenses:food  12" → '.' at col 21
+				AmountEndCol: 0,
+			},
+		},
+		{
+			name: "decimal mode column 30 uses fixed",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentColumn: 30},
+			expected: AlignmentInfo{
+				AccountCol:   19,
+				DecimalCol:   30,
+				AmountEndCol: 0,
+			},
+		},
+		{
+			name: "left mode column 0 uses natural account col",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "left", AmountAlignmentColumn: 0},
+			expected: AlignmentInfo{
+				AccountCol:   19,
+				DecimalCol:   0,
+				AmountEndCol: 0,
+			},
+		},
+		{
+			name: "left mode column 30 anchors at 30",
+			opts: Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "left", AmountAlignmentColumn: 30},
+			expected: AlignmentInfo{
+				AccountCol:   30,
+				DecimalCol:   0,
+				AmountEndCol: 0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ComputeAlignment(journal, commodityFormats, tt.opts)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+
+	t.Run("nil journal returns zero", func(t *testing.T) {
+		got := ComputeAlignment(nil, nil, Options{IndentSize: 4, AlignAmounts: true})
+		assert.Equal(t, AlignmentInfo{}, got)
+	})
+
+	t.Run("empty journal returns zero", func(t *testing.T) {
+		got := ComputeAlignment(&ast.Journal{}, nil, Options{IndentSize: 4, AlignAmounts: true})
+		assert.Equal(t, AlignmentInfo{}, got)
+	})
+}
+
 func TestCalculateAlignmentColumn(t *testing.T) {
 	tests := []struct {
 		name     string

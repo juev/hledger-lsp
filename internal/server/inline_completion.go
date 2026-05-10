@@ -10,6 +10,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -89,7 +90,16 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
 	}
 
-	insertText := buildInlinePostingsText(postings, settings.Formatting)
+	// Compute alignment columns from the current document so ghost text
+	// targets the same columns that Format Document would produce. Parsing
+	// here is independent of the payee-template path (which is cached and
+	// may not reflect the latest content); for inline completion latency,
+	// this is the same Parse cost as the cache-miss path of getPayeeTemplates.
+	journal, _ := parser.Parse(content)
+	commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
+	alignment := formatter.ComputeAlignment(journal, commodityFormats, formatterOptionsFrom(settings.Formatting))
+
+	insertText := buildInlinePostingsText(postings, settings.Formatting, alignment)
 
 	item := InlineCompletionItem{
 		InsertText: insertText,
@@ -176,7 +186,7 @@ func extractPayeeFromHeader(line string) string {
 	return afterDate
 }
 
-func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting formattingSettings) string {
+func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting formattingSettings, alignment formatter.AlignmentInfo) string {
 	var sb strings.Builder
 	indent := strings.Repeat(" ", formatting.IndentSize)
 
@@ -189,7 +199,7 @@ func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting for
 
 		amountText := renderInlineAmount(p)
 		if amountText != "" {
-			spaces := inlineAmountSpaces(p, amountText, formatting, indent)
+			spaces := inlineAmountSpacesFromAlignment(p, amountText, alignment, formatting, indent)
 			sb.WriteString(strings.Repeat(" ", spaces))
 			sb.WriteString(amountText)
 		}
@@ -215,24 +225,38 @@ func renderInlineAmount(p analyzer.PostingTemplate) string {
 	return sb.String()
 }
 
-func inlineAmountSpaces(p analyzer.PostingTemplate, amountText string, formatting formattingSettings, indent string) int {
-	spaces := 2
-	if !formatting.AlignAmounts || formatting.AmountAlignmentColumn <= 0 {
-		return spaces
+// inlineAmountSpacesFromAlignment returns the gap between the rendered account
+// and the rendered amount such that the amount lands on the same column the
+// formatter would produce for this document. Falls back to 2 spaces when
+// alignment is disabled or no usable column was computed.
+func inlineAmountSpacesFromAlignment(p analyzer.PostingTemplate, amountText string, alignment formatter.AlignmentInfo, formatting formattingSettings, indent string) int {
+	const minSpaces = 2
+	if !formatting.AlignAmounts {
+		return minSpaces
 	}
 
-	currentLen := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
+	accountEnd := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
+
 	switch formatting.AmountAlignmentMode {
 	case "decimal":
-		prefix := inlineDecimalPrefix(amountText)
-		spaces = max(formatting.AmountAlignmentColumn-currentLen-prefix, spaces)
+		if alignment.DecimalCol > 0 {
+			prefix := inlineDecimalPrefix(amountText)
+			return max(alignment.DecimalCol-accountEnd-prefix, minSpaces)
+		}
 	case "left":
-		spaces = max(formatting.AmountAlignmentColumn-currentLen, spaces)
+		// fall through to AccountCol below
 	default:
-		amountLen := utf8.RuneCountInString(amountText)
-		spaces = max(formatting.AmountAlignmentColumn-currentLen-amountLen, spaces)
+		// "right" (default): prefer end-column anchoring when available.
+		if alignment.AmountEndCol > 0 {
+			amountLen := utf8.RuneCountInString(amountText)
+			return max(alignment.AmountEndCol-accountEnd-amountLen, minSpaces)
+		}
 	}
-	return spaces
+
+	if alignment.AccountCol > 0 {
+		return max(alignment.AccountCol-accountEnd, minSpaces)
+	}
+	return minSpaces
 }
 
 func inlineDecimalPrefix(amountText string) int {

@@ -200,6 +200,211 @@ func TestInlineCompletion_AlignedGhostTextLeftMode(t *testing.T) {
 	assert.NotEqual(t, 30, len(lines[0]))
 }
 
+func TestInlineCompletion_AutoDetectColumn_RightMode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 0
+	srv.setSettings(settings)
+
+	// Existing posting "    expenses:food                12.00 USD" ends at
+	// column 42 (4 indent + 13 account + 16 padding + 9 amount). Ghost text
+	// must reproduce the same end-column.
+	content := `2024-01-10 Grocery Store
+    expenses:food                12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, 42, len(lines[0]),
+		"ghost text should follow auto-detected end column 42, got: %q", lines[0])
+	assert.Contains(t, lines[0], "12.00 USD")
+}
+
+func TestInlineCompletion_AutoDetectColumn_DecimalMode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "decimal"
+	settings.Formatting.AmountAlignmentColumn = 0
+	srv.setSettings(settings)
+
+	// Existing posting "    expenses:food                  12.00 USD":
+	// 4 indent + 13 account + 18 padding = 35 (start of "12"). Decimal "."
+	// is two chars later → column 37. Ghost text must align decimal at 37.
+	content := `2024-01-10 Grocery Store
+    expenses:food                  12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.Len(t, lines, 2)
+	dotIdx := strings.Index(lines[0], ".")
+	assert.Equal(t, 37, dotIdx,
+		"decimal point should align to detected column 37, got line: %q (dot at %d)", lines[0], dotIdx)
+}
+
+func TestInlineCompletion_AutoDetectColumn_LeftMode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "left"
+	settings.Formatting.AmountAlignmentColumn = 0
+	srv.setSettings(settings)
+
+	// Existing posting with amount starting at column 30.
+	content := `2024-01-10 Grocery Store
+    expenses:food             12.00 USD
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.Len(t, lines, 2)
+	startIdx := strings.Index(lines[0], "12.00 USD")
+	assert.Equal(t, 30, startIdx,
+		"amount should start at detected column 30, got line: %q (start at %d)", lines[0], startIdx)
+}
+
+func TestInlineCompletion_MixedCommoditiesFallback(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 80
+	srv.setSettings(settings)
+
+	// Mix of commodity-left ($10) and commodity-right (12 USD).
+	// Per formatter.go:112, mixed positions disable end-column anchoring;
+	// ghost text should fall back to start-column alignment, NOT pad to col 80.
+	content := `2024-01-10 Grocery Store
+    expenses:food  12 USD
+    assets:cash    $-10
+
+2024-01-15 Grocery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.GreaterOrEqual(t, len(lines), 1)
+	assert.Less(t, len(lines[0]), 80,
+		"with mixed commodities formatter falls back to start-col; ghost text must not pad to 80, got: %q", lines[0])
+}
+
+func TestInlineCompletion_NonASCIIAccount(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	settings.Formatting.AmountAlignmentMode = "right"
+	settings.Formatting.AmountAlignmentColumn = 40
+	srv.setSettings(settings)
+
+	// Cyrillic account name. utf8.RuneCountInString must be used (CLAUDE.md Unicode rule).
+	content := `2024-01-10 Магазин
+    расходы:еда                 12.00 USD
+    активы:касса
+
+2024-01-15 Магазин
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+
+	lines := strings.Split(result.Items[0].InsertText, "\n")
+	require.GreaterOrEqual(t, len(lines), 1)
+	// Account "расходы:еда" = 11 runes. Amount "12.00 USD" = 9 runes.
+	// At column=40 right mode → end at rune column 40.
+	endRuneCol := utf8RuneCount(lines[0])
+	assert.Equal(t, 40, endRuneCol,
+		"non-ASCII account: ghost text rune length should target end column 40, got: %q (runes=%d)", lines[0], endRuneCol)
+}
+
+func utf8RuneCount(s string) int {
+	count := 0
+	for range s {
+		count++
+	}
+	return count
+}
+
 func TestInlineCompletion_NotOnNonEmptyLine(t *testing.T) {
 	srv := NewServer()
 

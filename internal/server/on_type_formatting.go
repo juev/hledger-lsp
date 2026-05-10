@@ -149,13 +149,7 @@ func (s *Server) formatPreviousPostingLine(doc string, uri protocol.DocumentURI,
 	}
 
 	settings := s.getSettings()
-	opts := formatter.Options{
-		IndentSize:            settings.Formatting.IndentSize,
-		AlignAmounts:          settings.Formatting.AlignAmounts,
-		MinAlignmentColumn:    settings.Formatting.MinAlignmentColumn,
-		AmountAlignmentColumn: settings.Formatting.AmountAlignmentColumn,
-		AmountAlignmentMode:   settings.Formatting.AmountAlignmentMode,
-	}
+	opts := formatterOptionsFrom(settings.Formatting)
 	for _, edit := range formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts) {
 		if int(edit.Range.Start.Line) == line {
 			if edit.NewText == lines[line] {

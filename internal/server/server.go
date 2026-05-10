@@ -550,15 +550,22 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 	}
 
 	settings := s.getSettings()
-	opts := formatter.Options{
-		IndentSize:            settings.Formatting.IndentSize,
-		AlignAmounts:          settings.Formatting.AlignAmounts,
-		MinAlignmentColumn:    settings.Formatting.MinAlignmentColumn,
-		AmountAlignmentColumn: settings.Formatting.AmountAlignmentColumn,
-		AmountAlignmentMode:   settings.Formatting.AmountAlignmentMode,
-	}
+	opts := formatterOptionsFrom(settings.Formatting)
 
 	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
+}
+
+// formatterOptionsFrom builds formatter.Options from the server's formatting
+// settings. Single source of truth for FormatDocument, RangeFormatting,
+// OnTypeFormatting, and InlineCompletion (ghost text alignment).
+func formatterOptionsFrom(f formattingSettings) formatter.Options {
+	return formatter.Options{
+		IndentSize:            f.IndentSize,
+		AlignAmounts:          f.AlignAmounts,
+		MinAlignmentColumn:    f.MinAlignmentColumn,
+		AmountAlignmentColumn: f.AmountAlignmentColumn,
+		AmountAlignmentMode:   f.AmountAlignmentMode,
+	}
 }
 
 func applyChange(content string, r protocol.Range, text string) string {
