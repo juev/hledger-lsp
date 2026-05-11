@@ -286,6 +286,57 @@ func TestFormatNumber(t *testing.T) {
 			},
 			expected: "-1.000,5",
 		},
+		{
+			name: "Pad integer to commodity precision",
+			qty:  decimal.RequireFromString("1"),
+			format: NumberFormat{
+				DecimalMark:   '.',
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			expected: "1.00",
+		},
+		{
+			name: "Trim trailing zeros down to commodity precision",
+			qty:  decimal.RequireFromString("1.010000000"),
+			format: NumberFormat{
+				DecimalMark:   '.',
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			expected: "1.01",
+		},
+		{
+			name: "Preserve significant digits beyond commodity precision",
+			qty:  decimal.RequireFromString("1.010000100"),
+			format: NumberFormat{
+				DecimalMark:   '.',
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			expected: "1.0100001",
+		},
+		{
+			name: "Negative quantity preserves significant digits beyond commodity precision",
+			qty:  decimal.RequireFromString("-0.01234"),
+			format: NumberFormat{
+				DecimalMark:   '.',
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			expected: "-0.01234",
+		},
+		{
+			name: "Thousands separator with extra precision",
+			qty:  decimal.RequireFromString("1234.56789"),
+			format: NumberFormat{
+				DecimalMark:   ',',
+				ThousandsSep:  " ",
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			expected: "1 234,56789",
+		},
 	}
 
 	for _, tt := range tests {

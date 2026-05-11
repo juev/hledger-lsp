@@ -3697,3 +3697,41 @@ func TestFormatDocument_RightAlignment_MixedCommodity(t *testing.T) {
 	signCol := strings.Index(lines[2], "-")
 	assert.Equal(t, dollarCol, signCol, "mixed-commodity falls back to start-column:\n%s", got)
 }
+
+// TestFormatDocument_PreservesSignificantDigitsBeyondCommodityFormat reproduces
+// hledger-vscode issue #151: when a posting amount has more decimal digits than
+// the commodity directive declares, the formatter must preserve those
+// significant digits rather than round them away (which would unbalance the
+// transaction and make `hledger check` reject the journal).
+func TestFormatDocument_PreservesSignificantDigitsBeyondCommodityFormat(t *testing.T) {
+	input := "commodity 1,000.00 BYN\n" +
+		"\n" +
+		"2026-05-01 Buy BTC on exchange\n" +
+		"    assets:exchange:btc   0.00001234 BTC @ 1000.00 BYN\n" +
+		"    assets:exchange:byn                      -0.01234 BYN\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	require.Len(t, journal.Transactions[0].Postings, 2)
+
+	edits := FormatDocument(journal, input)
+	got := applyEdits(input, edits)
+
+	assert.Contains(t, got, "-0.01234 BYN",
+		"BYN posting must preserve all significant digits even though the commodity directive declares 2 decimal places, got:\n%s", got)
+	assert.Contains(t, got, "0.00001234 BTC",
+		"BTC posting has no commodity directive and must preserve raw quantity, got:\n%s", got)
+	assert.NotContains(t, got, "-0.01 BYN",
+		"BYN posting must not be rounded to commodity precision, got:\n%s", got)
+
+	// Idempotency: a second format pass on the output must not change any
+	// amount tokens. We only check that BYN/BTC amounts remain unchanged
+	// (alignment whitespace may legitimately stabilize across passes).
+	journal2, errs2 := parser.Parse(got)
+	require.Empty(t, errs2)
+	edits2 := FormatDocument(journal2, got)
+	got2 := applyEdits(got, edits2)
+	assert.Contains(t, got2, "-0.01234 BYN", "second format pass must keep significant digits, got:\n%s", got2)
+	assert.Contains(t, got2, "0.00001234 BTC", "second format pass must keep raw BTC quantity, got:\n%s", got2)
+}

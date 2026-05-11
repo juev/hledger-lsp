@@ -137,10 +137,28 @@ func extractNumberPart(formatStr string) string {
 func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 	var str string
 	if format.HasDecimal {
-		if format.DecimalPlaces > 0 {
-			str = qty.StringFixed(int32(format.DecimalPlaces))
+		// Pad to format.DecimalPlaces, but preserve any additional
+		// significant digits so quantities like `-0.01234 BYN` are not
+		// silently rounded to `-0.01` when the commodity directive
+		// declares only 2 decimal places (hledger-vscode issue #151).
+		natural := qty.String()
+		naturalPlaces := 0
+		if dot := strings.IndexByte(natural, '.'); dot >= 0 {
+			decPart := strings.TrimRight(natural[dot+1:], "0")
+			naturalPlaces = len(decPart)
+		}
+		places := format.DecimalPlaces
+		if naturalPlaces > places {
+			places = naturalPlaces
+		}
+		if places > 0 {
+			str = qty.StringFixed(int32(places))
 		} else {
-			str = qty.String()
+			str = natural
+			if strings.ContainsRune(str, '.') {
+				str = strings.TrimRight(str, "0")
+				str = strings.TrimSuffix(str, ".")
+			}
 		}
 	} else {
 		str = qty.Round(0).String()
