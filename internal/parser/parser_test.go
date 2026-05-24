@@ -418,6 +418,53 @@ func TestParser_QuotesInDescription(t *testing.T) {
 	assert.Equal(t, `"Mona Lisa" print`, tx.Note)
 }
 
+func TestParser_DescriptionStartingWithSpecialChar(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantDesc string
+		wantNote string
+	}{
+		{
+			name:     "payee starts with dollar",
+			input:    "2026-05-05 $oops\n    expenses:food  $50\n    assets:cash\n",
+			wantDesc: "$oops",
+		},
+		{
+			name:     "payee starts with at",
+			input:    "2026-05-05 @payee | note\n    expenses:food  $50\n    assets:cash\n",
+			wantDesc: "@payee | note",
+			wantNote: "note",
+		},
+		{
+			name:     "note starts with dollar",
+			input:    "2026-05-05 payee | $note\n    expenses:food  $50\n    assets:cash\n",
+			wantDesc: "payee | $note",
+			wantNote: "$note",
+		},
+		{
+			name:     "payee and note start with special chars",
+			input:    "2026-05-05 @payee | $note\n    expenses:food  $50\n    assets:cash\n",
+			wantDesc: "@payee | $note",
+			wantNote: "$note",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			tx := journal.Transactions[0]
+			assert.Equal(t, tt.wantDesc, tx.Description)
+			if tt.wantNote != "" {
+				assert.Equal(t, tt.wantNote, tx.Note)
+			}
+		})
+	}
+}
+
 func TestParser_PayeeWithNumbers(t *testing.T) {
 	input := `2026-01-20 18a Brock Street Cafe
     Expenses:Eating out    £10

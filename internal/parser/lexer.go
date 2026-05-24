@@ -133,12 +133,20 @@ func (l *Lexer) scanInLine() Token {
 	case ch == '}':
 		return l.scanRBrace()
 	case ch == '@':
+		// Header line: @ is part of description
+		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
+			return l.scanText()
+		}
 		return l.scanAt()
 	case ch == '=':
 		return l.scanEquals()
 	case ch == '*' || ch == '!':
 		return l.scanStatus()
 	case l.isCurrencySymbol(r):
+		// Header line: currency symbols are part of description
+		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
+			return l.scanText()
+		}
 		return l.scanCurrencySymbol()
 	case ch == '"':
 		// Header line: quotes are part of description
