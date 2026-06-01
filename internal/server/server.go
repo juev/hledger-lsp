@@ -565,6 +565,7 @@ func formatterOptionsFrom(f formattingSettings) formatter.Options {
 		MinAlignmentColumn:    f.MinAlignmentColumn,
 		AmountAlignmentColumn: f.AmountAlignmentColumn,
 		AmountAlignmentMode:   f.AmountAlignmentMode,
+		AmountAlignmentTarget: f.AmountAlignmentTarget,
 	}
 }
 

@@ -243,7 +243,7 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 				commodityFormats = wf
 			}
 		}
-		decimalCol := formatter.CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, alignCol)
+		decimalCol := formatter.CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, alignCol, settings.Formatting.AmountAlignmentTarget)
 		if decimalCol > 0 {
 			alignCol = decimalCol
 		}

@@ -15,6 +15,13 @@ import (
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
+func mustParse(t *testing.T, content string) *ast.Journal {
+	t.Helper()
+	journal, errs := parser.Parse(content)
+	require.Empty(t, errs)
+	return journal
+}
+
 func TestComputeAlignment(t *testing.T) {
 	input := `2024-01-15 test
     expenses:food  12.00 USD
@@ -107,6 +114,24 @@ func TestComputeAlignment(t *testing.T) {
 		got := ComputeAlignment(&ast.Journal{}, nil, Options{IndentSize: 4, AlignAmounts: true})
 		assert.Equal(t, AlignmentInfo{}, got)
 	})
+}
+
+func TestNormalizeAlignTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty defaults to cost", "", AlignTargetCost},
+		{"explicit cost", "cost", AlignTargetCost},
+		{"posting", "posting", AlignTargetPosting},
+		{"unknown falls back to cost", "bogus", AlignTargetCost},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeAlignTarget(tt.in))
+		})
+	}
 }
 
 func TestCalculateAlignmentColumn(t *testing.T) {
@@ -948,6 +973,70 @@ func TestFormatDocumentWithOptions_MinAlignmentColumn(t *testing.T) {
 
 		assert.Equal(t, pos1, pos2, "amounts should be aligned at auto-calculated column")
 		assert.Greater(t, pos1, 10, "auto-calculated column should be greater than min")
+	})
+}
+
+func TestFormatDocumentWithOptions_AmountAlignmentTarget(t *testing.T) {
+	input := "2000-01-01\n" +
+		"    assets:investments  2.36 EUR @@ 3.12 USD\n" +
+		"    assets:cash  -3.12 USD"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	t.Run("decimal cost target aligns the cost amount (default)", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentTarget: "cost"}
+		got := applyEdits(input, FormatDocumentWithOptions(journal, input, nil, opts))
+		lines := strings.Split(got, "\n")
+		require.Len(t, lines, 3)
+		// Cost decimal of line 1 (last ".") aligns with posting decimal of line 2.
+		assert.Equal(t, strings.LastIndex(lines[1], "."), strings.Index(lines[2], "."),
+			"cost target: cost decimal of line 1 aligns with amount decimal of line 2")
+		// Posting decimals (first ".") are NOT aligned under cost target.
+		assert.NotEqual(t, strings.Index(lines[1], "."), strings.Index(lines[2], "."),
+			"cost target: posting decimals must differ")
+	})
+
+	t.Run("decimal posting target aligns the posting amount", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentTarget: "posting"}
+		got := applyEdits(input, FormatDocumentWithOptions(journal, input, nil, opts))
+		lines := strings.Split(got, "\n")
+		require.Len(t, lines, 3)
+		// Posting decimals (first ".") align; cost annotation trails freely.
+		assert.Equal(t, strings.Index(lines[1], "."), strings.Index(lines[2], "."),
+			"posting target: posting decimals of both lines must align")
+		assert.Contains(t, lines[1], "@@ 3.12 USD", "cost annotation preserved")
+
+		got2 := applyEdits(got, FormatDocumentWithOptions(mustParse(t, got), got, nil, opts))
+		assert.Equal(t, got, got2, "posting target decimal alignment must be idempotent")
+	})
+
+	t.Run("right posting target ends posting amount at column, cost trails", func(t *testing.T) {
+		opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "right", AmountAlignmentColumn: 40, AmountAlignmentTarget: "posting"}
+		got := applyEdits(input, FormatDocumentWithOptions(journal, input, nil, opts))
+		lines := strings.Split(got, "\n")
+		require.Len(t, lines, 3)
+		// Line 2 has no cost: its posting amount ends exactly at the column.
+		assert.Equal(t, 40, len(lines[2]), "posting amount without cost ends at configured column")
+		// Line 1 posting amount ends at 40, cost trails beyond.
+		assert.Equal(t, 40, strings.Index(lines[1], " @@ "), "posting amount ends at column before cost separator")
+		assert.Greater(t, len(lines[1]), 40, "cost annotation trails beyond the column")
+
+		got2 := applyEdits(got, FormatDocumentWithOptions(mustParse(t, got), got, nil, opts))
+		assert.Equal(t, got, got2, "posting target right alignment must be idempotent")
+	})
+
+	t.Run("posting target with lot price anchors on posting amount", func(t *testing.T) {
+		lotInput := "2000-01-02\n" +
+			"    a:b  10 \"XXXX\" {1000.00 GBX} @ 1000.00 GBX\n" +
+			"    a:c  -10000.00 GBX"
+		lotJournal := mustParse(t, lotInput)
+		opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentTarget: "posting"}
+		got := applyEdits(lotInput, FormatDocumentWithOptions(lotJournal, lotInput, nil, opts))
+		assert.Contains(t, got, "{1000.00 GBX} @ 1000.00 GBX", "lot price and cost preserved")
+
+		got2 := applyEdits(got, FormatDocumentWithOptions(mustParse(t, got), got, nil, opts))
+		assert.Equal(t, got, got2, "posting target with lot price must be idempotent")
 	})
 }
 
@@ -3526,7 +3615,7 @@ func TestCalculateGlobalDecimalCol(t *testing.T) {
 	require.Empty(t, errs)
 
 	accountCol := CalculateAlignmentColumn(journal.Transactions[0].Postings)
-	decimalCol := CalculateGlobalDecimalCol(journal.Transactions, nil, accountCol)
+	decimalCol := CalculateGlobalDecimalCol(journal.Transactions, nil, accountCol, AlignTargetCost)
 
 	// DecimalCol should be accountCol + maxPrefix (4 for "1000")
 	assert.Equal(t, accountCol+4, decimalCol, "DecimalCol should account for longest integer part")
@@ -3605,7 +3694,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     food  -12.60 USD`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		col := DetectExistingAmountEndColumn(journal.Transactions, nil)
+		col := DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost)
 		// Amount ends after "USD" at 1-indexed col 21 → 0-indexed 20.
 		assert.Equal(t, 20, col)
 	})
@@ -3616,7 +3705,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     cash   12.00 USD`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		col := DetectExistingAmountEndColumn(journal.Transactions, nil)
+		col := DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost)
 		// Both end at the same user-formatted column — MAX equals that col.
 		assert.Equal(t, 20, col)
 	})
@@ -3626,7 +3715,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     food
     cash`
 		journal, _ := parser.Parse(input)
-		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil))
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost))
 	})
 
 	t.Run("commodity-left amounts are ignored", func(t *testing.T) {
@@ -3635,7 +3724,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     cash  $-10.00`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil))
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost))
 	})
 }
 

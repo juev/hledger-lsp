@@ -254,6 +254,37 @@ func TestParseSettingsFromRaw_Formatting_FlatAmountAlignmentColumn(t *testing.T)
 	}
 }
 
+func TestParseSettingsFromRaw_Formatting_AmountAlignmentTarget(t *testing.T) {
+	t.Run("nested", func(t *testing.T) {
+		result := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"amountAlignmentTarget": "posting",
+			},
+		})
+		if result.Formatting.AmountAlignmentTarget != "posting" {
+			t.Errorf("AmountAlignmentTarget = %q, want \"posting\"", result.Formatting.AmountAlignmentTarget)
+		}
+	})
+
+	t.Run("flat", func(t *testing.T) {
+		result := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+			"formatting.amountAlignmentTarget": "posting",
+		})
+		if result.Formatting.AmountAlignmentTarget != "posting" {
+			t.Errorf("AmountAlignmentTarget = %q, want \"posting\"", result.Formatting.AmountAlignmentTarget)
+		}
+	})
+
+	t.Run("absent leaves empty", func(t *testing.T) {
+		result := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+			"formatting": map[string]interface{}{"indentSize": 4},
+		})
+		if result.Formatting.AmountAlignmentTarget != "" {
+			t.Errorf("AmountAlignmentTarget = %q, want empty", result.Formatting.AmountAlignmentTarget)
+		}
+	})
+}
+
 func TestParseSettingsFromRaw_CLI(t *testing.T) {
 	base := defaultServerSettings()
 

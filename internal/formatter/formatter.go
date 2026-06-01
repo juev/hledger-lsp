@@ -16,6 +16,25 @@ const defaultIndentSize = 4
 const minSpaces = 2
 const minAssertionSpaces = 1
 
+// Amount alignment targets for postings with cost notation (`@`/`@@`).
+// They select which amount anchors alignment:
+//   - AlignTargetCost: the cost (second) amount — hledger 1.x behavior (default).
+//   - AlignTargetPosting: the posting (first) amount — hledger 2.x print behavior;
+//     the lot price and cost annotation then trail freely after it.
+const (
+	AlignTargetCost    = "cost"
+	AlignTargetPosting = "posting"
+)
+
+// normalizeAlignTarget maps a raw option value to a known target, defaulting
+// to AlignTargetCost for empty or unknown input.
+func normalizeAlignTarget(target string) string {
+	if target == AlignTargetPosting {
+		return AlignTargetPosting
+	}
+	return AlignTargetCost
+}
+
 var defaultIndent = strings.Repeat(" ", defaultIndentSize)
 
 type Options struct {
@@ -24,6 +43,10 @@ type Options struct {
 	MinAlignmentColumn    int
 	AmountAlignmentColumn int
 	AmountAlignmentMode   string
+	// AmountAlignmentTarget selects the alignment anchor for cost-notation
+	// postings: "" / "cost" (default) anchor on the cost amount; "posting"
+	// anchors on the posting amount. Normalized via normalizeAlignTarget.
+	AmountAlignmentTarget string
 }
 
 func DefaultOptions() Options {
@@ -100,6 +123,8 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 		indentSize = defaultIndentSize
 	}
 
+	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
+
 	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, indentSize)
 	globalAccountCol := naturalAccountCol
 	if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
@@ -113,8 +138,8 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 		if opts.AmountAlignmentColumn > 0 {
 			globalDecimalCol = opts.AmountAlignmentColumn
 		} else {
-			globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol)
-			if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats); detected > globalDecimalCol {
+			globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol, target)
+			if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
 		}
@@ -144,8 +169,8 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
 		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
-			if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats); endCol > 0 {
-				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats)
+			if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats, target); endCol > 0 {
+				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats, target)
 				globalAmountEndCol = max(naturalEndCol, endCol)
 			}
 		}
@@ -271,9 +296,11 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 		}
 	}
 
+	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
+
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
-		formatted := formatPostingWithOpts(posting, alignment, commodityFormats, indent, opts.AlignAmounts)
+		formatted := formatPostingWithOpts(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target)
 		line := posting.Range.Start.Line - 1
 
 		edit := protocol.TextEdit{
@@ -397,7 +424,7 @@ func DetectExistingAmountColumn(transactions []ast.Transaction) int {
 // fixed column regardless of sign or integer-part width. Commodity-left
 // amounts are ignored — those are aligned by start column via the sibling
 // DetectExistingAmountColumn so the commodity symbol (e.g. $) stays put.
-func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
 	for i := range transactions {
 		for j := range transactions[i].Postings {
@@ -409,14 +436,14 @@ func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityForm
 				continue
 			}
 			startCol := p.Amount.Range.Start.Column - 1
-			endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats)
+			endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats, target)
 			columns = append(columns, endCol)
 		}
 	}
 	return selectModalColumn(columns)
 }
 
-func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
 	for i := range transactions {
 		for j := range transactions[i].Postings {
@@ -425,7 +452,7 @@ func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormat
 				continue
 			}
 			startCol := p.Amount.Range.Start.Column - 1
-			columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats))
+			columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
 		}
 	}
 	return selectModalColumn(columns)
@@ -471,15 +498,16 @@ func CalculateAlignmentWithGlobal(_ []ast.Posting, _ map[string]CommodityFormat,
 
 // CalculateGlobalDecimalCol computes the column where decimal points should align,
 // based on the maximum prefix length (chars before decimal point) across all postings.
-// Only the posting amount's decimal prefix is considered — cost annotations (@ or @@)
-// follow after the posting amount and do not participate in alignment.
-func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, accountCol int) int {
+// The alignment anchor depends on target: with AlignTargetCost the cost amount's
+// decimal prefix is used for cost-notation postings; with AlignTargetPosting only
+// the posting amount's decimal prefix is considered and the cost annotation trails.
+func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, accountCol int, target string) int {
 	maxPrefix := 0
 	for i := range transactions {
 		for j := range transactions[i].Postings {
 			p := &transactions[i].Postings[j]
 			if p.Amount != nil {
-				prefix := calculateAlignmentTargetDecimalPrefix(p, commodityFormats)
+				prefix := calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target)
 				maxPrefix = max(maxPrefix, prefix)
 			}
 		}
@@ -490,12 +518,15 @@ func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats 
 	return 0
 }
 
-func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
+func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	if posting.Amount == nil {
 		return 0
 	}
 
 	length := calculateSingleAmountLen(posting.Amount, commodityFormats)
+	if target == AlignTargetPosting {
+		return length
+	}
 	if posting.Cost != nil {
 		if posting.Cost.IsTotal {
 			length += 4 // " @@ "
@@ -507,11 +538,11 @@ func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[stri
 	return length
 }
 
-func calculateGlobalAlignmentTargetLen(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat) int {
+func calculateGlobalAlignmentTargetLen(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
 	maxLen := 0
 	for i := range transactions {
 		for j := range transactions[i].Postings {
-			maxLen = max(maxLen, calculateAlignmentTargetLen(&transactions[i].Postings[j], commodityFormats))
+			maxLen = max(maxLen, calculateAlignmentTargetLen(&transactions[i].Postings[j], commodityFormats, target))
 		}
 	}
 	return maxLen
@@ -528,13 +559,13 @@ func calculateAmountDecimalPrefix(posting *ast.Posting, commodityFormats map[str
 	return calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats)
 }
 
-func calculateAlignmentTargetDecimalPrefix(posting *ast.Posting, commodityFormats map[string]CommodityFormat) int {
+func calculateAlignmentTargetDecimalPrefix(posting *ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	if posting.Amount == nil {
 		return 0
 	}
 
 	prefix := calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats)
-	if posting.Cost == nil {
+	if target == AlignTargetPosting || posting.Cost == nil {
 		return prefix
 	}
 
@@ -626,14 +657,14 @@ func calculateSingleAmountLen(amount *ast.Amount, commodityFormats map[string]Co
 }
 
 func FormatPostingWithAlignment(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat) string {
-	return formatPostingWithOpts(posting, alignment, commodityFormats, defaultIndent, true)
+	return formatPostingWithOpts(posting, alignment, commodityFormats, defaultIndent, true, AlignTargetCost)
 }
 
 func FormatPosting(posting *ast.Posting, alignCol int) string {
 	return FormatPostingWithAlignment(posting, AlignmentInfo{AccountCol: alignCol}, nil)
 }
 
-func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool) string {
+func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
 	var sb strings.Builder
 
 	sb.WriteString(indent)
@@ -666,11 +697,11 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		switch {
 		case alignAmounts && alignment.DecimalCol > 0:
 			currentLen := utf8.RuneCountInString(sb.String())
-			prefix := calculateAlignmentTargetDecimalPrefix(posting, commodityFormats)
+			prefix := calculateAlignmentTargetDecimalPrefix(posting, commodityFormats, target)
 			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
 		case alignAmounts && alignment.AmountEndCol > 0:
 			currentLen := utf8.RuneCountInString(sb.String())
-			amountLen := calculateAlignmentTargetLen(posting, commodityFormats)
+			amountLen := calculateAlignmentTargetLen(posting, commodityFormats, target)
 			spaces = max(alignment.AmountEndCol-currentLen-amountLen, minSpaces)
 		case alignAmounts && alignment.AccountCol > 0:
 			currentLen := utf8.RuneCountInString(sb.String())

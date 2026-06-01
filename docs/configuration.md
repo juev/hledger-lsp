@@ -46,6 +46,7 @@ Enable or disable specific LSP features.
 | `hledger.formatting.minAlignmentColumn` | `0` | Minimum column floor for amount alignment. `0` = auto from file content (`indent + longest account + 2 spaces`). Set to a positive integer to enforce a minimum column for visual consistency across files. |
 | `hledger.formatting.amountAlignmentColumn` | `0` | Fixed mode-specific alignment target. In `"left"` mode this is the amount start column; in `"right"` mode this is the amount end column; in `"decimal"` mode this is the decimal-point column. `0` disables the fixed target. |
 | `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"left"` (align amount starts), `"right"` (right-align amounts), or `"decimal"` (align on decimal point) |
+| `hledger.formatting.amountAlignmentTarget` | `"cost"` | For postings with cost notation (`@`/`@@`), which amount anchors alignment: `"cost"` (the cost/second amount — hledger 1.x behavior) or `"posting"` (the posting/first amount — hledger 2.x `print` behavior; lot price and cost annotation then trail freely). |
 
 ### Pin amounts to a fixed column (opt-in)
 
@@ -96,6 +97,33 @@ With `"left"`, amount starts align at the configured column:
 }
 ```
 
+### Cost-notation alignment target
+
+A posting with cost notation has two amounts (`2.36 EUR @@ 3.12 USD`). `amountAlignmentTarget` selects which one anchors alignment. With the default `"cost"`, the cost (second) amount is aligned:
+
+```text
+2000-01-01
+    assets:investments  2.36 EUR @@ 3.12 USD
+    assets:cash                    -3.12 USD
+```
+
+With `"posting"`, the posting (first) amount is aligned and the cost annotation trails freely (matches hledger 2.x `print`):
+
+```json
+{
+  "hledger.formatting.amountAlignmentMode": "decimal",
+  "hledger.formatting.amountAlignmentTarget": "posting"
+}
+```
+
+```text
+2000-01-01
+    assets:investments   2.36 EUR @@ 3.12 USD
+    assets:cash         -3.12 USD
+```
+
+`"posting"` keeps the anchor short, so amounts still align even when a long account name would otherwise push the cost-anchored amount against the 2-space minimum.
+
 The same alignment settings are used by document/range formatting, format-on-type for Enter after a posting line, and inline completion ghost text when amount data is available.
 
 ## CLI
@@ -137,6 +165,7 @@ The same alignment settings are used by document/range formatting, format-on-typ
   "hledger.formatting.minAlignmentColumn": 0,
   "hledger.formatting.amountAlignmentColumn": 0,
   "hledger.formatting.amountAlignmentMode": "right",
+  "hledger.formatting.amountAlignmentTarget": "cost",
   "hledger.cli.path": "hledger",
   "hledger.cli.timeout": 30000,
   "hledger.limits.maxFileSizeBytes": 20971520,
@@ -180,6 +209,7 @@ lspconfig.hledger_lsp.setup({
         minAlignmentColumn = 0,
         amountAlignmentColumn = 0,
         amountAlignmentMode = "right",
+        amountAlignmentTarget = "cost",
       },
       cli = {
         enabled = true,
@@ -209,7 +239,8 @@ lspconfig.hledger_lsp.setup({
                    :unbalancedTransactions t)
      :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0
                   :amountAlignmentColumn 0
-                  :amountAlignmentMode "right")
+                  :amountAlignmentMode "right"
+                  :amountAlignmentTarget "cost")
      :cli (:enabled t :path "hledger" :timeout 30000)
      :limits (:maxFileSizeBytes 20971520 :maxIncludeDepth 100))))
 ```

@@ -46,6 +46,7 @@ type formattingSettings struct {
 	MinAlignmentColumn    int
 	AmountAlignmentColumn int
 	AmountAlignmentMode   string
+	AmountAlignmentTarget string
 }
 
 type cliSettings struct {
@@ -340,6 +341,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toString(formattingRaw["amountAlignmentMode"]); ok {
 			settings.Formatting.AmountAlignmentMode = value
 		}
+		if value, ok := toString(formattingRaw["amountAlignmentTarget"]); ok {
+			settings.Formatting.AmountAlignmentTarget = value
+		}
 	}
 	if value, ok := toInt(raw["formatting.indentSize"]); ok {
 		settings.Formatting.IndentSize = value
@@ -355,6 +359,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toString(raw["formatting.amountAlignmentMode"]); ok {
 		settings.Formatting.AmountAlignmentMode = value
+	}
+	if value, ok := toString(raw["formatting.amountAlignmentTarget"]); ok {
+		settings.Formatting.AmountAlignmentTarget = value
 	}
 
 	// CLI
