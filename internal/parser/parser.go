@@ -1432,14 +1432,12 @@ func parseTags(text string, basePos Position) []ast.Tag {
 }
 
 // ExtractTagValue extracts a tag value from raw text after the colon.
-// It trims leading whitespace, truncates at 2+ consecutive spaces
-// (double-space terminates the value), and trims the result.
+// Per hledger, a tag value runs until the next comma or end of line, so
+// internal whitespace (including 2+ consecutive spaces) is part of the
+// value. Comma splitting happens in the callers; here only surrounding
+// whitespace is trimmed.
 func ExtractTagValue(raw string) string {
-	v := strings.TrimLeft(raw, " \t")
-	if idx := strings.Index(v, "  "); idx != -1 {
-		v = v[:idx]
-	}
-	return strings.TrimSpace(v)
+	return strings.TrimSpace(raw)
 }
 
 func isValidTagName(name string) bool {

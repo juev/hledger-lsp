@@ -747,7 +747,9 @@ func TestSemanticTokens_CyrillicTagPositions(t *testing.T) {
 	}
 }
 
-func TestSemanticTokens_TagValueDoubleSpaceTermination(t *testing.T) {
+// Per hledger, a tag value ends only at the next comma or end of line;
+// consecutive internal whitespace stays part of the value (hledger-vscode issue #182).
+func TestSemanticTokens_TagValueWhitespace(t *testing.T) {
 	tests := []struct {
 		name          string
 		content       string
@@ -761,30 +763,28 @@ func TestSemanticTokens_TagValueDoubleSpaceTermination(t *testing.T) {
 			name:    "cyrillic tag with double space before amount",
 			content: ";  Расходы:Транспорт  71,00",
 			// "Расходы:" at col 3, length 8 (7 Cyrillic + colon)
-			// value "Транспорт" at col 11, length 9
-			// "71,00" should NOT be highlighted
+			// value "Транспорт  71" at col 11, length 13 (comma terminates the value)
 			wantPositions: []struct {
 				tokenType uint32
 				col       uint32
 				length    uint32
 			}{
 				{tokenType: TokenTypeTag, col: 3, length: 8},
-				{tokenType: TokenTypeTagValue, col: 11, length: 9},
+				{tokenType: TokenTypeTagValue, col: 11, length: 13},
 			},
 		},
 		{
-			name:    "ascii tag value stops at double space",
+			name:    "ascii tag value keeps double space",
 			content: "; tag:value  extra",
 			// "tag:" at col 2, length 4
-			// value "value" at col 6, length 5
-			// "extra" should NOT be highlighted
+			// value "value  extra" at col 6, length 12
 			wantPositions: []struct {
 				tokenType uint32
 				col       uint32
 				length    uint32
 			}{
 				{tokenType: TokenTypeTag, col: 2, length: 4},
-				{tokenType: TokenTypeTagValue, col: 6, length: 5},
+				{tokenType: TokenTypeTagValue, col: 6, length: 12},
 			},
 		},
 		{

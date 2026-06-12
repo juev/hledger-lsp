@@ -2612,8 +2612,10 @@ func TestExtractTagValue(t *testing.T) {
 	}{
 		{"simple value", "value", "value"},
 		{"value with leading space", " value", "value"},
-		{"value truncated at double space", "value  extra", "value"},
-		{"leading space then double space", " value  extra", "value"},
+		{"double space kept inside value", "value  extra", "value  extra"},
+		{"leading space then double space kept", " value  extra", "value  extra"},
+		{"triple space kept inside value", "This   is another example", "This   is another example"},
+		{"trailing spaces trimmed", "value  extra  ", "value  extra"},
 		{"tab leading", "\tvalue", "value"},
 		{"empty after colon", "", ""},
 		{"only spaces", "   ", ""},
@@ -2628,7 +2630,9 @@ func TestExtractTagValue(t *testing.T) {
 	}
 }
 
-func TestParser_TagValueDoubleSpaceTermination(t *testing.T) {
+// Per hledger, a tag value ends only at the next comma or end of line;
+// consecutive internal whitespace is part of the value (hledger-vscode issue #182).
+func TestParser_TagValueWhitespace(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
@@ -2636,10 +2640,10 @@ func TestParser_TagValueDoubleSpaceTermination(t *testing.T) {
 		wantValue string
 	}{
 		{
-			name:      "tag value stops at double space",
+			name:      "tag value keeps double space",
 			input:     "2024-01-15 test  ; tag:value  extra text\n    expenses:food  $50\n    assets:cash",
 			wantName:  "tag",
-			wantValue: "value",
+			wantValue: "value  extra text",
 		},
 		{
 			name:      "tag value without double space includes all",
@@ -2648,10 +2652,16 @@ func TestParser_TagValueDoubleSpaceTermination(t *testing.T) {
 			wantValue: "value",
 		},
 		{
-			name:      "tag value stops at double space in posting comment",
+			name:      "tag value keeps double space in posting comment",
 			input:     "2024-01-15 test\n    expenses:food  $50  ; category:meals  reimbursable\n    assets:cash",
 			wantName:  "category",
-			wantValue: "meals",
+			wantValue: "meals  reimbursable",
+		},
+		{
+			name:      "tag value still terminates at comma",
+			input:     "2024-01-15 test  ; tag:value  extra, other:x\n    expenses:food  $50\n    assets:cash",
+			wantName:  "tag",
+			wantValue: "value  extra",
 		},
 	}
 
@@ -2674,6 +2684,23 @@ func TestParser_TagValueDoubleSpaceTermination(t *testing.T) {
 			assert.Equal(t, tt.wantValue, tags[0].Value)
 		})
 	}
+
+	// Example from hledger-vscode issue #182, verified against hledger 1.52.1.
+	t.Run("multiple tags with internal whitespace", func(t *testing.T) {
+		input := "2026-06-11 test  ; Double-Space: This  is one example, Triple-Space: This   is another example, No-Space: regular tag\n    expenses:food  $50\n    assets:cash"
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+		require.Len(t, journal.Transactions, 1)
+
+		tags := journal.Transactions[0].Comments[0].Tags
+		require.Len(t, tags, 3)
+		assert.Equal(t, "Double-Space", tags[0].Name)
+		assert.Equal(t, "This  is one example", tags[0].Value)
+		assert.Equal(t, "Triple-Space", tags[1].Name)
+		assert.Equal(t, "This   is another example", tags[1].Value)
+		assert.Equal(t, "No-Space", tags[2].Name)
+		assert.Equal(t, "regular tag", tags[2].Value)
+	})
 }
 
 func TestParser_TransactionCodeWithColon(t *testing.T) {
