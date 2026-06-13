@@ -41,6 +41,7 @@ const (
 	ModifierDeclaration = 0
 	ModifierDefinition  = 1
 	ModifierAbstract    = 5
+	ModifierNegative    = 6 // custom: amounts with a leading minus sign
 )
 
 type SemanticTokensFullOptions struct {
@@ -70,12 +71,13 @@ func GetSemanticTokensLegend() protocol.SemanticTokensLegend {
 			protocol.SemanticTokenParameter,          // 11: rules parameter
 		},
 		TokenModifiers: []protocol.SemanticTokenModifiers{
-			protocol.SemanticTokenModifierDeclaration, // 0
-			protocol.SemanticTokenModifierDefinition,  // 1
-			protocol.SemanticTokenModifierReadonly,    // 2
-			protocol.SemanticTokenModifierStatic,      // 3
-			protocol.SemanticTokenModifierDeprecated,  // 4
-			protocol.SemanticTokenModifierAbstract,    // 5: virtual accounts
+			protocol.SemanticTokenModifierDeclaration,   // 0
+			protocol.SemanticTokenModifierDefinition,    // 1
+			protocol.SemanticTokenModifierReadonly,      // 2
+			protocol.SemanticTokenModifierStatic,        // 3
+			protocol.SemanticTokenModifierDeprecated,    // 4
+			protocol.SemanticTokenModifierAbstract,      // 5: virtual accounts
+			protocol.SemanticTokenModifiers("negative"), // 6: negative amounts
 		},
 	}
 }
@@ -324,6 +326,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 	seenPipe := false
 	isTransactionHeader := false
 	inCommentBlock := false
+	pendingNegative := false
 
 	for {
 		tok := lexer.Next()
@@ -395,6 +398,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 			seenPipe = false
 			isTransactionHeader = false
 			inSubdirective = false
+			pendingNegative = false
 			if tok.Type == parser.TokenDirective {
 				inDirective = true
 				directiveType = tok.Value
@@ -478,6 +482,23 @@ func tokenizeForSemantics(content string) []semanticToken {
 			isPayee = false
 		}
 
+		// A leading minus marks the following amount as negative. Emit the sign
+		// itself as a negative amount so the whole quantity (sign + digits) is
+		// highlighted, and arm the modifier for the upcoming number token.
+		if tok.Type == parser.TokenSign {
+			if strings.Contains(tok.Value, "-") {
+				pendingNegative = true
+				tokens = append(tokens, semanticToken{
+					line:      uint32(tok.Pos.Line - 1),
+					col:       uint32(tok.Pos.Column - 1),
+					length:    uint32(lsputil.UTF16Len(tok.Value)),
+					tokenType: TokenTypeAmount,
+					modifiers: 1 << ModifierNegative,
+				})
+			}
+			continue
+		}
+
 		semType, ok := mapTokenType(tok.Type)
 		if !ok {
 			continue
@@ -501,6 +522,12 @@ func tokenizeForSemantics(content string) []semanticToken {
 		// Handle virtual accounts
 		if tok.Type == parser.TokenAccount && inVirtualContext {
 			modifiers |= 1 << ModifierAbstract
+		}
+
+		// Apply the armed negative modifier to the amount it belongs to.
+		if tok.Type == parser.TokenNumber && pendingNegative {
+			modifiers |= 1 << ModifierNegative
+			pendingNegative = false
 		}
 
 		// Handle transaction header: payee and note

@@ -1119,3 +1119,97 @@ end comment
 	}
 	assert.True(t, foundDate, "date after empty comment block should have normal date type")
 }
+
+func TestSemanticTokens_NegativeAmount(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		wantNegLine uint32 // line where a negative amount token is expected
+		wantNeg     bool
+	}{
+		{
+			name:        "negative amount gets negative modifier",
+			content:     "2024-01-15 test\n    expenses:food  $-50.00\n    assets:cash",
+			wantNegLine: 1,
+			wantNeg:     true,
+		},
+		{
+			name:        "leading-sign negative amount",
+			content:     "2024-01-15 test\n    expenses:food  -50.00 EUR\n    assets:cash",
+			wantNegLine: 1,
+			wantNeg:     true,
+		},
+		{
+			name:        "positive amount has no negative modifier",
+			content:     "2024-01-15 test\n    expenses:food  $50.00\n    assets:cash",
+			wantNegLine: 1,
+			wantNeg:     false,
+		},
+		{
+			name:        "explicit plus sign is not negative",
+			content:     "2024-01-15 test\n    expenses:food  +50.00 EUR\n    assets:cash",
+			wantNegLine: 1,
+			wantNeg:     false,
+		},
+		{
+			name:        "negative cyrillic-commodity amount",
+			content:     "2024-01-15 тест\n    расходы:еда  -50.00 руб\n    активы:касса",
+			wantNegLine: 1,
+			wantNeg:     true,
+		},
+		{
+			name:        "CRLF negative amount",
+			content:     "2024-01-15 test\r\n    expenses:food  -50.00 EUR\r\n    assets:cash",
+			wantNegLine: 1,
+			wantNeg:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens)
+
+			foundNegAmount := false
+			for _, tok := range tokens {
+				if tok.tokenType != TokenTypeAmount {
+					continue
+				}
+				if tok.modifiers&(1<<ModifierNegative) != 0 {
+					foundNegAmount = true
+				}
+			}
+			assert.Equal(t, tt.wantNeg, foundNegAmount,
+				"negative-modifier presence mismatch on line %d", tt.wantNegLine)
+		})
+	}
+}
+
+func TestSemanticTokens_NegativeModifier_PerAmount(t *testing.T) {
+	// Mixed posting with a negative quantity and a positive cost: only the
+	// negative quantity must carry the negative modifier.
+	content := "2024-01-15 test\n    assets:stock  -10 AAPL @ $5.00\n    assets:cash"
+	tokens := tokenizeForSemantics(content)
+	require.NotEmpty(t, tokens)
+
+	var negCount, posCount int
+	for _, tok := range tokens {
+		if tok.tokenType != TokenTypeAmount {
+			continue
+		}
+		if tok.modifiers&(1<<ModifierNegative) != 0 {
+			negCount++
+		} else {
+			posCount++
+		}
+	}
+
+	// The -10 quantity (sign and digits) is negative; the $5.00 cost is positive.
+	assert.GreaterOrEqual(t, negCount, 1, "negative quantity -10 should carry the negative modifier")
+	assert.Equal(t, 1, posCount, "the positive cost 5.00 must not carry the negative modifier")
+}
+
+func TestSemanticTokens_Legend_NegativeModifier(t *testing.T) {
+	legend := GetSemanticTokensLegend()
+	assert.Contains(t, legend.TokenModifiers, protocol.SemanticTokenModifiers("negative"))
+}
