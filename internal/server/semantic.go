@@ -575,9 +575,17 @@ func extractTagTokensFromComment(tok parser.Token) []semanticToken {
 		return nil
 	}
 
-	var tokens []semanticToken
 	baseLine := uint32(tok.Pos.Line - 1)
 	baseCol := uint32(tok.Pos.Column - 1)
+
+	// Tag/value spans are collected as UTF-16 offsets from the ';' marker.
+	// Offset 0 is the ';' itself; the comment text begins at offset 1.
+	type span struct {
+		start     uint32
+		length    uint32
+		tokenType uint32
+	}
+	var spans []span
 
 	parts := strings.Split(commentText, ",")
 	searchStart := 0
@@ -604,13 +612,11 @@ func extractTagTokensFromComment(tok parser.Token) []semanticToken {
 		tagNameWithColonLen := uint32(lsputil.UTF16Len(name) + 1)
 		tagColUTF16 := uint32(lsputil.UTF16Len(commentText[:tagStart]))
 
-		// +1 to baseCol accounts for the semicolon that starts the comment
-		tokens = append(tokens, semanticToken{
-			line:      baseLine,
-			col:       baseCol + 1 + tagColUTF16,
+		// +1 accounts for the semicolon that starts the comment
+		spans = append(spans, span{
+			start:     1 + tagColUTF16,
 			length:    tagNameWithColonLen,
 			tokenType: TokenTypeTag,
-			modifiers: 0,
 		})
 
 		// Tag value (if present)
@@ -622,12 +628,10 @@ func extractTagTokensFromComment(tok parser.Token) []semanticToken {
 				valueStart := strings.Index(commentText[tagNameEnd:], value)
 				if valueStart != -1 {
 					valueColUTF16 := uint32(lsputil.UTF16Len(commentText[:tagNameEnd+valueStart]))
-					tokens = append(tokens, semanticToken{
-						line:      baseLine,
-						col:       baseCol + 1 + valueColUTF16,
+					spans = append(spans, span{
+						start:     1 + valueColUTF16,
 						length:    uint32(lsputil.UTF16Len(value)),
 						tokenType: TokenTypeTagValue,
-						modifiers: 0,
 					})
 					searchStart = tagNameEnd + valueStart + len(value)
 					continue
@@ -639,8 +643,41 @@ func extractTagTokensFromComment(tok parser.Token) []semanticToken {
 	}
 
 	// If no valid tags found, return nil (comment will be handled normally)
-	if len(tokens) == 0 {
+	if len(spans) == 0 {
 		return nil
+	}
+
+	// Fill the gaps between tag spans — including the ';' marker and any prose —
+	// with comment tokens so the whole comment is highlighted and the cursor on
+	// the ';' resolves to a comment token. Tokens are emitted in ascending
+	// column order, as required by the delta encoder.
+	total := 1 + uint32(lsputil.UTF16Len(commentText))
+	tokens := make([]semanticToken, 0, len(spans)*2+1)
+	cursor := uint32(0)
+	for _, sp := range spans {
+		if sp.start > cursor {
+			tokens = append(tokens, semanticToken{
+				line:      baseLine,
+				col:       baseCol + cursor,
+				length:    sp.start - cursor,
+				tokenType: TokenTypeComment,
+			})
+		}
+		tokens = append(tokens, semanticToken{
+			line:      baseLine,
+			col:       baseCol + sp.start,
+			length:    sp.length,
+			tokenType: sp.tokenType,
+		})
+		cursor = sp.start + sp.length
+	}
+	if cursor < total {
+		tokens = append(tokens, semanticToken{
+			line:      baseLine,
+			col:       baseCol + cursor,
+			length:    total - cursor,
+			tokenType: TokenTypeComment,
+		})
 	}
 
 	return tokens

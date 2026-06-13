@@ -1209,6 +1209,76 @@ func TestSemanticTokens_NegativeModifier_PerAmount(t *testing.T) {
 	assert.Equal(t, 1, posCount, "the positive cost 5.00 must not carry the negative modifier")
 }
 
+// findTokenAt returns the token whose span covers the given (line, col), or nil.
+func findTokenAt(tokens []semanticToken, line, col uint32) *semanticToken {
+	for i := range tokens {
+		t := &tokens[i]
+		if t.line == line && col >= t.col && col < t.col+t.length {
+			return t
+		}
+	}
+	return nil
+}
+
+// A comment that carries tags must still highlight the ';' marker (and any
+// surrounding prose) as a comment, so the editor doesn't report "no token" when
+// the cursor sits on the semicolon. Regression for issue #28.
+func TestSemanticTokens_TaggedCommentMarkerIsComment(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		semicolon   uint32 // column of the ';'
+		wantComment []uint32
+	}{
+		{
+			name:        "transaction comment with one tag",
+			content:     "2026-01-08 Transfer Yao GB  ; recipent: John",
+			semicolon:   28,
+			wantComment: []uint32{28, 29}, // ';' and the space before the tag
+		},
+		{
+			name:        "standalone comment with one tag",
+			content:     "; client:acme",
+			semicolon:   0,
+			wantComment: []uint32{0, 1}, // ';' and the leading space
+		},
+		{
+			name:        "trailing prose after comma",
+			content:     "; client:acme, more",
+			semicolon:   0,
+			wantComment: []uint32{0, 1, 13, 15}, // ';', leading space, comma, and trailing prose
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens)
+
+			marker := findTokenAt(tokens, 0, tt.semicolon)
+			require.NotNil(t, marker, "expected a token covering the ';' marker at col %d", tt.semicolon)
+			assert.Equal(t, uint32(TokenTypeComment), marker.tokenType,
+				"the ';' marker must be a comment token")
+
+			for _, col := range tt.wantComment {
+				tok := findTokenAt(tokens, 0, col)
+				require.NotNil(t, tok, "expected a token at col %d", col)
+				assert.Equal(t, uint32(TokenTypeComment), tok.tokenType,
+					"col %d should be a comment token", col)
+			}
+
+			// Tag tokens must still be present and correctly typed.
+			var sawTag bool
+			for _, tok := range tokens {
+				if tok.tokenType == TokenTypeTag {
+					sawTag = true
+				}
+			}
+			assert.True(t, sawTag, "tag token must still be emitted")
+		})
+	}
+}
+
 func TestSemanticTokens_Legend_NegativeModifier(t *testing.T) {
 	legend := GetSemanticTokensLegend()
 	assert.Contains(t, legend.TokenModifiers, protocol.SemanticTokenModifiers("negative"))
