@@ -175,6 +175,56 @@ func TestSemanticTokens_TokenTypes(t *testing.T) {
 	}
 }
 
+func TestSemanticTokens_CodeSpansParentheses(t *testing.T) {
+	// The transaction code token must cover the whole "(CODE)" including the
+	// surrounding parentheses, not just "(COD".
+	tests := []struct {
+		name      string
+		content   string
+		wantCol   uint32
+		wantLen   uint32
+		wantCover string
+	}{
+		{
+			name:      "alpha code with status",
+			content:   "2024-01-15 ! (CODE) Payee",
+			wantCol:   13, // the '('
+			wantLen:   6,  // "(CODE)"
+			wantCover: "(CODE)",
+		},
+		{
+			name:      "numeric code without status",
+			content:   "2024-01-15 (42) Store",
+			wantCol:   11,
+			wantLen:   4, // "(42)"
+			wantCover: "(42)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokens := tokenizeForSemantics(tt.content)
+			require.NotEmpty(t, tokens)
+
+			var code *semanticToken
+			for i := range tokens {
+				if tokens[i].tokenType == TokenTypeCode {
+					code = &tokens[i]
+					break
+				}
+			}
+			require.NotNil(t, code, "expected a code token")
+			assert.Equal(t, tt.wantCol, code.col, "code column")
+			assert.Equal(t, tt.wantLen, code.length, "code length")
+
+			runes := []rune(tt.content)
+			assert.Equal(t, tt.wantCover,
+				string(runes[code.col:code.col+code.length]),
+				"code token must cover the parenthesized code")
+		})
+	}
+}
+
 func TestSemanticTokens_DeclarationModifier(t *testing.T) {
 	tests := []struct {
 		name    string

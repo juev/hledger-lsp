@@ -556,6 +556,9 @@ func tokenizeForSemantics(content string) []semanticToken {
 		if tok.Type == parser.TokenQuotedCommodity {
 			length += 2 // surrounding double quotes
 		}
+		if tok.Type == parser.TokenCode {
+			length += 2 // surrounding parentheses (lexer strips them from the value)
+		}
 
 		tokens = append(tokens, semanticToken{
 			line:      uint32(tok.Pos.Line - 1),

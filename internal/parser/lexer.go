@@ -72,13 +72,15 @@ func (l *Lexer) scanLineStart() Token {
 	}
 
 	if l.peek() == '~' {
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenTilde, "~")
+		return Token{Type: TokenTilde, Value: "~", Pos: startPos, End: l.position()}
 	}
 
 	if l.peek() == '=' {
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenAutoRule, "=")
+		return Token{Type: TokenAutoRule, Value: "=", Pos: startPos, End: l.position()}
 	}
 
 	return l.scanInLine()
@@ -109,25 +111,30 @@ func (l *Lexer) scanInLine() Token {
 	case ch == '(':
 		if l.looksLikeVirtualAccount() {
 			l.virtualCloser = ')'
+			startPos := l.position()
 			l.advance()
-			return l.makeToken(TokenLParen, "(")
+			return Token{Type: TokenLParen, Value: "(", Pos: startPos, End: l.position()}
 		}
 		return l.scanCode()
 	case ch == ')':
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenRParen, ")")
+		return Token{Type: TokenRParen, Value: ")", Pos: startPos, End: l.position()}
 	case ch == '[':
 		if l.onPostingLine {
 			l.virtualCloser = ']'
 		}
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenLBracket, "[")
+		return Token{Type: TokenLBracket, Value: "[", Pos: startPos, End: l.position()}
 	case ch == ']':
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenRBracket, "]")
+		return Token{Type: TokenRBracket, Value: "]", Pos: startPos, End: l.position()}
 	case ch == '|':
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenPipe, "|")
+		return Token{Type: TokenPipe, Value: "|", Pos: startPos, End: l.position()}
 	case ch == '{':
 		return l.scanLBrace()
 	case ch == '}':
@@ -216,8 +223,9 @@ func (l *Lexer) scanInLine() Token {
 		// Header line → Text
 		return l.scanText()
 	case ch == ',' && l.insideBraces > 0:
+		startPos := l.position()
 		l.advance()
-		return l.makeToken(TokenText, ",")
+		return Token{Type: TokenText, Value: ",", Pos: startPos, End: l.position()}
 	default:
 		return l.scanText()
 	}

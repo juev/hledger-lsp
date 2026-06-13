@@ -142,6 +142,64 @@ func TestLexer_DescriptionWithMultiplePipes(t *testing.T) {
 	assertTokenTypesAndValues(t, expected, tokens)
 }
 
+func TestLexer_PipePosition(t *testing.T) {
+	// The pipe token must point at the '|' itself, not the column after it.
+	input := "2024-01-15 Payee | note"
+	lexer := NewLexer(input)
+	tokens := collectTokens(lexer)
+
+	var pipe *Token
+	for i := range tokens {
+		if tokens[i].Type == TokenPipe {
+			pipe = &tokens[i]
+			break
+		}
+	}
+	require.NotNil(t, pipe, "expected a pipe token")
+
+	// '|' is at byte offset 17 → 1-based column 18.
+	assert.Equal(t, '|', rune(input[pipe.Pos.Offset]),
+		"pipe offset must land on the '|' byte")
+	assert.Equal(t, Position{Line: 1, Column: 18, Offset: 17}, pipe.Pos)
+}
+
+func TestLexer_SingleCharTokenPositions(t *testing.T) {
+	// Every single-char token must report a position that lands on its own
+	// character, not the column after it.
+	tests := []struct {
+		name      string
+		input     string
+		tokenType TokenType
+		wantChar  rune
+	}{
+		{"lparen", "2024-01-15 tx\n    (assets:cash)  $10", TokenLParen, '('},
+		{"rparen", "2024-01-15 tx\n    (assets:cash)  $10", TokenRParen, ')'},
+		{"lbracket", "2024-01-15 tx\n    [assets:budget]  $10", TokenLBracket, '['},
+		{"rbracket", "2024-01-15 tx\n    [assets:budget]  $10", TokenRBracket, ']'},
+		{"tilde", "~ monthly\n    expenses:rent  $1000", TokenTilde, '~'},
+		{"autorule", "= expenses:food\n    budget:food  -1", TokenAutoRule, '='},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexer := NewLexer(tt.input)
+			tokens := collectTokens(lexer)
+
+			var tok *Token
+			for i := range tokens {
+				if tokens[i].Type == tt.tokenType {
+					tok = &tokens[i]
+					break
+				}
+			}
+			require.NotNil(t, tok, "expected token %v", tt.tokenType)
+			require.Less(t, tok.Pos.Offset, len(tt.input), "offset in range")
+			assert.Equal(t, tt.wantChar, rune(tt.input[tok.Pos.Offset]),
+				"token offset must land on %q", tt.wantChar)
+		})
+	}
+}
+
 func TestLexer_Comment(t *testing.T) {
 	tests := []struct {
 		name  string
