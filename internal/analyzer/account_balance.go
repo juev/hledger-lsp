@@ -11,34 +11,23 @@ type AccountBalances map[string]map[string]decimal.Decimal
 
 // CalculateAccountBalances computes the balance for each account across all transactions.
 // Returns a map of account name to commodity to balance.
-// Postings with inferred amounts (nil Amount) are skipped.
 func CalculateAccountBalances(journal *ast.Journal) AccountBalances {
-	balances := make(AccountBalances)
-
-	for i := range journal.Transactions {
-		tx := &journal.Transactions[i]
-		for j := range tx.Postings {
-			p := &tx.Postings[j]
-			if p.Amount == nil {
-				continue
-			}
-
-			accountName := p.Account.GetResolvedName()
-			commodity := p.Amount.Commodity.Symbol
-
-			if balances[accountName] == nil {
-				balances[accountName] = make(map[string]decimal.Decimal)
-			}
-
-			balances[accountName][commodity] = balances[accountName][commodity].Add(p.Amount.Quantity)
-		}
-	}
-
-	return balances
+	return CalculateAccountBalancesFromTransactions(journal.Transactions)
 }
 
+// CalculateAccountBalancesFromTransactions computes the balance for each account.
+// A single posting per transaction may omit its amount; that elided amount is
+// inferred to balance the transaction (per the hledger journal format) so the
+// account still reflects the implicit posting.
 func CalculateAccountBalancesFromTransactions(transactions []ast.Transaction) AccountBalances {
 	balances := make(AccountBalances)
+
+	addBalance := func(account, commodity string, quantity decimal.Decimal) {
+		if balances[account] == nil {
+			balances[account] = make(map[string]decimal.Decimal)
+		}
+		balances[account][commodity] = balances[account][commodity].Add(quantity)
+	}
 
 	for i := range transactions {
 		tx := &transactions[i]
@@ -47,17 +36,38 @@ func CalculateAccountBalancesFromTransactions(transactions []ast.Transaction) Ac
 			if p.Amount == nil {
 				continue
 			}
+			addBalance(p.Account.GetResolvedName(), p.Amount.Commodity.Symbol, p.Amount.Quantity)
+		}
 
-			accountName := p.Account.GetResolvedName()
-			commodity := p.Amount.Commodity.Symbol
-
-			if balances[accountName] == nil {
-				balances[accountName] = make(map[string]decimal.Decimal)
+		if account, inferred, ok := inferElidedAmounts(tx); ok {
+			for commodity, quantity := range inferred {
+				addBalance(account, commodity, quantity)
 			}
-
-			balances[accountName][commodity] = balances[accountName][commodity].Add(p.Amount.Quantity)
 		}
 	}
 
 	return balances
+}
+
+// inferElidedAmounts returns the account and per-commodity amounts inferred for
+// the single real posting that omits its amount, balancing the transaction.
+// It reuses the same posting-classification rules as the balance check, so what
+// is verified and what is inferred stay consistent. ok is false unless exactly
+// one real posting has an elided amount.
+func inferElidedAmounts(tx *ast.Transaction) (account string, amounts map[string]decimal.Decimal, ok bool) {
+	realPostings := filterRealPostings(tx.Postings)
+	inferredCount, inferredIdx := countInferredPostings(realPostings)
+	if inferredCount != 1 {
+		return "", nil, false
+	}
+
+	amounts = make(map[string]decimal.Decimal)
+	for commodity, sum := range sumByCommodity(realPostings) {
+		if sum.IsZero() {
+			continue
+		}
+		amounts[commodity] = sum.Neg()
+	}
+
+	return realPostings[inferredIdx].Account.GetResolvedName(), amounts, true
 }
