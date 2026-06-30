@@ -387,3 +387,50 @@ func applyTextEdits(content string, edits []protocol.TextEdit) string {
 
 	return content
 }
+
+// TestIntegration_QuotedCommodityDiagnostics_Issue199 pins the end-to-end
+// behavior reported in hledger-vscode issue #199: through the full server
+// pipeline (DidOpen -> normalize -> analyze -> publish), a declared quoted
+// commodity with a dot ("TEST.A") produces no diagnostic, while an undeclared
+// quoted commodity with a space ("TEST B") is reported. It also guards the
+// diagnostic identity (source "hledger-lsp", code "UNDECLARED_COMMODITY"),
+// which distinguishes our LSP from the hledger CLI's own check output.
+func TestIntegration_QuotedCommodityDiagnostics_Issue199(t *testing.T) {
+	ts := newTestServer()
+	uri := protocol.DocumentURI("file:///issue199.journal")
+
+	content := `account monies
+account assets:broker:TEST.A
+account assets:broker:TEST.B
+
+commodity $
+commodity "TEST.A"
+; commodity "TEST B"
+
+2026-01-01 Broker | Test
+    assets:broker:TEST.A    +  0.000250 "TEST.A" @@ +$104.24
+    monies                  -$104.24
+
+2026-01-01 Broker | Test
+    assets:broker:TEST.B    +  0.000250 "TEST B" @@ +$104.24
+    monies                  -$104.24`
+
+	diagnostics, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+
+	var testBDiag *protocol.Diagnostic
+	for i, d := range diagnostics {
+		assert.NotContains(t, d.Message, "TEST.A",
+			"declared quoted commodity TEST.A must not be flagged")
+		if strings.Contains(d.Message, "TEST B") {
+			testBDiag = &diagnostics[i]
+		}
+	}
+
+	require.NotNil(t, testBDiag, "undeclared quoted commodity TEST B must be reported")
+	assert.Equal(t, "commodity 'TEST B' has no directive", testBDiag.Message)
+	assert.Equal(t, "hledger-lsp", testBDiag.Source,
+		"diagnostic must originate from the LSP, not the hledger CLI")
+	code, _ := testBDiag.Code.(string)
+	assert.Equal(t, "UNDECLARED_COMMODITY", code)
+}

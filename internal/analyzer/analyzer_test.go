@@ -1029,3 +1029,129 @@ func TestAnalyzer_UndeclaredCommodity_BalanceAssertionLotPrice(t *testing.T) {
 	}
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY for $ in balance assertion lot price")
 }
+
+// collectUndeclaredCommodityMessages returns the messages of all
+// UNDECLARED_COMMODITY diagnostics, for quoted-commodity regression checks.
+func collectUndeclaredCommodityMessages(diags []Diagnostic) []string {
+	var msgs []string
+	for _, d := range diags {
+		if d.Code == "UNDECLARED_COMMODITY" {
+			msgs = append(msgs, d.Message)
+		}
+	}
+	return msgs
+}
+
+// TestAnalyzer_UndeclaredCommodity_QuotedSymbols locks in correct handling of
+// commodity symbols that must be double-quoted because they contain a dot or a
+// space (hledger-vscode issue #199). A declared quoted symbol must match its
+// quoted usage (no false positive), and a quoted symbol that is never declared
+// must still be reported (no false negative). Verified against hledger 1.52.1.
+func TestAnalyzer_UndeclaredCommodity_QuotedSymbols(t *testing.T) {
+	t.Run("declared quoted symbol with dot is not flagged when used quoted", func(t *testing.T) {
+		input := `commodity "TEST.A"
+
+2026-01-01 x
+    a    1 "TEST.A"
+    b   -1 "TEST.A"`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		result := New().Analyze(journal)
+		assert.NotContains(t, collectUndeclaredCommodityMessages(result.Diagnostics),
+			"commodity 'TEST.A' has no directive",
+			"declared quoted commodity must match quoted usage")
+	})
+
+	t.Run("undeclared quoted symbol with space is flagged", func(t *testing.T) {
+		input := `commodity $
+
+2026-01-01 x
+    a    1 "TEST B" @@ $10
+    b   -$10`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		result := New().Analyze(journal)
+		assert.Contains(t, collectUndeclaredCommodityMessages(result.Diagnostics),
+			"commodity 'TEST B' has no directive",
+			"undeclared quoted commodity must be reported")
+	})
+
+	t.Run("issue 199 journal: TEST.A clean, TEST B flagged", func(t *testing.T) {
+		input := `account monies
+account assets:broker:TEST.A
+account assets:broker:TEST.B
+
+commodity $
+commodity "TEST.A"
+; commodity "TEST B"
+
+2026-01-01 Broker | Test
+    assets:broker:TEST.A    +  0.000250 "TEST.A" @@ +$104.24
+    monies                  -$104.24
+
+2026-01-01 Broker | Test
+    assets:broker:TEST.B    +  0.000250 "TEST B" @@ +$104.24
+    monies                  -$104.24`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		msgs := collectUndeclaredCommodityMessages(New().Analyze(journal).Diagnostics)
+		assert.NotContains(t, msgs, "commodity 'TEST.A' has no directive",
+			"declared TEST.A must not be flagged")
+		assert.Contains(t, msgs, "commodity 'TEST B' has no directive",
+			"undeclared TEST B must be flagged")
+	})
+
+	t.Run("quoted symbol declared with inline format is not flagged", func(t *testing.T) {
+		input := `commodity 1000.00 "TEST.A"
+
+2026-01-01 x
+    a    1 "TEST.A"
+    b   -1 "TEST.A"`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		result := New().Analyze(journal)
+		assert.NotContains(t, collectUndeclaredCommodityMessages(result.Diagnostics),
+			"commodity 'TEST.A' has no directive",
+			"quoted commodity declared with a format string must match usage")
+	})
+
+	t.Run("quoting is irrelevant: declared quoted matches unquoted usage", func(t *testing.T) {
+		input := `commodity "USD"
+
+2026-01-01 x
+    a    1 USD
+    b   -1 USD`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		result := New().Analyze(journal)
+		assert.NotContains(t, collectUndeclaredCommodityMessages(result.Diagnostics),
+			"commodity 'USD' has no directive",
+			"declared quoted USD must match unquoted usage")
+	})
+
+	t.Run("quoting is irrelevant: declared unquoted matches quoted usage", func(t *testing.T) {
+		input := `commodity USD
+
+2026-01-01 x
+    a    1 "USD"
+    b   -1 "USD"`
+
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+
+		result := New().Analyze(journal)
+		assert.NotContains(t, collectUndeclaredCommodityMessages(result.Diagnostics),
+			"commodity 'USD' has no directive",
+			"declared unquoted USD must match quoted usage")
+	})
+}
