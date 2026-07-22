@@ -52,6 +52,19 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+signs:
+  - cmd: minisign
+    args:
+      - -S
+      - -s
+      - /tmp/minisign.key
+      - -m
+      - ${artifact}
+      - -x
+      - ${signature}
+    signature: ${artifact}.minisig
+    artifacts: all
+
 changelog:
   sort: asc
   filters:

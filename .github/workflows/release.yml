@@ -20,6 +20,14 @@ jobs:
         with:
           go-version: "1.24"
 
+      - name: Install minisign
+        run: sudo apt-get update && sudo apt-get install -y minisign
+
+      - name: Write signing key
+        run: |
+          echo "${{ secrets.MINISIGN_PRIVATE_KEY }}" | base64 -d > /tmp/minisign.key
+          chmod 600 /tmp/minisign.key
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
