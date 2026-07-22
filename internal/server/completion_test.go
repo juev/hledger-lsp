@@ -4084,3 +4084,160 @@ func TestCompletion_TagName_Unicode_CalculateRange(t *testing.T) {
 	assert.Equal(t, uint32(22), r.Start.Character, "Unicode: start after '; '")
 	assert.Equal(t, uint32(25), r.End.Character, "Unicode: end at cursor")
 }
+
+func TestCompletion_PayeeAwareAccountRanking(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Grocery Store
+    expenses:food  $50
+    assets:cash
+
+2024-01-02 Gas Station
+    expenses:fuel  $40
+    assets:cash
+
+2024-01-03 Grocery Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-04 Grocery Store
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 13, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var foodItem, fuelItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "expenses:food" {
+			foodItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "expenses:fuel" {
+			fuelItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, foodItem, "expenses:food should be in completion items")
+	require.NotNil(t, fuelItem, "expenses:fuel should be in completion items")
+
+	assert.True(t, foodItem.SortText < fuelItem.SortText,
+		"Payee-associated account expenses:food (SortText=%s) should rank before expenses:fuel (SortText=%s)",
+		foodItem.SortText, fuelItem.SortText)
+}
+
+func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Grocery Store
+    expenses:food  $50
+    assets:cash
+
+2024-01-02 Grocery Store
+    expenses:food  $30
+    assets:cash
+
+2024-01-03 Gas Station
+    expenses:fuel  $40
+    assets:cash
+
+2024-01-04 Unknown Place
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 13, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var foodItem, fuelItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "expenses:food" {
+			foodItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "expenses:fuel" {
+			fuelItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, foodItem, "expenses:food should be in completion items")
+	require.NotNil(t, fuelItem, "expenses:fuel should be in completion items")
+
+	assert.True(t, foodItem.SortText < fuelItem.SortText,
+		"Unknown payee: globally frequent expenses:food (SortText=%s) should rank before expenses:fuel (SortText=%s)",
+		foodItem.SortText, fuelItem.SortText)
+}
+
+func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-01 Grocery Store
+    expenses:food  $50
+    assets:cash
+
+2024-03-01 Grocery Store
+    expenses:food  $30
+    assets:bank
+
+2024-02-01 Grocery Store
+    expenses:food  $20
+    assets:cash
+
+2024-04-01 Grocery Store
+    expenses:food  $10
+    assets:bank
+
+2024-05-01 Grocery Store
+    `
+
+	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 17, Character: 4},
+		},
+	}
+
+	result, err := srv.Completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	var cashItem, bankItem *protocol.CompletionItem
+	for i := range result.Items {
+		if result.Items[i].Label == "assets:cash" {
+			cashItem = &result.Items[i]
+		}
+		if result.Items[i].Label == "assets:bank" {
+			bankItem = &result.Items[i]
+		}
+	}
+
+	require.NotNil(t, cashItem, "assets:cash should be in completion items")
+	require.NotNil(t, bankItem, "assets:bank should be in completion items")
+
+	// Both have payee pair usage count 2 for "Grocery Store".
+	// assets:cash last used 2024-02-01, assets:bank last used 2024-04-01.
+	// Recency tiebreaker: bank is more recent.
+	assert.True(t, bankItem.SortText < cashItem.SortText,
+		"More recently used assets:bank (SortText=%s) should rank before assets:cash (SortText=%s)",
+		bankItem.SortText, cashItem.SortText)
+}

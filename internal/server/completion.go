@@ -85,6 +85,15 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	settings := s.getSettings()
 	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
 	counts := getCountsForContext(completionCtx, result, settings.Completion)
+
+	var recency map[string]string
+	if completionCtx == ContextAccount {
+		if payee := extractPayeeForCompletion(doc, cursorLine); payee != "" {
+			counts = payeeBoostedCounts(result, payee, counts)
+			recency = payeeRecency(result, payee)
+		}
+	}
+
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts, settings.Completion)
 	attachResolveData(items, completionCtx, params.TextDocument.URI)
 
@@ -104,7 +113,7 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 
 	query := extractQueryText(doc, params.Position, completionCtx)
 	scored := filterAndScoreFuzzyMatch(items, query, settings.Completion.FuzzyMatching)
-	items = rankCompletionItemsByScore(scored, counts, query)
+	items = rankCompletionItemsByScore(scored, counts, query, recency)
 
 	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
 		items = items[:settings.Completion.MaxResults]
@@ -134,7 +143,7 @@ func getCountsForContext(ctxType CompletionContextType, result *analyzer.Analysi
 	}
 }
 
-func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, query string) []protocol.CompletionItem {
+func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, query string, recency map[string]string) []protocol.CompletionItem {
 	sort.Slice(scored, func(i, j int) bool {
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
@@ -145,7 +154,13 @@ func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, quer
 			countI = counts[scored[i].item.Label]
 			countJ = counts[scored[j].item.Label]
 		}
-		return countI > countJ
+		if countI != countJ {
+			return countI > countJ
+		}
+		if recency != nil {
+			return recency[scored[i].item.Label] > recency[scored[j].item.Label]
+		}
+		return false
 	})
 
 	items := make([]protocol.CompletionItem, len(scored))
@@ -155,6 +170,51 @@ func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, quer
 		items[i].FilterText = query
 	}
 	return items
+}
+
+const payeeBoostMultiplier = 100
+
+func extractPayeeForCompletion(doc string, cursorLine int) string {
+	lines := strings.Split(doc, "\n")
+	for i := cursorLine; i >= 0; i-- {
+		line := lines[i]
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			continue
+		}
+		if isTransactionHeaderLine(line) {
+			return extractPayeeFromHeader(line)
+		}
+		return ""
+	}
+	return ""
+}
+
+func payeeBoostedCounts(result *analyzer.AnalysisResult, payee string, globalCounts map[string]int) map[string]int {
+	boosted := make(map[string]int, len(globalCounts))
+	for k, v := range globalCounts {
+		boosted[k] = v
+	}
+	prefix := payee + "::"
+	for key, count := range result.PayeeAccountPairUsage {
+		if account, ok := strings.CutPrefix(key, prefix); ok {
+			boosted[account] += count * payeeBoostMultiplier
+		}
+	}
+	return boosted
+}
+
+func payeeRecency(result *analyzer.AnalysisResult, payee string) map[string]string {
+	recency := make(map[string]string)
+	prefix := payee + "::"
+	for key, date := range result.PayeeAccountLastUsed {
+		if account, ok := strings.CutPrefix(key, prefix); ok {
+			recency[account] = date
+		}
+	}
+	return recency
 }
 
 func determineCompletionContext(content string, pos protocol.Position, ctx *protocol.CompletionContext) CompletionContextType {

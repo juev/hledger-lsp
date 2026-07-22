@@ -858,3 +858,102 @@ func TestInlineCompletion_DeterministicWithMultiplePatterns(t *testing.T) {
 		"Should select pattern from last transaction when counts are equal")
 	assert.Contains(t, firstResult, "assets:wallet")
 }
+
+func TestInlineCompletion_FuzzyPayeeMatch(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 Grcery Store
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1, "fuzzy match should find template for misspelled payee")
+
+	assert.Contains(t, result.Items[0].InsertText, "expenses:food")
+	assert.Contains(t, result.Items[0].InsertText, "assets:cash")
+}
+
+func TestInlineCompletion_FuzzyPayeeMatch_NoMatchForUnrelated(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 xyz
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Empty(t, result.Items, "should not match unrelated short payee")
+}
+
+func TestInlineCompletion_FuzzyPayeeMatch_Unicode(t *testing.T) {
+	srv := NewServer()
+
+	settings := srv.getSettings()
+	settings.Features.InlineCompletion = true
+	srv.setSettings(settings)
+
+	content := `2024-01-10 Пятёрочка
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-15 Пятёрочка
+`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	params := InlineCompletionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+		Position:     protocol.Position{Line: 5, Character: 0},
+		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
+	}
+
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Items, 1, "exact unicode payee match should work")
+
+	assert.Contains(t, result.Items[0].InsertText, "expenses:food")
+}
