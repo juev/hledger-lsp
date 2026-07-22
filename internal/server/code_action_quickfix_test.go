@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -529,8 +530,11 @@ skip 1`,
 
 			actions, err := codeActionsForDiagnostics(ts, tt.uri, diagnostics)
 			require.NoError(t, err)
-			_, err = findQuickFixAction(actions)
-			assert.Error(t, err)
+			// These transactions must not offer an UNBALANCED amount quickfix.
+			// Declare-commodity quickfixes may appear (e.g. for an undeclared
+			// `$`), which is legitimate and unrelated to the amount fix.
+			_, err = findQuickFixByDiagnosticCode(actions, "UNBALANCED")
+			assert.Error(t, err, "no UNBALANCED amount quickfix should be offered")
 		})
 	}
 }
@@ -578,6 +582,23 @@ func requireQuickFixAction(t *testing.T, actions []protocol.CodeAction) protocol
 func findQuickFixAction(actions []protocol.CodeAction) (protocol.CodeAction, error) {
 	for _, action := range actions {
 		if action.Kind == protocol.QuickFix {
+			return action, nil
+		}
+	}
+	return protocol.CodeAction{}, assert.AnError
+}
+
+// findQuickFixByDiagnosticCode finds a quickfix whose first attached diagnostic
+// matches the given code, or an error if none.
+func findQuickFixByDiagnosticCode(actions []protocol.CodeAction, code string) (protocol.CodeAction, error) {
+	for _, action := range actions {
+		if action.Kind != protocol.QuickFix {
+			continue
+		}
+		if len(action.Diagnostics) == 0 {
+			continue
+		}
+		if fmt.Sprint(action.Diagnostics[0].Code) == code {
 			return action, nil
 		}
 	}

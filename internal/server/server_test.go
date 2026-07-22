@@ -208,6 +208,7 @@ func TestServer_Initialize(t *testing.T) {
 	assert.NotNil(t, caps.CodeActionProvider)
 	assert.NotNil(t, caps.ExecuteCommandProvider)
 	assert.Contains(t, caps.ExecuteCommandProvider.Commands, "hledger.run")
+	assert.NotContains(t, caps.ExecuteCommandProvider.Commands, "hledger.fixUnbalanced")
 
 	require.NotNil(t, result.ServerInfo)
 	assert.Equal(t, "hledger-lsp", result.ServerInfo.Name)
@@ -1201,6 +1202,20 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
 				assert.Nil(t, caps.CodeActionProvider)
 				assert.Nil(t, caps.ExecuteCommandProvider)
+			},
+		},
+		{
+			name: "code lens command without code actions",
+			initOptions: map[string]interface{}{
+				"features": map[string]interface{}{
+					"codeActions": false,
+					"codeLens":    true,
+				},
+			},
+			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
+				assert.NotNil(t, caps.CodeLensProvider)
+				require.NotNil(t, caps.ExecuteCommandProvider)
+				assert.Equal(t, []string{"hledger.fixUnbalanced"}, caps.ExecuteCommandProvider.Commands)
 			},
 		},
 	}

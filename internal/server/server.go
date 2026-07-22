@@ -177,13 +177,20 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 				"source.hledger",
 			},
 		}
-		caps.ExecuteCommandProvider = &protocol.ExecuteCommandOptions{
-			Commands: []string{"hledger.run"},
-		}
 	}
 
 	if settings.Features.CodeLens {
 		caps.CodeLensProvider = &protocol.CodeLensOptions{}
+	}
+	commands := make([]string, 0, 2)
+	if settings.Features.CodeActions {
+		commands = append(commands, "hledger.run")
+	}
+	if settings.Features.CodeLens {
+		commands = append(commands, "hledger.fixUnbalanced")
+	}
+	if len(commands) > 0 {
+		caps.ExecuteCommandProvider = &protocol.ExecuteCommandOptions{Commands: commands}
 	}
 	if settings.Features.InlineCompletion {
 		caps.Experimental = map[string]any{
