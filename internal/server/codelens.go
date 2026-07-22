@@ -36,10 +36,18 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 		result := analyzer.CheckBalance(tx, decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance))
 
 		title := buildCodeLensTitle(result, len(tx.Postings))
-		lenses = append(lenses, protocol.CodeLens{
+		lens := protocol.CodeLens{
 			Range:   *astRangeToProtocol(tx.Date.Range),
 			Command: &protocol.Command{Title: title},
-		})
+		}
+		if !result.Balanced {
+			// Carry the document URI and the transaction range so
+			// ExecuteCommand can re-resolve the exact transaction and apply the
+			// balance quickfix via workspace/applyEdit.
+			lens.Command.Command = "hledger.fixUnbalanced"
+			lens.Command.Arguments = []any{string(params.TextDocument.URI), *astRangeToProtocol(tx.Range)}
+		}
+		lenses = append(lenses, lens)
 	}
 
 	return lenses, nil

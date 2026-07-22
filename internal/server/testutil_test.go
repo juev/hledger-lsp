@@ -14,12 +14,28 @@ type integrationMockClient struct {
 	mu            sync.Mutex
 	diagnostics   []protocol.PublishDiagnosticsParams
 	diagnosticsCh chan struct{}
+
+	applyMu   sync.Mutex
+	lastApply *protocol.ApplyWorkspaceEditParams
 }
 
 func newIntegrationMockClient() *integrationMockClient {
 	return &integrationMockClient{
 		diagnosticsCh: make(chan struct{}, 100),
 	}
+}
+
+func (m *integrationMockClient) ApplyEdit(_ context.Context, params *protocol.ApplyWorkspaceEditParams) (bool, error) {
+	m.applyMu.Lock()
+	m.lastApply = params
+	m.applyMu.Unlock()
+	return true, nil
+}
+
+func (m *integrationMockClient) lastApplyEdit() *protocol.ApplyWorkspaceEditParams {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+	return m.lastApply
 }
 
 func (m *integrationMockClient) Progress(_ context.Context, _ *protocol.ProgressParams) error {
@@ -64,10 +80,6 @@ func (m *integrationMockClient) RegisterCapability(_ context.Context, _ *protoco
 
 func (m *integrationMockClient) UnregisterCapability(_ context.Context, _ *protocol.UnregistrationParams) error {
 	return nil
-}
-
-func (m *integrationMockClient) ApplyEdit(_ context.Context, _ *protocol.ApplyWorkspaceEditParams) (bool, error) {
-	return false, nil
 }
 
 func (m *integrationMockClient) Configuration(_ context.Context, _ *protocol.ConfigurationParams) ([]interface{}, error) {

@@ -11,6 +11,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/cli"
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 // fakeCLIClient is a cliRunner that records the file path it was asked to run
@@ -249,4 +250,37 @@ func TestExecuteCommand_FallbackWithoutURI(t *testing.T) {
 	_, err := s.ExecuteCommand(context.Background(), params)
 	require.NoError(t, err)
 	assert.Equal(t, uriToPath(uriA), fake.lastFile)
+}
+
+func TestExecuteCommand_FixUnbalancedAcceptsJSONRange(t *testing.T) {
+	ts := newTestServer()
+	ts.cliClient = nil
+
+	uri := protocol.DocumentURI("file:///test.journal")
+	content := `2024-01-15 grocery
+    expenses:food  $50
+    assets:cash  $-40`
+
+	_, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+	journal, _ := parser.Parse(content)
+	txRange := astRangeToProtocol(journal.Transactions[0].Range)
+
+	_, err = ts.ExecuteCommand(context.Background(), &protocol.ExecuteCommandParams{
+		Command: "hledger.fixUnbalanced",
+		Arguments: []any{
+			string(uri),
+			map[string]any{
+				"start": map[string]any{"line": float64(txRange.Start.Line), "character": float64(txRange.Start.Character)},
+				"end":   map[string]any{"line": float64(txRange.End.Line), "character": float64(txRange.End.Character)},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	applied := ts.client.lastApplyEdit()
+	require.NotNil(t, applied)
+	edits := applied.Edit.Changes[uri]
+	require.Len(t, edits, 1)
+	assert.Contains(t, edits[0].NewText, "$-50")
 }

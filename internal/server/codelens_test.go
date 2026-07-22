@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func TestCodeLens_BalancedTransaction(t *testing.T) {
@@ -30,6 +32,7 @@ func TestCodeLens_BalancedTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Contains(t, result[0].Command.Title, "balanced")
+	assert.Empty(t, result[0].Command.Command)
 }
 
 func TestCodeLens_UnbalancedTransaction(t *testing.T) {
@@ -53,6 +56,12 @@ func TestCodeLens_UnbalancedTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Contains(t, result[0].Command.Title, "unbalanced")
+	assert.Equal(t, "hledger.fixUnbalanced", result[0].Command.Command)
+	journal, _ := parser.Parse(content)
+	require.Equal(t, []any{
+		string(uri),
+		*astRangeToProtocol(journal.Transactions[0].Range),
+	}, result[0].Command.Arguments)
 }
 
 func TestCodeLens_EmptyDocument(t *testing.T) {
