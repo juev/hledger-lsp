@@ -1155,3 +1155,114 @@ commodity "TEST.A"
 			"declared unquoted USD must match quoted usage")
 	})
 }
+
+func TestAnalyzeResolved_DeterministicOrder(t *testing.T) {
+	file1 := `account expenses:food
+account assets:cash
+commodity USD
+commodity EUR
+
+2024-01-10 Grocery Store
+    expenses:food  $50.00
+    assets:cash
+
+2024-01-11 Coffee Shop ;tag: coffee
+    expenses:food  $5.00
+    assets:cash
+`
+	file2 := `account expenses:rent
+account assets:bank
+commodity GBP
+
+2024-02-01 Landlord
+    expenses:rent  $1000.00
+    assets:bank
+
+2024-02-02 Grocery Store ;tag: groceries
+    expenses:food  $75.00
+    assets:bank
+`
+	file3 := `account expenses:utilities
+account liabilities:credit
+commodity JPY
+
+2024-03-01 Electric Company
+    expenses:utilities  $120.00
+    liabilities:credit
+
+2024-03-02 Coffee Shop
+    expenses:food  $6.00
+    liabilities:credit
+`
+	j1, errs1 := parser.Parse(file1)
+	require.Empty(t, errs1)
+	j2, errs2 := parser.Parse(file2)
+	require.Empty(t, errs2)
+	j3, errs3 := parser.Parse(file3)
+	require.Empty(t, errs3)
+
+	legacyResolved := &include.ResolvedJournal{
+		Primary: j1,
+		Files: map[string]*ast.Journal{
+			"/f2.journal": j2,
+			"/f3.journal": j3,
+		},
+		FileOrder: []string{"/f2.journal", "/f3.journal"},
+	}
+
+	occResolved := &include.ResolvedJournal{
+		Occurrences: []include.JournalOccurrence{
+			{ID: 1, Path: "/f1.journal", Journal: j1},
+			{ID: 2, Path: "/f2.journal", Journal: j2},
+			{ID: 3, Path: "/f3.journal", Journal: j3},
+		},
+		Primary:   j1,
+		Files:     map[string]*ast.Journal{"/f2.journal": j2, "/f3.journal": j3},
+		FileOrder: []string{"/f2.journal", "/f3.journal"},
+	}
+	// Build Items so AllTransactions uses the occurrence path.
+	for _, occ := range occResolved.Occurrences {
+		for i := range occ.Journal.Transactions {
+			occResolved.Items = append(occResolved.Items, include.ResolvedItem{
+				OccurrenceID: occ.ID,
+				Kind:         include.ResolvedItemTransaction,
+				Index:        i,
+			})
+		}
+	}
+
+	a := New()
+
+	for name, resolved := range map[string]*include.ResolvedJournal{
+		"legacy":     legacyResolved,
+		"occurrence": occResolved,
+	} {
+		t.Run(name, func(t *testing.T) {
+			first := a.AnalyzeResolved(resolved)
+			require.NotEmpty(t, first.Payees)
+			require.NotEmpty(t, first.Commodities)
+			require.NotEmpty(t, first.Tags)
+			require.NotEmpty(t, first.Dates)
+			require.NotEmpty(t, first.Accounts.All)
+
+			for i := 1; i < 20; i++ {
+				got := a.AnalyzeResolved(resolved)
+				assert.Equal(t, first.Payees, got.Payees, "iter %d: Payees", i)
+				assert.Equal(t, first.Descriptions, got.Descriptions, "iter %d: Descriptions", i)
+				assert.Equal(t, first.Commodities, got.Commodities, "iter %d: Commodities", i)
+				assert.Equal(t, first.Tags, got.Tags, "iter %d: Tags", i)
+				assert.Equal(t, first.Dates, got.Dates, "iter %d: Dates", i)
+				assert.Equal(t, first.Accounts.All, got.Accounts.All, "iter %d: Accounts.All", i)
+				assert.Equal(t, first.TagValues, got.TagValues, "iter %d: TagValues", i)
+				assert.Equal(t, first.PayeeTemplates, got.PayeeTemplates, "iter %d: PayeeTemplates", i)
+				assert.Equal(t, first.PayeeAccounts, got.PayeeAccounts, "iter %d: PayeeAccounts", i)
+
+				require.Len(t, got.Diagnostics, len(first.Diagnostics), "iter %d: Diagnostics len", i)
+				for d := range first.Diagnostics {
+					assert.Equal(t, first.Diagnostics[d].Message, got.Diagnostics[d].Message, "iter %d: Diagnostics[%d].Message", i, d)
+					assert.Equal(t, first.Diagnostics[d].Code, got.Diagnostics[d].Code, "iter %d: Diagnostics[%d].Code", i, d)
+				}
+			}
+		})
+	}
+}

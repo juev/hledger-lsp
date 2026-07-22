@@ -1269,3 +1269,28 @@ func TestWorkspace_GetResolvedForFile_RepeatedInclude(t *testing.T) {
 	allTx := resolved.AllTransactions()
 	assert.Len(t, allTx, 3, "child tx counted twice + root tx once")
 }
+
+func TestWorkspace_AllTrees(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	// Two independent root journals → two trees.
+	bPath := filepath.Join(tmpDir, "b.journal")
+	require.NoError(t, os.WriteFile(bPath, []byte("account assets:b\n"), 0644))
+
+	aPath := filepath.Join(tmpDir, "a.journal")
+	require.NoError(t, os.WriteFile(aPath, []byte("account assets:a\n"), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	trees := ws.AllTrees()
+	require.Len(t, trees, 2)
+	assert.Equal(t, aPath, trees[0].RootPath, "sorted lexicographically")
+	assert.Equal(t, bPath, trees[1].RootPath)
+	for _, tree := range trees {
+		assert.NotNil(t, tree.Resolved)
+	}
+}
