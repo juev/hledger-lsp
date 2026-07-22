@@ -325,6 +325,10 @@ func collectDeclaredFieldsResolved(resolved *ResolvedRules, fallback *RulesFile)
 	if resolved == nil {
 		return collectDeclaredFields(fallback)
 	}
+	// Prefer occurrence-based expansion when available.
+	if len(resolved.Occurrences) > 0 && resolved.Primary != nil {
+		return collectDeclaredFieldsExpanded(resolved, fallback)
+	}
 	seen := make(map[string]bool)
 	var out []string
 	appendFieldsFrom(resolved.Primary, seen, &out)
@@ -332,6 +336,18 @@ func collectDeclaredFieldsResolved(resolved *ResolvedRules, fallback *RulesFile)
 		appendFieldsFrom(resolved.Files[path], seen, &out)
 	}
 	return out
+}
+
+// collectDeclaredFieldsExpanded returns declared fields from the expanded
+// primary RulesFile, which after textual expansion contains all directives
+// in textual order. This is the preferred path when occurrences are present.
+func collectDeclaredFieldsExpanded(resolved *ResolvedRules, fallback *RulesFile) []string {
+	if resolved == nil {
+		return collectDeclaredFields(fallback)
+	}
+	// After textual expansion, Primary contains everything. The expanded
+	// parse result has all fields directives in their textual-expansion order.
+	return collectDeclaredFields(resolved.Primary)
 }
 
 // appendFieldsFrom adds every non-empty field name declared in rf to out,

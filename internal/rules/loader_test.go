@@ -116,10 +116,16 @@ func TestRulesLoader_SelfInclude(t *testing.T) {
 	writeRulesFile(t, selfFile, "include self.rules\nfields date,amount\n")
 
 	loader := NewLoader()
-	_, errs := loader.Load(selfFile)
+	result, errs := loader.Load(selfFile)
 
-	if !hasErrorKind(errs, ErrorCycleDetected) {
-		t.Errorf("expected ErrorCycleDetected, got: %v", errs)
+	// Self-include is silently ignored (hledger 1.52.1 parity).
+	for _, e := range errs {
+		if e.Kind == ErrorCycleDetected {
+			t.Errorf("self-include should be silently ignored, got ErrorCycleDetected")
+		}
+	}
+	if result == nil || result.Primary == nil {
+		t.Fatal("primary must be parsed despite self-include")
 	}
 }
 
@@ -168,12 +174,17 @@ func TestRulesLoader_IncludeNotRulesFile(t *testing.T) {
 	loader := NewLoader()
 	result, errs := loader.Load(mainFile)
 
-	if !hasErrorKind(errs, ErrorNotRules) {
-		t.Errorf("expected ErrorNotRules, got: %v", errs)
+	// Suffix-free include: non-.rules files are accepted and expanded.
+	// The content "2024-01-01 * test\n" is not valid rules syntax, so it
+	// may produce parse diagnostics, but not ErrorNotRules.
+	for _, e := range errs {
+		if e.Kind == ErrorNotRules {
+			t.Errorf("suffix-free include should not produce ErrorNotRules, got: %v", errs)
+		}
 	}
-	// Non-rules file must not be added to Files map.
-	if _, ok := result.Files[wrongFile]; ok {
-		t.Errorf("non-rules file should not appear in result.Files")
+	// The included file should be loaded (occurrence exists).
+	if len(result.Occurrences) < 2 {
+		t.Errorf("expected at least 2 occurrences (root + child), got %d", len(result.Occurrences))
 	}
 }
 
