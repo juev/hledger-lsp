@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,16 @@ import (
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
+
+// displayColumnOf returns the display (terminal cell) column at which substr
+// first appears in line, counting full-width CJK characters as two cells. It is
+// the width-aware counterpart of strings.Index used to assert visual alignment.
+func displayColumnOf(t *testing.T, line, substr string) int {
+	t.Helper()
+	idx := strings.Index(line, substr)
+	require.GreaterOrEqual(t, idx, 0, "line %q must contain %q", line, substr)
+	return runewidth.StringWidth(line[:idx])
+}
 
 func mustParse(t *testing.T, content string) *ast.Journal {
 	t.Helper()
@@ -3603,6 +3614,141 @@ func TestFormatDocument_DecimalAlignment_CJK(t *testing.T) {
 	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
 	result2 := applyEdits(result, edits2)
 	assert.Equal(t, result, result2, "decimal alignment (CJK) must be idempotent")
+}
+
+// The CJK alignment tests below mix full-width (CJK) and ASCII account names of
+// differing widths. That mix is what exposes the bug: counting runes instead of
+// display cells aligns ASCII postings but drifts CJK ones out of the visual
+// column. Each test asserts positions in display cells (via displayColumnOf /
+// runewidth.StringWidth), not bytes or runes.
+
+func TestFormatDocument_CJKAlignment_NaturalColumn(t *testing.T) {
+	input := "2024-01-15 test\n" +
+		"    费用:食物  $50.00\n" +
+		"    assets:cash  $-50.00"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t,
+		displayColumnOf(t, lines[1], "$50.00"),
+		displayColumnOf(t, lines[2], "$-50.00"),
+		"CJK and ASCII amounts must align to one visual column:\n%s", result)
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "natural CJK alignment must be idempotent")
+}
+
+func TestFormatDocument_CJKAlignment_LeftMode(t *testing.T) {
+	input := "2024-01-15 test\n" +
+		"    费用:食物  $50.00\n" +
+		"    assets:cash  $-50.00"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "left", AmountAlignmentColumn: 30}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, 30, displayColumnOf(t, lines[1], "$50.00"),
+		"CJK amount must start at the configured display column:\n%s", result)
+	assert.Equal(t, 30, displayColumnOf(t, lines[2], "$-50.00"),
+		"ASCII amount must start at the configured display column:\n%s", result)
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "left CJK alignment must be idempotent")
+}
+
+func TestFormatDocument_CJKAlignment_RightMode(t *testing.T) {
+	input := "2024-01-15 test\n" +
+		"    费用:食物  50.00 USD\n" +
+		"    assets:cash  1200.00 USD"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "right", AmountAlignmentColumn: 40}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, 40, runewidth.StringWidth(lines[1]),
+		"CJK amount must end at the configured display column:\n%s", result)
+	assert.Equal(t, 40, runewidth.StringWidth(lines[2]),
+		"ASCII amount must end at the configured display column:\n%s", result)
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "right CJK alignment must be idempotent")
+}
+
+func TestFormatDocument_CJKAlignment_DecimalMode(t *testing.T) {
+	input := "2024-01-15 test\n" +
+		"    费用:食物  $1000.00\n" +
+		"    assets:cash  $5.76"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "decimal", AmountAlignmentColumn: 40}
+	edits := FormatDocumentWithOptions(journal, input, nil, opts)
+	result := applyEdits(input, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, 40, displayColumnOf(t, lines[1], "."),
+		"CJK decimal point must be at the configured display column:\n%s", result)
+	assert.Equal(t, 40, displayColumnOf(t, lines[2], "."),
+		"ASCII decimal point must be at the configured display column:\n%s", result)
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "decimal CJK alignment must be idempotent")
+}
+
+func TestFormatDocument_CJKAlignment_CRLF(t *testing.T) {
+	input := "2024-01-15 test\r\n    费用:食物  $50.00\r\n    assets:cash  $-50.00"
+	normalized := strings.ReplaceAll(input, "\r\n", "\n")
+
+	journal, errs := parser.Parse(normalized)
+	require.Empty(t, errs)
+
+	opts := Options{IndentSize: 4, AlignAmounts: true, AmountAlignmentMode: "left", AmountAlignmentColumn: 30}
+	edits := FormatDocumentWithOptions(journal, normalized, nil, opts)
+	result := applyEdits(normalized, edits)
+
+	lines := strings.Split(result, "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, 30, displayColumnOf(t, lines[1], "$50.00"),
+		"CJK amount must start at the configured display column (CRLF):\n%s", result)
+	assert.Equal(t, 30, displayColumnOf(t, lines[2], "$-50.00"),
+		"ASCII amount must start at the configured display column (CRLF):\n%s", result)
+
+	journal2, errs := parser.Parse(result)
+	require.Empty(t, errs)
+	edits2 := FormatDocumentWithOptions(journal2, result, nil, opts)
+	result2 := applyEdits(result, edits2)
+	assert.Equal(t, result, result2, "CRLF CJK alignment must be idempotent")
 }
 
 func TestCalculateGlobalDecimalCol(t *testing.T) {

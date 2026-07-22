@@ -91,7 +91,13 @@ This ensures continuity between sessions and clear visibility of what's done and
 
 ### Unicode
 
-Account names, descriptions and comments may contain CJK, Cyrillic, emoji and other multi-byte characters. Use `utf8.RuneCountInString` (not `len`) for display-width calculations, and `lsputil.UTF16Len` for LSP column offsets. Every new feature that touches text must include tests with non-ASCII (CJK, Cyrillic) input.
+Account names, descriptions and comments may contain CJK, Cyrillic, emoji and other multi-byte characters. Three different metrics apply — do not conflate them:
+
+- **Display width** (terminal cells, for visual column alignment): use the runewidth-based `displayWidth` helper in `internal/formatter` (East Asian Width via `go-runewidth`). A full-width CJK character occupies 2 cells. `utf8.RuneCountInString` is wrong here — it counts a CJK character as 1 and drifts amounts out of visual alignment.
+- **Rune count / positional arithmetic**: use `utf8.RuneCountInString` (not `len`, which counts bytes).
+- **LSP column offsets**: use `lsputil.UTF16Len`.
+
+Every new feature that touches text must include tests with non-ASCII (CJK, Cyrillic) input.
 
 ### Line Endings (LF / CRLF)
 
