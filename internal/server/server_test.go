@@ -132,6 +132,7 @@ func TestServer_Initialized_NonBlocking(t *testing.T) {
 
 func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -613,6 +614,7 @@ func TestIsFullChange(t *testing.T) {
 
 func TestServer_PublishDiagnostics_ParseError(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -639,6 +641,7 @@ func TestServer_PublishDiagnostics_ParseError(t *testing.T) {
 
 func TestServer_PublishDiagnostics_ParseError_RangeSpansToken(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -681,6 +684,7 @@ func TestServer_PublishDiagnostics_ParseError_RangeSpansToken(t *testing.T) {
 
 func TestServer_PublishDiagnostics_BalanceError(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -717,6 +721,7 @@ func TestServer_PublishDiagnostics_BalanceError(t *testing.T) {
 
 func TestServer_PublishDiagnostics_NoErrors(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -787,6 +792,7 @@ func TestServer_GetDocument_NotFound(t *testing.T) {
 
 func TestServer_GetResolved_Found(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -875,6 +881,7 @@ include transactions.journal`
 	require.NoError(t, err)
 
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -1034,6 +1041,7 @@ func TestUriToPath(t *testing.T) {
 
 func TestServer_DidOpen_NonFileURI(t *testing.T) {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -1081,6 +1089,7 @@ include 2025.journal`
 	require.NoError(t, err)
 
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := &mockClient{}
 	srv.SetClient(client)
 
@@ -1213,6 +1222,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
 	t.Run("undeclared accounts disabled", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
+		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()
@@ -1246,6 +1256,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
 	t.Run("undeclared commodities disabled", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
+		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()
@@ -1279,6 +1290,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
 	t.Run("unbalanced transactions disabled", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
+		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()
@@ -1314,6 +1326,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
 	t.Run("imbalance within user tolerance is not reported", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
+		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()
@@ -1346,6 +1359,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
 	t.Run("imbalance exceeding user tolerance is reported", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
+		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()

@@ -104,6 +104,7 @@ type testServer struct {
 
 func newTestServer() *testServer {
 	srv := NewServer()
+	srv.diagDebounce = 0
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 	return &testServer{

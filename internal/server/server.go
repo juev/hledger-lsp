@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -28,6 +29,12 @@ type cliRunner interface {
 	Run(ctx context.Context, file string, args ...string) (string, error)
 }
 
+// diagEntry tracks the pending debounced diagnostics computation for one URI.
+type diagEntry struct {
+	timer  *time.Timer
+	cancel context.CancelFunc
+}
+
 type Server struct {
 	client                protocol.Client
 	documents             sync.Map
@@ -43,13 +50,19 @@ type Server struct {
 	supportsConfiguration bool
 	payeeTemplatesCache   sync.Map // map[protocol.DocumentURI]map[string][]analyzer.PostingTemplate
 	alignmentCache        sync.Map // map[protocol.DocumentURI]int
+
+	diagDebounce time.Duration
+	diagMu       sync.Mutex
+	diagEntries  map[protocol.DocumentURI]*diagEntry
 }
 
 func NewServer() *Server {
 	srv := &Server{
-		analyzer:    analyzer.New(),
-		loader:      include.NewLoader(),
-		rulesLoader: rules.NewLoader(),
+		analyzer:     analyzer.New(),
+		loader:       include.NewLoader(),
+		rulesLoader:  rules.NewLoader(),
+		diagDebounce: 100 * time.Millisecond,
+		diagEntries:  make(map[protocol.DocumentURI]*diagEntry),
 	}
 	// Honour unsaved editor content for .rules files that are pulled in via
 	// transitive `include` from a currently-open rules file. The loader first
@@ -237,7 +250,7 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	content := normalizeLineEndings(params.TextDocument.Text)
 	s.documents.Store(params.TextDocument.URI, content)
 	s.alignmentCache.Delete(params.TextDocument.URI)
-	go s.publishDiagnostics(ctx, params.TextDocument.URI, content)
+	s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version))
 	return nil
 }
 
@@ -268,7 +281,7 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 		if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
 			s.rulesLoader.InvalidateFile(path)
 		}
-		go s.publishDiagnostics(ctx, params.TextDocument.URI, content)
+		s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version))
 	}
 	return nil
 }
@@ -292,6 +305,7 @@ func (s *Server) clearAlignmentCache() {
 }
 
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
+	s.cancelDiagnostics(params.TextDocument.URI)
 	s.documents.Delete(params.TextDocument.URI)
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	tokenCache.delete(params.TextDocument.URI)
@@ -318,7 +332,43 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	return nil
 }
 
-func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.DocumentURI, content string) {
+// scheduleDiagnostics debounces diagnostics computation for the given URI.
+// A trailing timer coalesces rapid edits; the previous in-flight computation
+// is cancelled so a stale result never overwrites newer diagnostics.
+func (s *Server) scheduleDiagnostics(docURI protocol.DocumentURI, content string, version uint32) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+
+	if entry, ok := s.diagEntries[docURI]; ok {
+		entry.cancel()
+		entry.timer.Stop()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.diagEntries[docURI] = &diagEntry{
+		cancel: cancel,
+		timer: time.AfterFunc(s.diagDebounce, func() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			s.publishDiagnostics(ctx, docURI, content, version)
+		}),
+	}
+}
+
+func (s *Server) cancelDiagnostics(docURI protocol.DocumentURI) {
+	s.diagMu.Lock()
+	defer s.diagMu.Unlock()
+	if entry, ok := s.diagEntries[docURI]; ok {
+		entry.cancel()
+		entry.timer.Stop()
+		delete(s.diagEntries, docURI)
+	}
+}
+
+func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.DocumentURI, content string, version uint32) {
 	if s.client == nil {
 		return
 	}
@@ -327,6 +377,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	if !settings.Features.Diagnostics {
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
+			Version:     version,
 			Diagnostics: []protocol.Diagnostic{},
 		})
 		return
@@ -335,6 +386,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	if filetype.IsRules(string(docURI)) {
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
+			Version:     version,
 			Diagnostics: s.analyzeRules(content),
 		})
 		return
@@ -348,6 +400,10 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	s.resolved.Store(docURI, resolved)
 
 	diagnostics := s.analyze(path, content)
+
+	if ctx.Err() != nil {
+		return
+	}
 
 	for _, err := range loadErrors {
 		if err.Kind == include.ErrorParseError {
@@ -367,6 +423,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 
 	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 		URI:         docURI,
+		Version:     version,
 		Diagnostics: diagnostics,
 	})
 }
@@ -521,7 +578,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 	for docURI := range affected {
 		if content, ok := s.GetDocument(docURI); ok {
-			s.publishDiagnostics(ctx, docURI, content)
+			s.publishDiagnostics(ctx, docURI, content, 0)
 		}
 	}
 
