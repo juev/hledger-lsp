@@ -4029,3 +4029,13 @@ func TestParser_BalanceAssertionUnclosedLotPrice(t *testing.T) {
 	require.NotNil(t, ba.LotPrice.Cost)
 	assert.True(t, ba.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(150)))
 }
+
+func TestParser_ParseAmount_NoDuplicateDiagnostic(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $
+    assets:cash`
+
+	_, errs := Parse(input)
+	require.Len(t, errs, 1, "expected exactly one error for missing number after commodity, got: %v", errs)
+	assert.Contains(t, errs[0].Message, "expected number")
+}

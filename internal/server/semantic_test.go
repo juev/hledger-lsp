@@ -292,42 +292,10 @@ func TestSemanticTokens_Range(t *testing.T) {
 		"range result should have fewer tokens than full result")
 }
 
-func TestSemanticTokens_Delta(t *testing.T) {
-	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
-
-	content1 := `2024-01-01 test
-    expenses:food  $10`
-	srv.documents.Store(uri, content1)
-
-	fullParams := &protocol.SemanticTokensParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-	}
-	fullResult, err := srv.SemanticTokensFull(context.Background(), fullParams)
-	require.NoError(t, err)
-	require.NotEmpty(t, fullResult.ResultID)
-
-	content2 := `2024-01-01 test
-    expenses:food  $20`
-	srv.documents.Store(uri, content2)
-
-	deltaParams := &protocol.SemanticTokensDeltaParams{
-		TextDocument:     protocol.TextDocumentIdentifier{URI: uri},
-		PreviousResultID: fullResult.ResultID,
-	}
-
-	deltaResult, err := srv.SemanticTokensFullDelta(context.Background(), deltaParams)
-	require.NoError(t, err)
-	require.NotNil(t, deltaResult)
-
-	switch result := deltaResult.(type) {
-	case *protocol.SemanticTokens:
-		assert.NotEmpty(t, result.Data)
-	case *protocol.SemanticTokensDelta:
-		assert.NotNil(t, result.Edits)
-	default:
-		t.Fatalf("unexpected result type: %T", deltaResult)
-	}
+func TestSemanticTokens_DeltaNotAdvertised(t *testing.T) {
+	caps := GetSemanticTokensCapabilities()
+	require.NotNil(t, caps.Full)
+	assert.False(t, caps.Full.Delta, "delta should not be advertised")
 }
 
 func TestSemanticTokens_CommentLength(t *testing.T) {

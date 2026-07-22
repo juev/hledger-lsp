@@ -312,7 +312,7 @@ func TestIntegration_DocumentSymbols(t *testing.T) {
 	}
 	symbols, err := ts.DocumentSymbol(context.Background(), params)
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(symbols), 3)
+	require.GreaterOrEqual(t, len(symbols), 2, "month group + account directive")
 }
 
 func TestIntegration_SemanticTokens(t *testing.T) {

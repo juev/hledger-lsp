@@ -1294,3 +1294,25 @@ func TestWorkspace_AllTrees(t *testing.T) {
 		assert.NotNil(t, tree.Resolved)
 	}
 }
+
+func TestBuildFileIndexFromContent_NormalizesCRLF(t *testing.T) {
+	lf := "2024-01-15 test\n    expenses:food  $50\n    assets:cash\n"
+	crlf := "2024-01-15 test\r\n    expenses:food  $50\r\n    assets:cash\r\n"
+
+	idxLF, journalLF, errsLF := BuildFileIndexFromContent("test.journal", lf)
+	idxCRLF, journalCRLF, errsCRLF := BuildFileIndexFromContent("test.journal", crlf)
+
+	assert.Equal(t, errsLF, errsCRLF)
+	require.NotNil(t, journalLF)
+	require.NotNil(t, journalCRLF)
+	assert.Len(t, journalCRLF.Transactions, len(journalLF.Transactions))
+	assert.Equal(t, idxLF.Includes, idxCRLF.Includes)
+}
+
+func TestRemoveString_DoesNotMutateOriginal(t *testing.T) {
+	original := []string{"a", "b", "c"}
+	result := removeString(original, "b")
+
+	assert.Equal(t, []string{"a", "c"}, result)
+	assert.Equal(t, []string{"a", "b", "c"}, original, "original slice must not be mutated")
+}

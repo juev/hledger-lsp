@@ -633,6 +633,7 @@ func (p *Parser) parseAmount() *ast.Amount {
 
 	if p.current.Type != TokenNumber {
 		p.error("expected number")
+		p.skipToNextLine()
 		return nil
 	}
 

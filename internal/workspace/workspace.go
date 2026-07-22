@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -462,7 +463,7 @@ func removeString(values []string, target string) []string {
 	if len(values) == 0 {
 		return values
 	}
-	result := values[:0]
+	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if value != target {
 			result = append(result, value)
@@ -521,7 +522,7 @@ func (w *Workspace) GetCommodityFormatsForFile(path string) map[string]formatter
 	}
 	if tree.cachedFormats != nil {
 		defer w.mu.RUnlock()
-		return tree.cachedFormats
+		return maps.Clone(tree.cachedFormats)
 	}
 	w.mu.RUnlock()
 
@@ -533,14 +534,14 @@ func (w *Workspace) GetCommodityFormatsForFile(path string) map[string]formatter
 		return nil
 	}
 	if tree.cachedFormats != nil {
-		return tree.cachedFormats
+		return maps.Clone(tree.cachedFormats)
 	}
 	if tree.Resolved == nil {
 		return nil
 	}
 
 	tree.cachedFormats = formatter.ExtractCommodityFormats(tree.Resolved.FormatDirectives())
-	return tree.cachedFormats
+	return maps.Clone(tree.cachedFormats)
 }
 
 // GetCommodityFormats returns commodity formats for the first tree (backward compatibility).

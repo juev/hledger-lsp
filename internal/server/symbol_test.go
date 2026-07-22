@@ -58,17 +58,21 @@ func TestDocumentSymbol_Transactions(t *testing.T) {
 
 	result, err := srv.DocumentSymbol(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result, 2)
+	require.Len(t, result, 1, "transactions grouped by month")
 
 	symbols := toDocumentSymbols(t, result)
 
-	assert.Equal(t, "2024-01-15 grocery store", symbols[0].Name)
-	assert.Equal(t, protocol.SymbolKindFunction, symbols[0].Kind)
-	assert.Equal(t, uint32(0), symbols[0].Range.Start.Line)
+	assert.Equal(t, "2024-01", symbols[0].Name)
+	assert.Equal(t, protocol.SymbolKindNamespace, symbols[0].Kind)
+	require.Len(t, symbols[0].Children, 2)
 
-	assert.Equal(t, "2024-01-16 restaurant", symbols[1].Name)
-	assert.Equal(t, protocol.SymbolKindFunction, symbols[1].Kind)
-	assert.Equal(t, uint32(4), symbols[1].Range.Start.Line)
+	assert.Equal(t, "2024-01-15 grocery store", symbols[0].Children[0].Name)
+	assert.Equal(t, protocol.SymbolKindFunction, symbols[0].Children[0].Kind)
+	assert.Equal(t, uint32(0), symbols[0].Children[0].Range.Start.Line)
+
+	assert.Equal(t, "2024-01-16 restaurant", symbols[0].Children[1].Name)
+	assert.Equal(t, protocol.SymbolKindFunction, symbols[0].Children[1].Kind)
+	assert.Equal(t, uint32(4), symbols[0].Children[1].Range.Start.Line)
 }
 
 func TestDocumentSymbol_AccountDirective(t *testing.T) {
@@ -176,7 +180,7 @@ include ./other.journal`
 
 	result, err := srv.DocumentSymbol(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result, 4)
+	require.Len(t, result, 4, "month group + account + commodity + include")
 
 	symbols := toDocumentSymbols(t, result)
 
@@ -185,10 +189,18 @@ include ./other.journal`
 		kindCounts[sym.Kind]++
 	}
 
+	assert.Equal(t, 1, kindCounts[protocol.SymbolKindNamespace], "month group")
 	assert.Equal(t, 1, kindCounts[protocol.SymbolKindClass])
 	assert.Equal(t, 1, kindCounts[protocol.SymbolKindEnum])
-	assert.Equal(t, 1, kindCounts[protocol.SymbolKindFunction])
 	assert.Equal(t, 1, kindCounts[protocol.SymbolKindModule])
+
+	// Transaction is nested inside the month group
+	for _, sym := range symbols {
+		if sym.Kind == protocol.SymbolKindNamespace {
+			require.Len(t, sym.Children, 1)
+			assert.Equal(t, protocol.SymbolKindFunction, sym.Children[0].Kind)
+		}
+	}
 }
 
 func toDocumentSymbols(t *testing.T, result []any) []protocol.DocumentSymbol {

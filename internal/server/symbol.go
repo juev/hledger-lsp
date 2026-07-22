@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"go.lsp.dev/protocol"
 
@@ -32,9 +33,7 @@ func (s *Server) DocumentSymbol(
 
 	var symbols []any
 
-	for _, tx := range journal.Transactions {
-		symbols = append(symbols, transactionToSymbol(tx))
-	}
+	symbols = append(symbols, groupTransactionsByMonth(journal.Transactions)...)
 
 	for _, dir := range journal.Directives {
 		symbols = append(symbols, directiveToSymbol(dir))
@@ -45,6 +44,53 @@ func (s *Server) DocumentSymbol(
 	}
 
 	return symbols, nil
+}
+
+func groupTransactionsByMonth(transactions []ast.Transaction) []any {
+	if len(transactions) == 0 {
+		return nil
+	}
+
+	type monthGroup struct {
+		label    string
+		first    ast.Transaction
+		last     ast.Transaction
+		children []protocol.DocumentSymbol
+	}
+
+	groups := make(map[string]*monthGroup)
+	var order []string
+
+	for _, tx := range transactions {
+		key := fmt.Sprintf("%04d-%02d", tx.Date.Year, tx.Date.Month)
+		g, ok := groups[key]
+		if !ok {
+			g = &monthGroup{label: key, first: tx, last: tx}
+			groups[key] = g
+			order = append(order, key)
+		}
+		g.last = tx
+		g.children = append(g.children, transactionToSymbol(tx))
+	}
+
+	sort.Strings(order)
+
+	result := make([]any, 0, len(order))
+	for _, key := range order {
+		g := groups[key]
+		rng := *astRangeToProtocol(ast.Range{
+			Start: g.first.Range.Start,
+			End:   g.last.Range.End,
+		})
+		result = append(result, protocol.DocumentSymbol{
+			Name:           g.label,
+			Kind:           protocol.SymbolKindNamespace,
+			Range:          rng,
+			SelectionRange: rng,
+			Children:       g.children,
+		})
+	}
+	return result
 }
 
 func includeToSymbol(inc ast.Include) protocol.DocumentSymbol {

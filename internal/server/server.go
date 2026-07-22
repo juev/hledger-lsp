@@ -51,6 +51,7 @@ type Server struct {
 	supportsConfiguration bool
 	payeeTemplatesCache   sync.Map // map[protocol.DocumentURI]map[string][]analyzer.PostingTemplate
 	alignmentCache        sync.Map // map[protocol.DocumentURI]int
+	tokenCache            *semanticTokensCache
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -64,6 +65,7 @@ func NewServer() *Server {
 		rulesLoader:  rules.NewLoader(),
 		diagDebounce: 100 * time.Millisecond,
 		diagEntries:  make(map[protocol.DocumentURI]*diagEntry),
+		tokenCache:   newSemanticTokensCache(),
 	}
 	// Honour unsaved editor content for .rules files that are pulled in via
 	// transitive `include` from a currently-open rules file. The loader first
@@ -123,6 +125,10 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 
 	settings := s.getSettings()
 
+	// Feature flags gate capability registration at Initialize only.
+	// LSP capabilities are static after the Initialize handshake; toggling
+	// a feature via DidChangeConfiguration requires a server restart to
+	// take effect. This is a protocol limitation, not a bug.
 	caps := protocol.ServerCapabilities{
 		TextDocumentSync: protocol.TextDocumentSyncOptions{
 			OpenClose: true,
@@ -316,7 +322,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	s.cancelDiagnostics(params.TextDocument.URI)
 	s.documents.Delete(params.TextDocument.URI)
 	s.alignmentCache.Delete(params.TextDocument.URI)
-	tokenCache.delete(params.TextDocument.URI)
+	s.tokenCache.delete(params.TextDocument.URI)
 	return nil
 }
 

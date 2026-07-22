@@ -179,6 +179,8 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 	s.setSettings(settings)
 }
 
+// DidChangeConfiguration refreshes cached settings but cannot change
+// registered capabilities — feature flag changes require a server restart.
 func (s *Server) DidChangeConfiguration(_ context.Context, _ *protocol.DidChangeConfigurationParams) error {
 	go s.refreshConfiguration(context.Background())
 	return nil
