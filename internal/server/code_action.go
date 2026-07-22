@@ -36,7 +36,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, nil
 	}
 
-	actions := s.getCodeActions()
+	actions := s.getCodeActions(params.TextDocument.URI)
 	quickFixes := s.getQuickFixCodeActions(params)
 
 	result := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes))
@@ -163,7 +163,7 @@ func (s *Server) quickFixForUnbalanced(
 	}, true
 }
 
-func (s *Server) getCodeActions() []protocol.CodeAction {
+func (s *Server) getCodeActions(uri protocol.DocumentURI) []protocol.CodeAction {
 	settings := s.getSettings()
 	if s.cliClient == nil || !s.cliClient.Available() || !settings.CLI.Enabled {
 		return nil
@@ -179,8 +179,12 @@ func (s *Server) getCodeActions() []protocol.CodeAction {
 			Command: &protocol.Command{
 				Title:   cmd.title,
 				Command: "hledger.run",
+				// The invoking document URI is carried alongside the command so
+				// ExecuteCommand can target the journal the action came from
+				// (LSP ExecuteCommandParams has no URI field of its own).
 				Arguments: []any{
 					cmd.cmd,
+					string(uri),
 				},
 			},
 		})
@@ -207,17 +211,7 @@ func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCom
 		return nil, fmt.Errorf("hledger not available")
 	}
 
-	var filePath string
-	s.documents.Range(func(key, _ any) bool {
-		docURI := key.(protocol.DocumentURI)
-		path := uriToPath(docURI)
-		if path != "" {
-			filePath = path
-			return false
-		}
-		return true
-	})
-
+	filePath := s.resolveCommandFile(params.Arguments)
 	if filePath == "" {
 		return nil, fmt.Errorf("no document open")
 	}
@@ -228,6 +222,33 @@ func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCom
 	}
 
 	return formatOutputAsComment(cmd, output), nil
+}
+
+// resolveCommandFile determines which journal file an hledger.run command
+// targets. getCodeActions passes the invoking document URI as the second
+// argument; when present and resolvable it wins, so a command runs against the
+// journal it was invoked from even with multiple documents open. Without a
+// usable URI (e.g. a client that omits it) it falls back to the first open
+// document, preserving the legacy behavior.
+func (s *Server) resolveCommandFile(args []any) string {
+	if len(args) >= 2 {
+		if rawURI, ok := args[1].(string); ok && rawURI != "" {
+			if path := uriToPath(protocol.DocumentURI(rawURI)); path != "" {
+				return path
+			}
+		}
+	}
+
+	var filePath string
+	s.documents.Range(func(key, _ any) bool {
+		docURI := key.(protocol.DocumentURI)
+		if path := uriToPath(docURI); path != "" {
+			filePath = path
+			return false
+		}
+		return true
+	})
+	return filePath
 }
 
 func formatOutputAsComment(cmd, output string) string {
