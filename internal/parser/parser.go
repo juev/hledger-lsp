@@ -18,30 +18,121 @@ type ParseError struct {
 	End     Position
 }
 
+// Context contains parse-affecting state inherited by an included journal.
+// Its fields stay private so callers can only pass snapshots returned by parser.
+type Context struct {
+	defaultYear                 int
+	decimalMark                 string
+	decimalMarkExplicit         bool
+	defaultCommodityDecimalMark string
+	defaultCommoditySymbol      string
+	commodityDecimalMarks       map[string]string
+	accountPrefixes             []string
+	basicAliases                []basicAlias
+}
+
+type basicAlias struct {
+	original string
+	alias    string
+}
+
+// ContextExports is the portion of a child context that an include may merge
+// into its parent: declared commodity styles only.
+type ContextExports struct {
+	commodityDecimalMarks map[string]string
+}
+
+type IncludeResolver func(IncludeSite) ContextExports
+
+type IncludeSite struct {
+	Include ast.Include
+	Context Context
+}
+
+type LocalItemKind uint8
+
+const (
+	LocalItemTransaction LocalItemKind = iota
+	LocalItemPeriodicTransaction
+	LocalItemAutoPostingRule
+	LocalItemDirective
+	LocalItemComment
+	LocalItemInclude
+)
+
+type LocalItem struct {
+	Kind  LocalItemKind
+	Index int
+}
+
+type ContextCheckpoint struct {
+	Offset  int
+	Context Context
+}
+
+type ParseResult struct {
+	Journal      *ast.Journal
+	Items        []LocalItem
+	IncludeSites []IncludeSite
+	Checkpoints  []ContextCheckpoint
+	Exports      ContextExports
+}
+
 func (e ParseError) Error() string {
 	return fmt.Sprintf("%d:%d-%d:%d: %s", e.Pos.Line, e.Pos.Column, e.End.Line, e.End.Column, e.Message)
 }
 
 type Parser struct {
-	lexer                 *Lexer
-	current               Token
-	errors                []ParseError
-	defaultYear           int
-	decimalMark           string
-	decimalMarkExplicit   bool
-	commodityDecimalMarks map[string]string
-	inputLen              int
-	accountPrefixes       []string // stack for nested apply account directives
+	lexer                        *Lexer
+	current                      Token
+	errors                       []ParseError
+	defaultYear                  int
+	decimalMark                  string
+	decimalMarkExplicit          bool
+	commodityDecimalMarks        map[string]string
+	defaultCommodityDecimalMark  string
+	defaultCommoditySymbol       string
+	inputLen                     int
+	accountPrefixes              []string // stack for nested apply account directives
+	basicAliases                 []basicAlias
+	items                        []LocalItem
+	includeSites                 []IncludeSite
+	checkpoints                  []ContextCheckpoint
+	resolveInclude               IncludeResolver
+	initialCommodityDecimalMarks map[string]string
 }
 
 func Parse(input string) (*ast.Journal, []ParseError) {
+	result, errs := ParseWithContext(input, Context{}, nil)
+	return result.Journal, errs
+}
+
+func ParseWithContext(input string, initial Context, resolve IncludeResolver) (ParseResult, []ParseError) {
+	input = strings.ReplaceAll(input, "\r\n", "\n")
+	context := cloneContext(initial)
 	p := &Parser{
-		lexer:                 NewLexer(input),
-		inputLen:              len(input),
-		commodityDecimalMarks: make(map[string]string),
+		lexer:                        NewLexer(input),
+		inputLen:                     len(input),
+		defaultYear:                  context.defaultYear,
+		decimalMark:                  context.decimalMark,
+		decimalMarkExplicit:          context.decimalMarkExplicit,
+		defaultCommodityDecimalMark:  context.defaultCommodityDecimalMark,
+		defaultCommoditySymbol:       context.defaultCommoditySymbol,
+		commodityDecimalMarks:        context.commodityDecimalMarks,
+		accountPrefixes:              context.accountPrefixes,
+		basicAliases:                 context.basicAliases,
+		resolveInclude:               resolve,
+		initialCommodityDecimalMarks: cloneStringMap(context.commodityDecimalMarks),
 	}
 	p.advance()
-	return p.parseJournal(), p.errors
+	journal := p.parseJournal()
+	return ParseResult{
+		Journal:      journal,
+		Items:        append([]LocalItem(nil), p.items...),
+		IncludeSites: append([]IncludeSite(nil), p.includeSites...),
+		Checkpoints:  append([]ContextCheckpoint(nil), p.checkpoints...),
+		Exports:      p.contextExports(),
+	}, p.errors
 }
 
 func (p *Parser) parseJournal() *ast.Journal {
@@ -56,30 +147,42 @@ func (p *Parser) parseJournal() *ast.Journal {
 			p.advance()
 		case TokenComment:
 			journal.Comments = append(journal.Comments, p.parseComment())
+			p.items = append(p.items, LocalItem{Kind: LocalItemComment, Index: len(journal.Comments) - 1})
 		case TokenDate:
 			tx := p.parseTransaction()
 			if tx != nil {
 				journal.Transactions = append(journal.Transactions, *tx)
+				p.items = append(p.items, LocalItem{Kind: LocalItemTransaction, Index: len(journal.Transactions) - 1})
 			}
 		case TokenTilde:
 			ptx := p.parsePeriodicTransaction()
 			if ptx != nil {
 				journal.PeriodicTransactions = append(journal.PeriodicTransactions, *ptx)
+				p.items = append(p.items, LocalItem{Kind: LocalItemPeriodicTransaction, Index: len(journal.PeriodicTransactions) - 1})
 			}
 		case TokenAutoRule:
 			rule := p.parseAutoPostingRule()
 			if rule != nil {
 				journal.AutoPostingRules = append(journal.AutoPostingRules, *rule)
+				p.items = append(p.items, LocalItem{Kind: LocalItemAutoPostingRule, Index: len(journal.AutoPostingRules) - 1})
 			}
 		case TokenDirective:
 			dir := p.parseDirective()
 			if dir != nil {
 				if inc, ok := dir.(ast.Include); ok {
 					journal.Includes = append(journal.Includes, inc)
+					p.items = append(p.items, LocalItem{Kind: LocalItemInclude, Index: len(journal.Includes) - 1})
+					site := IncludeSite{Include: inc, Context: p.context()}
+					p.includeSites = append(p.includeSites, site)
+					if p.resolveInclude != nil {
+						p.mergeExports(p.resolveInclude(site))
+					}
 				} else {
 					journal.Directives = append(journal.Directives, dir)
+					p.items = append(p.items, LocalItem{Kind: LocalItemDirective, Index: len(journal.Directives) - 1})
 				}
 			}
+			p.checkpoint()
 		case TokenIndent:
 			// Whitespace-only lines: consume indent, newline handled by next iteration
 			p.advance()
@@ -456,10 +559,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 	}
 
 	originalName := p.current.Value
-	resolvedName := originalName
-	if prefix := p.getAccountPrefix(); prefix != "" {
-		resolvedName = prefix + ":" + originalName
-	}
+	resolvedName := p.resolveAccountName(originalName)
 
 	posting.Account = ast.Account{
 		Name:         originalName,
@@ -814,8 +914,9 @@ func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 
 	dir := ast.AccountDirective{
 		Account: ast.Account{
-			Name:  accountName,
-			Range: ast.Range{Start: toASTPosition(accountPos)},
+			Name:         accountName,
+			ResolvedName: p.resolveAccountName(accountName),
+			Range:        ast.Range{Start: toASTPosition(accountPos)},
 		},
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
@@ -1068,10 +1169,8 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 
 	if !p.decimalMarkExplicit && numberStr != "" {
 		if mark := inferDecimalMark(numberStr); mark != "" {
-			p.commodityDecimalMarks[""] = mark
-			if dir.Symbol != "" {
-				p.commodityDecimalMarks[dir.Symbol] = mark
-			}
+			p.defaultCommodityDecimalMark = mark
+			p.defaultCommoditySymbol = dir.Symbol
 		}
 	}
 
@@ -1155,6 +1254,16 @@ func (p *Parser) parseAliasDirective(startPos Position) ast.Directive {
 	dir := ast.AliasDirective{
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
+	if p.current.Type == TokenAccount {
+		if original, alias, ok := strings.Cut(p.current.Value, "="); ok {
+			dir.Original = strings.TrimSpace(original)
+			dir.Alias = strings.TrimSpace(alias)
+			dir.Range.End = toASTPosition(p.current.End)
+			p.advance()
+			p.basicAliases = append(p.basicAliases, basicAlias{original: dir.Original, alias: dir.Alias})
+			return dir
+		}
+	}
 
 	// Collect tokens until we hit '=' sign
 	var originalParts []string
@@ -1214,6 +1323,9 @@ func (p *Parser) parseAliasDirective(startPos Position) ast.Directive {
 
 	dir.Alias = strings.Join(aliasParts, "")
 	dir.Range.End = toASTPosition(p.current.Pos)
+	if !dir.IsRegex {
+		p.basicAliases = append(p.basicAliases, basicAlias{original: dir.Original, alias: dir.Alias})
+	}
 	return dir
 }
 
@@ -1312,6 +1424,10 @@ func (p *Parser) parseEndDirective(_ Position) ast.Directive {
 				}
 			}
 			p.error("expected 'account' after 'end apply'")
+			p.skipToNextLine()
+			return nil
+		case "aliases":
+			p.basicAliases = nil
 			p.skipToNextLine()
 			return nil
 		default:
@@ -1464,6 +1580,103 @@ func (p *Parser) getAccountPrefix() string {
 	return strings.Join(p.accountPrefixes, ":")
 }
 
+func (p *Parser) resolveAccountName(name string) string {
+	resolvedName := name
+	if prefix := p.getAccountPrefix(); prefix != "" {
+		resolvedName = prefix + ":" + resolvedName
+	}
+	for i := len(p.basicAliases) - 1; i >= 0; i-- {
+		alias := p.basicAliases[i]
+		if resolvedName == alias.original {
+			resolvedName = alias.alias
+			continue
+		}
+		if strings.HasPrefix(resolvedName, alias.original+":") {
+			resolvedName = alias.alias + strings.TrimPrefix(resolvedName, alias.original)
+		}
+	}
+	return resolvedName
+}
+
+// ApplyContextExports returns a clone of initial with declared commodity styles
+// from exports merged in. Other parse-affecting state remains local.
+func ApplyContextExports(initial Context, exports ContextExports) Context {
+	context := cloneContext(initial)
+	for symbol, mark := range exports.commodityDecimalMarks {
+		context.commodityDecimalMarks[symbol] = mark
+	}
+	return context
+}
+
+// MergeContextExports combines exports in source order. Later styles override
+// earlier styles for the same commodity.
+func MergeContextExports(exports ...ContextExports) ContextExports {
+	merged := ContextExports{commodityDecimalMarks: make(map[string]string)}
+	for _, export := range exports {
+		for symbol, mark := range export.commodityDecimalMarks {
+			merged.commodityDecimalMarks[symbol] = mark
+		}
+	}
+	return merged
+}
+
+func (p *Parser) context() Context {
+	return cloneContext(Context{
+		defaultYear:                 p.defaultYear,
+		decimalMark:                 p.decimalMark,
+		decimalMarkExplicit:         p.decimalMarkExplicit,
+		defaultCommodityDecimalMark: p.defaultCommodityDecimalMark,
+		defaultCommoditySymbol:      p.defaultCommoditySymbol,
+		commodityDecimalMarks:       p.commodityDecimalMarks,
+		accountPrefixes:             p.accountPrefixes,
+		basicAliases:                p.basicAliases,
+	})
+}
+
+func (p *Parser) checkpoint() {
+	p.checkpoints = append(p.checkpoints, ContextCheckpoint{
+		Offset:  p.current.Pos.Offset,
+		Context: p.context(),
+	})
+}
+
+func (p *Parser) contextExports() ContextExports {
+	exports := ContextExports{commodityDecimalMarks: make(map[string]string)}
+	for symbol, mark := range p.commodityDecimalMarks {
+		if initialMark, ok := p.initialCommodityDecimalMarks[symbol]; !ok || initialMark != mark {
+			exports.commodityDecimalMarks[symbol] = mark
+		}
+	}
+	return exports
+}
+
+func (p *Parser) mergeExports(exports ContextExports) {
+	for symbol, mark := range exports.commodityDecimalMarks {
+		p.commodityDecimalMarks[symbol] = mark
+	}
+}
+
+func cloneContext(context Context) Context {
+	return Context{
+		defaultYear:                 context.defaultYear,
+		decimalMark:                 context.decimalMark,
+		decimalMarkExplicit:         context.decimalMarkExplicit,
+		defaultCommodityDecimalMark: context.defaultCommodityDecimalMark,
+		defaultCommoditySymbol:      context.defaultCommoditySymbol,
+		commodityDecimalMarks:       cloneStringMap(context.commodityDecimalMarks),
+		accountPrefixes:             append([]string(nil), context.accountPrefixes...),
+		basicAliases:                append([]basicAlias(nil), context.basicAliases...),
+	}
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
 func (p *Parser) skipToNextLine() {
 	for p.current.Type != TokenNewline && p.current.Type != TokenEOF {
 		p.advance()
@@ -1512,12 +1725,12 @@ func (p *Parser) resolveDecimalMark(commodity string) string {
 		if mark, ok := p.commodityDecimalMarks[commodity]; ok {
 			return mark
 		}
+		if commodity == p.defaultCommoditySymbol {
+			return p.defaultCommodityDecimalMark
+		}
 		return ""
 	}
-	if mark, ok := p.commodityDecimalMarks[""]; ok {
-		return mark
-	}
-	return ""
+	return p.defaultCommodityDecimalMark
 }
 
 func inferDecimalMarkFromFormat(format string) string {

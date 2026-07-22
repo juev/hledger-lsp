@@ -289,15 +289,8 @@ func TestLoader_SelfInclude(t *testing.T) {
 		t.Fatal("result is nil")
 	}
 
-	var cycleErrors []LoadError
-	for _, e := range errs {
-		if e.Kind == ErrorCycleDetected {
-			cycleErrors = append(cycleErrors, e)
-		}
-	}
-
-	if len(cycleErrors) == 0 {
-		t.Error("expected cycle detection error for self-include, got none")
+	if len(errs) != 0 {
+		t.Errorf("immediate self-include must be ignored, got errors: %v", errs)
 	}
 }
 
@@ -514,6 +507,7 @@ func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
 	mainFile := filepath.Join(dir, "main.journal")
 	level1File := filepath.Join(dir, "level1.journal")
 	level2File := filepath.Join(dir, "level2.journal")
+	level3File := filepath.Join(dir, "level3.journal")
 
 	mainContent := `include level1.journal
 
@@ -527,8 +521,14 @@ func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
     expenses:level1  $20.00
     assets:cash
 `
-	level2Content := `2024-01-17 * level2 transaction
+	level2Content := `include level3.journal
+
+2024-01-17 * level2 transaction
     expenses:level2  $30.00
+    assets:cash
+`
+	level3Content := `2024-01-18 * level3 transaction
+    expenses:level3  $40.00
     assets:cash
 `
 	if err := os.WriteFile(mainFile, []byte(mainContent), 0o644); err != nil {
@@ -538,6 +538,9 @@ func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(level2File, []byte(level2Content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(level3File, []byte(level3Content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -551,7 +554,7 @@ func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
 
 	foundDepthError := false
 	for _, err := range errs {
-		if err.Kind == ErrorCycleDetected && strings.Contains(err.Message, "include depth limit exceeded") {
+		if err.Kind == ErrorDepthExceeded && strings.Contains(err.Message, "include depth limit exceeded") {
 			foundDepthError = true
 		}
 	}

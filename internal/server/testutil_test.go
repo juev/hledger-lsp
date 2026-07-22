@@ -224,6 +224,7 @@ func (ts *testServer) definition(uri protocol.DocumentURI, line, character uint3
 	return ts.Definition(context.Background(), params)
 }
 
+//nolint:unparam // test helper keeps the character explicit at call sites
 func (ts *testServer) references(uri protocol.DocumentURI, line, character uint32, includeDeclaration bool) ([]protocol.Location, error) {
 	params := &protocol.ReferenceParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{

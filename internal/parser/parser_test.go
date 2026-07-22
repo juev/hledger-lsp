@@ -3795,6 +3795,204 @@ func TestParser_BalanceAssertionWithAllAnnotationsCRLF(t *testing.T) {
 	assert.True(t, p.BalanceAssertion.Cost.Amount.Quantity.Equal(decimal.NewFromInt(180)))
 }
 
+func TestParseWithContext_OrdersEveryJournalNodeAndResolvesIncludes(t *testing.T) {
+	input := "; before\r\nY 2024\r\n2024-01-01 one\r\n    assets:cash\r\n~ monthly two\r\n    assets:cash\r\n= account:assets three\r\n    assets:cash\r\naccount Активы:Банк\r\ninclude child.journal\r\n; after\r\n"
+
+	result, errs := ParseWithContext(input, Context{}, func(site IncludeSite) ContextExports {
+		assert.Equal(t, "child.journal", site.Include.Path)
+		return ContextExports{}
+	})
+
+	require.Empty(t, errs)
+	assert.Equal(t, []LocalItem{
+		{Kind: LocalItemComment, Index: 0},
+		{Kind: LocalItemDirective, Index: 0},
+		{Kind: LocalItemTransaction, Index: 0},
+		{Kind: LocalItemPeriodicTransaction, Index: 0},
+		{Kind: LocalItemAutoPostingRule, Index: 0},
+		{Kind: LocalItemDirective, Index: 1},
+		{Kind: LocalItemInclude, Index: 0},
+		{Kind: LocalItemComment, Index: 1},
+	}, result.Items)
+	require.Len(t, result.IncludeSites, 1)
+	require.NotEmpty(t, result.Checkpoints)
+	assert.Equal(t, "Активы:Банк", result.Journal.Directives[1].(ast.AccountDirective).Account.Name)
+}
+
+func TestParseWithContext_AppliesResolverCommodityExportsBeforeLaterEntries(t *testing.T) {
+	input := "include child.journal\n2024-01-01 after\n    expenses  1.000 EUR\n    assets\n"
+	child, childErrs := ParseWithContext("commodity 1.000,00 EUR\n", Context{}, nil)
+	require.Empty(t, childErrs)
+
+	result, errs := ParseWithContext(input, Context{}, func(IncludeSite) ContextExports {
+		return child.Exports
+	})
+
+	require.Empty(t, errs)
+	require.Len(t, result.Journal.Transactions, 1)
+	amount := result.Journal.Transactions[0].Postings[0].Amount
+	require.NotNil(t, amount)
+	assert.Equal(t, "1000", amount.Quantity.String())
+}
+
+func TestParseWithContext_KeepsDefaultCommodityStyleSeparateFromDeclaredCommodityStyles(t *testing.T) {
+	input := "D 1.000,00 RUB\ncommodity 1,000.00 USD\n2024-01-01 styles\n    bare  1.500\n    usd   1.500 USD\n    eur   1.500 EUR\n"
+
+	result, errs := ParseWithContext(input, Context{}, nil)
+
+	require.Empty(t, errs)
+	postings := result.Journal.Transactions[0].Postings
+	assert.Equal(t, "1500", postings[0].Amount.Quantity.String())
+	assert.Equal(t, "1.5", postings[1].Amount.Quantity.String())
+	assert.Equal(t, "1.5", postings[2].Amount.Quantity.String())
+}
+
+func TestParseWithContext_AppliesPrefixAndNewestBasicAliasToAccounts(t *testing.T) {
+	input := "apply account business\nalias business:cash = Assets:Cash\nalias business:cash = Assets:Newest\n2024-01-01 tx\n    cash\n~ monthly periodic\n    cash\n= account:assets auto\n    cash\naccount cash\nend aliases\n2024-01-02 after aliases\n    cash\nend apply account\n2024-01-03 after prefix\n    cash\n"
+
+	result, errs := ParseWithContext(input, Context{}, nil)
+
+	require.Empty(t, errs)
+	assert.Equal(t, "Assets:Newest", result.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+	assert.Equal(t, "Assets:Newest", result.Journal.PeriodicTransactions[0].Postings[0].Account.ResolvedName)
+	assert.Equal(t, "Assets:Newest", result.Journal.AutoPostingRules[0].Postings[0].Account.ResolvedName)
+	account := result.Journal.Directives[2].(ast.AccountDirective).Account
+	assert.Equal(t, "cash", account.Name)
+	assert.Equal(t, "Assets:Newest", account.ResolvedName)
+	assert.Equal(t, "business:cash", result.Journal.Transactions[1].Postings[0].Account.ResolvedName)
+	assert.Equal(t, "cash", result.Journal.Transactions[2].Postings[0].Account.ResolvedName)
+}
+
+func TestParser_BasicAliasesApplyNewestFirstToExactAccountsAndSubaccounts(t *testing.T) {
+	input := "alias liabilities = equity\nalias assets = liabilities\n2024-01-01 aliases\n    assets:cash\n    assetside:cash\n"
+
+	journal, errs := Parse(input)
+
+	require.Empty(t, errs)
+	postings := journal.Transactions[0].Postings
+	assert.Equal(t, "equity:cash", postings[0].Account.ResolvedName)
+	assert.Equal(t, "assetside:cash", postings[1].Account.ResolvedName)
+}
+
+func TestParseWithContext_IntegerCommodityFormatPreservesInheritedStyle(t *testing.T) {
+	var initial Context
+	_, initialErrs := ParseWithContext("commodity 1.000,00 EUR\ninclude snapshot\n", Context{}, func(site IncludeSite) ContextExports {
+		initial = site.Context
+		return ContextExports{}
+	})
+	require.Empty(t, initialErrs)
+
+	result, errs := ParseWithContext("commodity 1000 EUR\n2024-01-01 inherited style\n    assets  1.000 EUR\n", initial, nil)
+
+	require.Empty(t, errs)
+	assert.Equal(t, "1000", result.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+}
+
+func TestContextExportsMergeAndApplyCloneState(t *testing.T) {
+	child1, child1Errs := ParseWithContext("commodity 1.000,00 EUR\n", Context{}, nil)
+	require.Empty(t, child1Errs)
+	child2, child2Errs := ParseWithContext("commodity 1.000,00 USD\ncommodity 1,000.00 EUR\n", Context{}, nil)
+	require.Empty(t, child2Errs)
+
+	var initial Context
+	_, initialErrs := ParseWithContext("include snapshot\n", Context{}, func(site IncludeSite) ContextExports {
+		initial = site.Context
+		return ContextExports{}
+	})
+	require.Empty(t, initialErrs)
+
+	merged := MergeContextExports(child1.Exports, child2.Exports)
+	applied := ApplyContextExports(initial, merged)
+
+	assert.Equal(t, ",", child1.Exports.commodityDecimalMarks["EUR"])
+	assert.Equal(t, ".", child2.Exports.commodityDecimalMarks["EUR"])
+	assert.Empty(t, initial.commodityDecimalMarks)
+	assert.Equal(t, ".", merged.commodityDecimalMarks["EUR"])
+
+	initialResult, initialResultErrs := ParseWithContext("2024-01-01 initial\n    assets  1,000 EUR\n", initial, nil)
+	require.Empty(t, initialResultErrs)
+	assert.Equal(t, "1", initialResult.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+
+	appliedResult, appliedResultErrs := ParseWithContext("2024-01-01 applied\n    assets  1,000 EUR\n    assets  1.000 USD\n", applied, nil)
+	require.Empty(t, appliedResultErrs)
+	assert.Equal(t, "1000", appliedResult.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+	assert.Equal(t, "1000", appliedResult.Journal.Transactions[0].Postings[1].Amount.Quantity.String())
+}
+
+func TestParseWithContext_IncludeSnapshotsAreIsolatedFromContinuationAndExports(t *testing.T) {
+	child, childErrs := ParseWithContext("commodity 1.000,00 EUR\n", Context{}, nil)
+	require.Empty(t, childErrs)
+
+	var site Context
+	result, errs := ParseWithContext("Y 2024\napply account parent\nalias parent:cash = Assets:Cash\ninclude child.journal\nY 2030\nend aliases\nend apply account\n2024-01-01 after\n    cash\n", Context{}, func(include IncludeSite) ContextExports {
+		site = include.Context
+		return child.Exports
+	})
+
+	require.Empty(t, errs)
+	assert.Equal(t, "cash", result.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+
+	snapshot, snapshotErrs := ParseWithContext("1/2 child\n    cash\n", site, nil)
+	require.Empty(t, snapshotErrs)
+	assert.Equal(t, 2024, snapshot.Journal.Transactions[0].Date.Year)
+	assert.Equal(t, "Assets:Cash", snapshot.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+
+	preExport, preExportErrs := ParseWithContext("1/2 child\n    expenses  1.000 EUR\n", site, nil)
+	require.Empty(t, preExportErrs)
+	assert.Equal(t, "1", preExport.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+
+	for _, input := range []string{
+		"include child.journal\n2024-01-01 first\n    expenses  1.000 EUR\n",
+		"include child.journal\n2024-01-01 second\n    expenses  1.000 EUR\n",
+	} {
+		parsed, parsedErrs := ParseWithContext(input, Context{}, func(IncludeSite) ContextExports { return child.Exports })
+		require.Empty(t, parsedErrs)
+		assert.Equal(t, "1000", parsed.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+	}
+}
+
+func TestParseWithContext_SnapshotsTrackLocalStateBoundaries(t *testing.T) {
+	contexts := make(map[string]Context)
+	input := "include zero\nY 2024\ninclude year\nD 1.000,00 RUB\ninclude default\ncommodity 1.000,00 EUR\ninclude commodity\ndecimal-mark .\ninclude decimal\napply account parent\nalias parent:cash = Assets:Cash\ninclude alias\nend aliases\ninclude aliases-ended\nend apply account\ninclude apply-ended\n"
+
+	_, errs := ParseWithContext(input, Context{}, func(site IncludeSite) ContextExports {
+		contexts[site.Include.Path] = site.Context
+		return ContextExports{}
+	})
+	require.Empty(t, errs)
+
+	_, zeroErrs := ParseWithContext("1/2 missing year\n    cash\n", contexts["zero"], nil)
+	require.NotEmpty(t, zeroErrs)
+
+	year, yearErrs := ParseWithContext("1/2 inherited year\n    cash\n", contexts["year"], nil)
+	require.Empty(t, yearErrs)
+	assert.Equal(t, 2024, year.Journal.Transactions[0].Date.Year)
+
+	defaultStyle, defaultErrs := ParseWithContext("1/2 default\n    cash  1.500\n", contexts["default"], nil)
+	require.Empty(t, defaultErrs)
+	assert.Equal(t, "1500", defaultStyle.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+
+	commodityStyle, commodityErrs := ParseWithContext("1/2 commodity\n    cash  1.000 EUR\n", contexts["commodity"], nil)
+	require.Empty(t, commodityErrs)
+	assert.Equal(t, "1000", commodityStyle.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+
+	decimalStyle, decimalErrs := ParseWithContext("1/2 decimal\n    cash  1.500\n", contexts["decimal"], nil)
+	require.Empty(t, decimalErrs)
+	assert.Equal(t, "1.5", decimalStyle.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
+
+	aliased, aliasErrs := ParseWithContext("1/2 alias\n    cash\n", contexts["alias"], nil)
+	require.Empty(t, aliasErrs)
+	assert.Equal(t, "Assets:Cash", aliased.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+
+	aliasesEnded, aliasesEndedErrs := ParseWithContext("1/2 aliases ended\n    cash\n", contexts["aliases-ended"], nil)
+	require.Empty(t, aliasesEndedErrs)
+	assert.Equal(t, "parent:cash", aliasesEnded.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+
+	applyEnded, applyEndedErrs := ParseWithContext("1/2 apply ended\n    cash\n", contexts["apply-ended"], nil)
+	require.Empty(t, applyEndedErrs)
+	assert.Equal(t, "cash", applyEnded.Journal.Transactions[0].Postings[0].Account.ResolvedName)
+}
+
 func TestParser_BalanceAssertionMalformedCost(t *testing.T) {
 	input := `2024-01-15 buy stocks
     assets:stocks  10 AAPL = 10 AAPL @

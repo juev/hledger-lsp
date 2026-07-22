@@ -614,16 +614,28 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 	}
 
 	journal, _ := parser.Parse(doc)
-
-	var commodityFormats map[string]formatter.CommodityFormat
-	if s.workspace != nil {
-		commodityFormats = s.workspace.GetCommodityFormatsForFile(uriToPath(params.TextDocument.URI))
-	}
+	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()
 	opts := formatterOptionsFrom(settings.Formatting)
 
 	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
+}
+
+// commodityFormatsForDocument returns the commodity formats for the document
+// using context-at-position (FormatsAt) when occurrences are available, falling
+// back to the workspace tree-wide cache otherwise.
+func (s *Server) commodityFormatsForDocument(docURI protocol.DocumentURI) map[string]formatter.CommodityFormat {
+	if resolved := s.getWorkspaceResolved(docURI); resolved != nil && len(resolved.Occurrences) > 0 {
+		occID := firstOccurrenceIDForPath(resolved, uriToPath(docURI))
+		// Use a large offset to collect all directives and merge-forward
+		// commodity declarations for the whole document.
+		return resolved.FormatsAt(occID, 1<<30)
+	}
+	if s.workspace != nil {
+		return s.workspace.GetCommodityFormatsForFile(uriToPath(docURI))
+	}
+	return nil
 }
 
 // formatterOptionsFrom builds formatter.Options from the server's formatting

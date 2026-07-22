@@ -86,8 +86,7 @@ func collectPayeeAccountsFromResolved(resolved *include.ResolvedJournal) map[str
 		}
 	}
 
-	mergeAccounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeAccounts(journal)
 	}
 
@@ -116,8 +115,7 @@ func collectPayeeAccountPairUsageFromResolved(resolved *include.ResolvedJournal)
 		}
 	}
 
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 

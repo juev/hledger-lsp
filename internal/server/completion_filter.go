@@ -41,6 +41,13 @@ func journalWithoutTransaction(journal *ast.Journal, txIndex int) *ast.Journal {
 func resolvedWithoutTransaction(resolved *include.ResolvedJournal, cursorLine int, docURI protocol.DocumentURI) *include.ResolvedJournal {
 	docPath := uriToPath(docURI)
 
+	// Occurrence-aware path: filter the transaction from the matching occurrence
+	// and preserve the occurrence/item structure so AnalyzeResolved counts each
+	// occurrence of a repeated include.
+	if len(resolved.Occurrences) > 0 {
+		return resolvedWithoutTransactionOccurrences(resolved, cursorLine, docPath)
+	}
+
 	for path, journal := range resolved.Files {
 		if path == docPath {
 			txIdx := findCurrentTransactionIndex(journal.Transactions, cursorLine)
@@ -72,5 +79,64 @@ func resolvedWithoutTransaction(resolved *include.ResolvedJournal, cursorLine in
 		Files:     resolved.Files,
 		FileOrder: resolved.FileOrder,
 		Errors:    resolved.Errors,
+	}
+}
+
+func resolvedWithoutTransactionOccurrences(resolved *include.ResolvedJournal, cursorLine int, docPath string) *include.ResolvedJournal {
+	targetIdx := -1
+	for i := range resolved.Occurrences {
+		if resolved.Occurrences[i].Path == docPath {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 {
+		return resolved
+	}
+
+	occ := resolved.Occurrences[targetIdx]
+	if occ.Journal == nil {
+		return resolved
+	}
+	txIdx := findCurrentTransactionIndex(occ.Journal.Transactions, cursorLine)
+	if txIdx < 0 {
+		return resolved
+	}
+
+	filteredJournal := journalWithoutTransaction(occ.Journal, txIdx)
+
+	newOccurrences := make([]include.JournalOccurrence, len(resolved.Occurrences))
+	copy(newOccurrences, resolved.Occurrences)
+	newOccurrences[targetIdx].Journal = filteredJournal
+
+	// Remove the filtered transaction from Items and adjust subsequent indices.
+	var newItems []include.ResolvedItem
+	for _, item := range resolved.Items {
+		if item.OccurrenceID == occ.ID && item.Kind == include.ResolvedItemTransaction {
+			if item.Index == txIdx {
+				continue
+			}
+			if item.Index > txIdx {
+				item.Index--
+			}
+		}
+		newItems = append(newItems, item)
+	}
+
+	// Update Primary if the filtered occurrence is the root.
+	primary := resolved.Primary
+	if occ.Via.ParentID == 0 {
+		primary = filteredJournal
+	}
+
+	return &include.ResolvedJournal{
+		Occurrences: newOccurrences,
+		Items:       newItems,
+		ByPath:      resolved.ByPath,
+		ByCanonical: resolved.ByCanonical,
+		Primary:     primary,
+		Files:       resolved.Files,
+		FileOrder:   resolved.FileOrder,
+		Errors:      resolved.Errors,
 	}
 }

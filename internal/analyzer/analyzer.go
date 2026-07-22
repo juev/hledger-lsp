@@ -125,27 +125,38 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
 	declaredCommodities := collectDeclaredCommoditiesFromResolved(resolved)
 
-	for i := range resolved.Primary.Transactions {
-		tx := &resolved.Primary.Transactions[i]
-		balanceResult := CheckBalance(tx, a.BalanceTolerance)
+	// Generate diagnostics for all occurrences, then dedup identical ones
+	// (repeated includes produce the same source ranges).
+	type diagKey struct {
+		line, col int
+		msg       string
+		code      string
+		severity  DiagnosticSeverity
+	}
+	seen := make(map[diagKey]bool)
+	for _, tx := range resolved.AllTransactions() {
+		tx := tx
+		balanceResult := CheckBalance(&tx, a.BalanceTolerance)
 
+		var txDiags []Diagnostic
 		if !balanceResult.Balanced {
-			diag := a.createBalanceDiagnostic(tx, balanceResult)
-			result.Diagnostics = append(result.Diagnostics, diag)
+			txDiags = append(txDiags, a.createBalanceDiagnostic(&tx, balanceResult))
 		}
-
 		if len(declaredAccounts) > 0 {
-			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
-			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
+			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, declaredAccounts)...)
 		}
-
 		if len(declaredCommodities) > 0 {
-			undeclaredCommodityDiags := checkUndeclaredCommodities(tx, declaredCommodities)
-			result.Diagnostics = append(result.Diagnostics, undeclaredCommodityDiags...)
+			txDiags = append(txDiags, checkUndeclaredCommodities(&tx, declaredCommodities)...)
 		}
+		txDiags = append(txDiags, validateDateTags(&tx)...)
 
-		dateTagDiags := validateDateTags(tx)
-		result.Diagnostics = append(result.Diagnostics, dateTagDiags...)
+		for _, d := range txDiags {
+			key := diagKey{d.Range.Start.Line, d.Range.Start.Column, d.Message, d.Code, d.Severity}
+			if !seen[key] {
+				seen[key] = true
+				result.Diagnostics = append(result.Diagnostics, d)
+			}
+		}
 	}
 
 	return result
@@ -155,16 +166,7 @@ func collectAccountsFromResolved(resolved *include.ResolvedJournal) *AccountInde
 	idx := NewAccountIndex()
 	seen := make(map[string]bool)
 
-	if resolved.Primary != nil {
-		for _, name := range CollectAccounts(resolved.Primary).All {
-			if !seen[name] {
-				seen[name] = true
-				addAccountToIndex(idx, name)
-			}
-		}
-	}
-
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for _, name := range CollectAccounts(journal).All {
 			if !seen[name] {
 				seen[name] = true
@@ -180,16 +182,7 @@ func collectPayeesFromResolved(resolved *include.ResolvedJournal) []string {
 	seen := make(map[string]bool)
 	var payees []string
 
-	if resolved.Primary != nil {
-		for _, p := range CollectPayees(resolved.Primary) {
-			if !seen[p] {
-				seen[p] = true
-				payees = append(payees, p)
-			}
-		}
-	}
-
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for _, p := range CollectPayees(journal) {
 			if !seen[p] {
 				seen[p] = true
@@ -205,16 +198,7 @@ func collectDescriptionsFromResolved(resolved *include.ResolvedJournal) []string
 	seen := make(map[string]bool)
 	var descriptions []string
 
-	if resolved.Primary != nil {
-		for _, d := range CollectDescriptions(resolved.Primary) {
-			if !seen[d] {
-				seen[d] = true
-				descriptions = append(descriptions, d)
-			}
-		}
-	}
-
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for _, d := range CollectDescriptions(journal) {
 			if !seen[d] {
 				seen[d] = true
@@ -230,16 +214,7 @@ func collectCommoditiesFromResolved(resolved *include.ResolvedJournal) []string 
 	seen := make(map[string]bool)
 	var commodities []string
 
-	if resolved.Primary != nil {
-		for _, c := range CollectCommodities(resolved.Primary) {
-			if !seen[c] {
-				seen[c] = true
-				commodities = append(commodities, c)
-			}
-		}
-	}
-
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for _, c := range CollectCommodities(journal) {
 			if !seen[c] {
 				seen[c] = true
@@ -255,16 +230,7 @@ func collectTagsFromResolved(resolved *include.ResolvedJournal) []string {
 	seen := make(map[string]bool)
 	var tags []string
 
-	if resolved.Primary != nil {
-		for _, t := range CollectTags(resolved.Primary) {
-			if !seen[t] {
-				seen[t] = true
-				tags = append(tags, t)
-			}
-		}
-	}
-
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for _, t := range CollectTags(journal) {
 			if !seen[t] {
 				seen[t] = true
@@ -297,8 +263,7 @@ func collectTagValuesFromResolved(resolved *include.ResolvedJournal) map[string]
 		}
 	}
 
-	mergeTagValues(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeTagValues(journal)
 	}
 
@@ -321,20 +286,25 @@ func collectDatesFromResolved(resolved *include.ResolvedJournal) []string {
 		}
 	}
 
-	mergeDates(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeDates(journal)
 	}
 
 	return dates
 }
 
-// collectPayeeTemplatesFromResolved collects payee templates from all journals.
-// When the same payee exists in multiple files, the primary file's template wins.
-// Included files are processed in FileOrder, then primary file overwrites conflicts.
+// collectPayeeTemplatesFromResolved collects payee templates across the resolved
+// journal. With occurrences present, transactions are evaluated in textual-inline
+// order so an include-site conflict resolves to the last inline occurrence. The
+// legacy fallback preserves the historical FileOrder-then-Primary precedence for
+// consumers that still mutate the projection directly.
 func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
-	result := make(map[string][]PostingTemplate)
+	if len(resolved.Occurrences) > 0 {
+		combined := &ast.Journal{Transactions: resolved.AllTransactions()}
+		return CollectPayeeTemplates(combined)
+	}
 
+	result := make(map[string][]PostingTemplate)
 	mergeTemplates := func(journal *ast.Journal) {
 		if journal == nil {
 			return
@@ -364,8 +334,7 @@ func collectAccountCountsFromResolved(resolved *include.ResolvedJournal) map[str
 			counts[k] += v
 		}
 	}
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 	return counts
@@ -381,8 +350,7 @@ func collectPayeeCountsFromResolved(resolved *include.ResolvedJournal) map[strin
 			counts[k] += v
 		}
 	}
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 	return counts
@@ -398,8 +366,7 @@ func collectDescriptionCountsFromResolved(resolved *include.ResolvedJournal) map
 			counts[k] += v
 		}
 	}
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 	return counts
@@ -415,8 +382,7 @@ func collectCommodityCountsFromResolved(resolved *include.ResolvedJournal) map[s
 			counts[k] += v
 		}
 	}
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 	return counts
@@ -432,8 +398,7 @@ func collectTagCountsFromResolved(resolved *include.ResolvedJournal) map[string]
 			counts[k] += v
 		}
 	}
-	mergeCounts(resolved.Primary)
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		mergeCounts(journal)
 	}
 	return counts
@@ -441,12 +406,7 @@ func collectTagCountsFromResolved(resolved *include.ResolvedJournal) map[string]
 
 func collectDeclaredAccountsFromResolved(resolved *include.ResolvedJournal) map[string]bool {
 	declared := make(map[string]bool)
-	if resolved.Primary != nil {
-		for k := range collectDeclaredAccounts(resolved.Primary) {
-			declared[k] = true
-		}
-	}
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for k := range collectDeclaredAccounts(journal) {
 			declared[k] = true
 		}
@@ -550,12 +510,7 @@ func collectDeclaredCommodities(journal *ast.Journal) map[string]bool {
 
 func collectDeclaredCommoditiesFromResolved(resolved *include.ResolvedJournal) map[string]bool {
 	declared := make(map[string]bool)
-	if resolved.Primary != nil {
-		for k := range collectDeclaredCommodities(resolved.Primary) {
-			declared[k] = true
-		}
-	}
-	for _, journal := range resolved.Files {
+	for _, journal := range resolved.SourceJournals() {
 		for k := range collectDeclaredCommodities(journal) {
 			declared[k] = true
 		}

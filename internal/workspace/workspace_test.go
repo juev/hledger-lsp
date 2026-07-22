@@ -1110,7 +1110,7 @@ func TestWorkspace_AddMissingReachable_CRLF(t *testing.T) {
 	// Now add include directive — this triggers refreshIncludeTreeLocked → addMissingReachableLocked
 	ws.UpdateFile(mainPath, "include child.journal\n\n2024-01-01 Main\n    expenses:food  $10\n    assets:cash\n")
 
-	resolved := ws.GetResolved()
+	resolved := ws.GetResolvedForFile(mainPath)
 	require.NotNil(t, resolved)
 
 	allTx := resolved.AllTransactions()
@@ -1156,4 +1156,116 @@ fields date,description,amount
 	snapshot := ws.IndexSnapshot()
 	assert.Contains(t, snapshot.Accounts.All, "expenses:food")
 	assert.Contains(t, snapshot.Accounts.All, "assets:cash")
+}
+
+// TestWorkspace_UpdateFile_OccurrencesPreserved verifies that after UpdateFile
+// the resolved journal still has occurrence data (not just the legacy projection).
+func TestWorkspace_UpdateFile_OccurrencesPreserved(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	childContent := "2024-01-01 child tx\n    expenses:child  $10\n    assets:cash\n"
+	rootContent := "include child.journal\n\n2024-01-02 root tx\n    expenses:food  $20\n    assets:cash\n"
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	rootPath := filepath.Join(tmpDir, "root.journal")
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0644))
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+	require.NoError(t, ws.Initialize())
+
+	// Edit root without changing includes
+	ws.UpdateFile(rootPath, "include child.journal\n\n2024-01-02 root tx edited\n    expenses:food  $25\n    assets:cash\n")
+
+	resolved := ws.GetResolvedForFile(rootPath)
+	require.NotNil(t, resolved)
+	assert.NotEmpty(t, resolved.Occurrences,
+		"UpdateFile must preserve occurrences in the resolved journal")
+	assert.NotEmpty(t, resolved.Items,
+		"UpdateFile must preserve items in the resolved journal")
+}
+
+// TestWorkspace_UpdateFile_ReloadsAllOwners verifies that editing a child file
+// included by two roots updates both roots.
+func TestWorkspace_UpdateFile_ReloadsAllOwners(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	childContent := "2024-01-01 child tx\n    expenses:child  $10\n    assets:cash\n"
+	root1Content := "include child.journal\n\n2024-01-02 root1 tx\n    expenses:food  $20\n    assets:cash\n"
+	root2Content := "include child.journal\n\n2024-01-03 root2 tx\n    expenses:rent  $30\n    assets:bank\n"
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	root1Path := filepath.Join(tmpDir, "root1.journal")
+	root2Path := filepath.Join(tmpDir, "root2.journal")
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+	require.NoError(t, os.WriteFile(root1Path, []byte(root1Content), 0644))
+	require.NoError(t, os.WriteFile(root2Path, []byte(root2Content), 0644))
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+	require.NoError(t, ws.Initialize())
+
+	// Edit child — both roots must be reloaded
+	ws.UpdateFile(childPath, "2024-01-01 child tx edited\n    expenses:child  $99\n    assets:cash\n")
+
+	resolved1 := ws.GetResolvedForFile(root1Path)
+	require.NotNil(t, resolved1)
+	allTx1 := resolved1.AllTransactions()
+	found := false
+	for _, tx := range allTx1 {
+		if tx.Description == "child tx edited" {
+			found = true
+		}
+	}
+	assert.True(t, found, "root1 must see edited child transaction")
+
+	resolved2 := ws.GetResolvedForFile(root2Path)
+	require.NotNil(t, resolved2)
+	allTx2 := resolved2.AllTransactions()
+	found = false
+	for _, tx := range allTx2 {
+		if tx.Description == "child tx edited" {
+			found = true
+		}
+	}
+	assert.True(t, found, "root2 must see edited child transaction")
+}
+
+// TestWorkspace_GetResolvedForFile_RepeatedInclude verifies that a file included
+// twice in one root has two occurrences in the resolved journal.
+func TestWorkspace_GetResolvedForFile_RepeatedInclude(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+
+	childContent := "2024-01-01 child tx\n    expenses:child  $10\n    assets:cash\n"
+	rootContent := "include child.journal\n\ninclude child.journal\n\n2024-01-02 root tx\n    expenses:food  $20\n    assets:cash\n"
+
+	childPath := filepath.Join(tmpDir, "child.journal")
+	rootPath := filepath.Join(tmpDir, "root.journal")
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0644))
+	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0644))
+
+	loader := include.NewLoader()
+	ws := NewWorkspace(tmpDir, loader)
+	require.NoError(t, ws.Initialize())
+
+	resolved := ws.GetResolvedForFile(rootPath)
+	require.NotNil(t, resolved)
+
+	// child.journal included twice → 2 child occurrences + 1 root = 3 total
+	assert.Len(t, resolved.Occurrences, 3,
+		"repeated include must produce two child occurrences")
+
+	// AllTransactions counts each occurrence
+	allTx := resolved.AllTransactions()
+	assert.Len(t, allTx, 3, "child tx counted twice + root tx once")
 }
