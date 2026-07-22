@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -50,6 +51,7 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 	for k := range external.Accounts {
 		declaredAccounts[k] = true
 	}
+	sortedDeclared := sortedKeys(declaredAccounts)
 
 	declaredCommodities := collectDeclaredCommodities(journal)
 	for k := range external.Commodities {
@@ -65,8 +67,8 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 			result.Diagnostics = append(result.Diagnostics, diag)
 		}
 
-		if len(declaredAccounts) > 0 {
-			undeclaredDiags := checkUndeclaredAccounts(tx, declaredAccounts)
+		if len(sortedDeclared) > 0 {
+			undeclaredDiags := checkUndeclaredAccounts(tx, sortedDeclared)
 			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
 		}
 
@@ -123,6 +125,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.PayeeAccountPairUsage = collectPayeeAccountPairUsageFromResolved(resolved)
 
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
+	sortedDeclared := sortedKeys(declaredAccounts)
 	declaredCommodities := collectDeclaredCommoditiesFromResolved(resolved)
 
 	// Generate diagnostics for all occurrences, then dedup identical ones
@@ -142,8 +145,8 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		if !balanceResult.Balanced {
 			txDiags = append(txDiags, a.createBalanceDiagnostic(&tx, balanceResult))
 		}
-		if len(declaredAccounts) > 0 {
-			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, declaredAccounts)...)
+		if len(sortedDeclared) > 0 {
+			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, sortedDeclared)...)
 		}
 		if len(declaredCommodities) > 0 {
 			txDiags = append(txDiags, checkUndeclaredCommodities(&tx, declaredCommodities)...)
@@ -433,7 +436,16 @@ var predefinedAccountTypes = map[string]bool{
 	"income":      true,
 }
 
-func isAccountDeclared(accountName string, declared map[string]bool) bool {
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func isAccountDeclared(accountName string, sortedDeclared []string) bool {
 	lowerName := strings.ToLower(accountName)
 	colonIdx := strings.Index(lowerName, ":")
 	var prefix string
@@ -446,21 +458,32 @@ func isAccountDeclared(accountName string, declared map[string]bool) bool {
 		return true
 	}
 
-	if declared[accountName] {
+	// Exact match via binary search
+	i := sort.SearchStrings(sortedDeclared, accountName)
+	if i < len(sortedDeclared) && sortedDeclared[i] == accountName {
 		return true
 	}
-	for declaredAccount := range declared {
-		if strings.HasPrefix(accountName, declaredAccount+":") {
+
+	// Prefix match: check each ancestor (e.g. "a:b:c" → "a:b", "a")
+	name := accountName
+	for {
+		idx := strings.LastIndex(name, ":")
+		if idx == -1 {
+			break
+		}
+		name = name[:idx]
+		i := sort.SearchStrings(sortedDeclared, name)
+		if i < len(sortedDeclared) && sortedDeclared[i] == name {
 			return true
 		}
 	}
 	return false
 }
 
-func checkUndeclaredAccounts(tx *ast.Transaction, declared map[string]bool) []Diagnostic {
+func checkUndeclaredAccounts(tx *ast.Transaction, sortedDeclared []string) []Diagnostic {
 	var diags []Diagnostic
 	for _, posting := range tx.Postings {
-		if !isAccountDeclared(posting.Account.GetResolvedName(), declared) {
+		if !isAccountDeclared(posting.Account.GetResolvedName(), sortedDeclared) {
 			diags = append(diags, Diagnostic{
 				Range:    posting.Account.Range,
 				Severity: SeverityWarning,

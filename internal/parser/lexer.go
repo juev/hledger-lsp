@@ -568,12 +568,7 @@ func (l *Lexer) scanDirectiveOrAccount() Token {
 		l.column = tempCol
 	}
 
-	// If not a directive, continue scanning with digits for potential account
-	for l.pos < len(l.input) && l.isDigit(l.peek()) {
-		l.advance()
-	}
-
-	// Reset and check if it looks like account
+	// Reset to start so looksLikeAccount/scanAccount see the full token
 	l.pos = start
 	l.column = startPos.Column
 

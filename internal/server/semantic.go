@@ -86,7 +86,7 @@ func GetSemanticTokensCapabilities() *SemanticTokensServerCapabilities {
 	return &SemanticTokensServerCapabilities{
 		Legend: GetSemanticTokensLegend(),
 		Range:  true,
-		Full:   &SemanticTokensFullOptions{Delta: true},
+		Full:   &SemanticTokensFullOptions{Delta: false},
 	}
 }
 
@@ -129,15 +129,10 @@ type cachedSemanticTokens struct {
 	data     []uint32
 }
 
-var tokenCache = &semanticTokensCache{
-	cache: make(map[protocol.DocumentURI]*cachedSemanticTokens),
-}
-
-func (c *semanticTokensCache) get(uri protocol.DocumentURI) (*cachedSemanticTokens, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	cached, ok := c.cache[uri]
-	return cached, ok
+func newSemanticTokensCache() *semanticTokensCache {
+	return &semanticTokensCache{
+		cache: make(map[protocol.DocumentURI]*cachedSemanticTokens),
+	}
 }
 
 func (c *semanticTokensCache) set(uri protocol.DocumentURI, tokens []semanticToken, data []uint32) string {
@@ -171,7 +166,7 @@ func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.Semant
 
 	tokens := tokenizeDoc(params.TextDocument.URI, doc)
 	data := encodeTokens(tokens)
-	resultID := tokenCache.set(params.TextDocument.URI, tokens, data)
+	resultID := s.tokenCache.set(params.TextDocument.URI, tokens, data)
 
 	return &protocol.SemanticTokens{
 		ResultID: resultID,
@@ -195,37 +190,6 @@ func (s *Server) SemanticTokensRange(ctx context.Context, params *protocol.Seman
 
 	return &protocol.SemanticTokens{
 		Data: data,
-	}, nil
-}
-
-func (s *Server) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {
-	doc, ok := s.GetDocument(params.TextDocument.URI)
-	if !ok {
-		return &protocol.SemanticTokens{Data: []uint32{}}, nil
-	}
-
-	if doc == "" {
-		return &protocol.SemanticTokens{Data: []uint32{}}, nil
-	}
-
-	tokens := tokenizeDoc(params.TextDocument.URI, doc)
-	newData := encodeTokens(tokens)
-
-	cached, ok := tokenCache.get(params.TextDocument.URI)
-	if !ok || cached.resultID != params.PreviousResultID {
-		resultID := tokenCache.set(params.TextDocument.URI, tokens, newData)
-		return &protocol.SemanticTokens{
-			ResultID: resultID,
-			Data:     newData,
-		}, nil
-	}
-
-	edits := computeSemanticTokensEdits(cached.data, newData)
-	resultID := tokenCache.set(params.TextDocument.URI, tokens, newData)
-
-	return &protocol.SemanticTokensDelta{
-		ResultID: resultID,
-		Edits:    edits,
 	}, nil
 }
 
@@ -280,29 +244,6 @@ func filterTokensByRange(tokens []semanticToken, r protocol.Range) []semanticTok
 		}
 	}
 	return filtered
-}
-
-func computeSemanticTokensEdits(oldData, newData []uint32) []protocol.SemanticTokensEdit {
-	if len(oldData) == len(newData) {
-		same := true
-		for i := range oldData {
-			if oldData[i] != newData[i] {
-				same = false
-				break
-			}
-		}
-		if same {
-			return []protocol.SemanticTokensEdit{}
-		}
-	}
-
-	return []protocol.SemanticTokensEdit{
-		{
-			Start:       0,
-			DeleteCount: uint32(len(oldData)),
-			Data:        newData,
-		},
-	}
 }
 
 type semanticToken struct {

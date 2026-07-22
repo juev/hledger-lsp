@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"go.lsp.dev/protocol"
 
@@ -24,6 +26,10 @@ func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRena
 }
 
 func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
+	if err := validateAccountName(params.NewName); err != nil {
+		return nil, err
+	}
+
 	doc, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
@@ -54,4 +60,20 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	return &protocol.WorkspaceEdit{
 		Changes: changes,
 	}, nil
+}
+
+func validateAccountName(name string) error {
+	if name == "" {
+		return fmt.Errorf("account name must not be empty")
+	}
+	if name != strings.TrimSpace(name) {
+		return fmt.Errorf("account name must not have leading or trailing whitespace")
+	}
+	for _, r := range name {
+		switch r {
+		case ';', '\n', '\r':
+			return fmt.Errorf("account name contains illegal character %q", r)
+		}
+	}
+	return nil
 }

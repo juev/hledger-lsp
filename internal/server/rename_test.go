@@ -202,3 +202,37 @@ func TestRename_IncludesDeclaration(t *testing.T) {
 	edits := changes[uri]
 	assert.Len(t, edits, 2)
 }
+
+func TestRename_InvalidNewName(t *testing.T) {
+	srv := NewServer()
+	content := `2024-01-15 test
+    expenses:food  $50
+    assets:cash`
+	uri := protocol.DocumentURI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	tests := []struct {
+		name    string
+		newName string
+	}{
+		{"empty", ""},
+		{"semicolon", "expenses;food"},
+		{"newline", "expenses\nfood"},
+		{"leading space", " expenses:food"},
+		{"trailing space", "expenses:food "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := &protocol.RenameParams{
+				TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+					Position:     protocol.Position{Line: 1, Character: 10},
+				},
+				NewName: tt.newName,
+			}
+			_, err := srv.Rename(context.Background(), params)
+			assert.Error(t, err)
+		})
+	}
+}

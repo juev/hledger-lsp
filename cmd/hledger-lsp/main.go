@@ -277,7 +277,11 @@ func (d *serverDispatcher) SemanticTokensFull(ctx context.Context, params *proto
 }
 
 func (d *serverDispatcher) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {
-	return d.srv.SemanticTokensFullDelta(ctx, params)
+	// Delta is not advertised (Delta: false); clients should not call this.
+	// Fall back to a full response for safety.
+	return d.srv.SemanticTokensFull(ctx, &protocol.SemanticTokensParams{
+		TextDocument: params.TextDocument,
+	})
 }
 
 func (d *serverDispatcher) SemanticTokensRange(ctx context.Context, params *protocol.SemanticTokensRangeParams) (*protocol.SemanticTokens, error) {
