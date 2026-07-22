@@ -143,10 +143,7 @@ func (s *Server) formatPreviousPostingLine(doc string, uri protocol.DocumentURI,
 	}
 
 	journal, _ := parser.Parse(doc)
-	var commodityFormats map[string]formatter.CommodityFormat
-	if s.workspace != nil {
-		commodityFormats = s.workspace.GetCommodityFormatsForFile(uriToPath(uri))
-	}
+	commodityFormats := s.commodityFormatsForDocument(uri)
 
 	settings := s.getSettings()
 	opts := formatterOptionsFrom(settings.Formatting)
@@ -238,10 +235,8 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 
 	if settings.Formatting.AmountAlignmentMode == "decimal" {
 		commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
-		if s.workspace != nil {
-			if wf := s.workspace.GetCommodityFormatsForFile(uriToPath(uri)); wf != nil {
-				commodityFormats = wf
-			}
+		if wf := s.commodityFormatsForDocument(uri); wf != nil {
+			commodityFormats = wf
 		}
 		decimalCol := formatter.CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, alignCol, settings.Formatting.AmountAlignmentTarget)
 		if decimalCol > 0 {

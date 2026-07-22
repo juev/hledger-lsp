@@ -61,14 +61,17 @@ workspace.Initialize()
   └─ buildIndexFromResolved()   → builds aggregate workspace index
 
 ResolvedJournal:
-  ├── Primary        root journal AST
-  ├── Files[path]    included file ASTs
-  └── FileOrder      stable iteration order
+  ├── Occurrences[]     per-include-site ASTs (repeated/diamond OK)
+  ├── Items[]           textual-inline stream (parent→child→parent)
+  ├── ByPath            exact source path → occurrence IDs
+  ├── ByCanonical       canonical (symlink-resolved) path → IDs
+  └── Errors[]          load errors with source provenance
 ```
 
-`AllTransactions()` returns transactions from Primary + all Files in
-FileOrder. This is what hover and completion use for balances, posting
-counts, and account suggestions.
+`AllTransactions()` walks `Items` in textual-inline order, returning
+transactions from every occurrence. Repeated includes are counted per
+occurrence (hledger 1.52.1 parity). Navigation (references, definition)
+deduplicates by unique `(URI, range)` source location.
 
 ## Document Updates
 
@@ -129,9 +132,12 @@ read path causes broken parsing on Windows.
 
 | Situation | Behavior |
 |---|---|
-| Circular includes | Detected via visited set, reported as diagnostic, loading continues |
+| Self-include | Silently ignored (hledger 1.52.1 parity) |
+| Ancestor cycle | Active canonical stack detects back-edge, reported as diagnostic |
+| Diamond include | Two occurrences produced (no dedup, hledger 1.52.1 parity) |
 | Missing include file | Reported as error diagnostic, other files still loaded |
-| Include depth > 50 | Stops recursion, reports error |
+| Include depth > 50 | Edge-based depth counting, reports `ErrorDepthExceeded` |
 | File > 10 MB | Skipped, reported as error |
 | Parse errors in include | File still added to resolved, errors shown as diagnostics |
 | No journal in folder | `resolved = nil`, falls back to per-document mode |
+| Multi-owner reload | Edit of shared source reloads all owning roots atomically |

@@ -261,6 +261,20 @@ func findPayeeDefinitionResolved(payee string, resolved *include.ResolvedJournal
 func allJournalsWithPaths(resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) map[string]*ast.Journal {
 	result := make(map[string]*ast.Journal)
 
+	if resolved != nil && len(resolved.Occurrences) > 0 {
+		// Occurrence-aware: first occurrence wins for each path since source
+		// locations are identical across occurrences of the same file.
+		for i := range resolved.Occurrences {
+			occ := &resolved.Occurrences[i]
+			if occ.Journal != nil {
+				if _, exists := result[occ.Path]; !exists {
+					result[occ.Path] = occ.Journal
+				}
+			}
+		}
+		return result
+	}
+
 	if resolved != nil {
 		for path, journal := range resolved.Files {
 			result[path] = journal

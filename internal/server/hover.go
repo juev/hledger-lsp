@@ -14,6 +14,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
@@ -58,19 +59,29 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 
 	var balances analyzer.AccountBalances
 	var allTransactions []ast.Transaction
-	var directives []ast.Directive
+	var commodityFormats map[string]formatter.CommodityFormat
+	var defSymbol string
 
 	if resolved := s.getWorkspaceResolved(params.TextDocument.URI); resolved != nil {
 		allTransactions = resolved.AllTransactions()
-		directives = resolved.AllDirectives()
 		balances = analyzer.CalculateAccountBalancesFromTransactions(allTransactions)
+		if len(resolved.Occurrences) > 0 {
+			occID := firstOccurrenceIDForPath(resolved, uriToPath(params.TextDocument.URI))
+			commodityFormats = resolved.FormatsAt(occID, element.rng.Start.Offset)
+			defSymbol = resolved.DefaultCommodityAt(occID, element.rng.Start.Offset)
+		} else {
+			directives := resolved.AllDirectives()
+			commodityFormats = formatter.ExtractCommodityFormats(directives)
+			defSymbol = defaultCommoditySymbol(directives)
+		}
 	} else {
 		allTransactions = journal.Transactions
-		directives = journal.Directives
 		balances = analyzer.CalculateAccountBalances(journal)
+		commodityFormats = formatter.ExtractCommodityFormats(journal.Directives)
+		defSymbol = defaultCommoditySymbol(journal.Directives)
 	}
 
-	content := buildHoverContentWithTransactions(element, balances, allTransactions, directives)
+	content := buildHoverContentWithTransactions(element, balances, allTransactions, commodityFormats, defSymbol)
 	if content == "" {
 		return nil, nil
 	}
@@ -82,6 +93,17 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		},
 		Range: astRangeToProtocol(element.rng),
 	}, nil
+}
+
+// firstOccurrenceIDForPath returns the ID of the first occurrence matching path,
+// or 0 if not found.
+func firstOccurrenceIDForPath(resolved *include.ResolvedJournal, path string) include.OccurrenceID {
+	for i := range resolved.Occurrences {
+		if resolved.Occurrences[i].Path == path {
+			return resolved.Occurrences[i].ID
+		}
+	}
+	return 0
 }
 
 func positionInRange(pos protocol.Position, rng ast.Range) bool {
@@ -203,13 +225,11 @@ func payeeRange(tx *ast.Transaction, payee string) ast.Range {
 	}
 }
 
-func buildHoverContentWithTransactions(element *hoverElement, balances analyzer.AccountBalances, transactions []ast.Transaction, directives []ast.Directive) string {
+func buildHoverContentWithTransactions(element *hoverElement, balances analyzer.AccountBalances, transactions []ast.Transaction, commodityFormats map[string]formatter.CommodityFormat, defSymbol string) string {
 	switch element.context {
 	case HoverAccount:
-		return buildAccountHoverWithTransactions(element.account.Name, balances, transactions, directives)
+		return buildAccountHoverWithTransactions(element.account.Name, balances, transactions, commodityFormats, defSymbol)
 	case HoverAmount:
-		commodityFormats := formatter.ExtractCommodityFormats(directives)
-		defSymbol := defaultCommoditySymbol(directives)
 		return buildAmountHover(element.amount, element.cost, commodityFormats, defSymbol)
 	case HoverPayee:
 		return buildPayeeHoverWithTransactions(element.payee, transactions)
@@ -224,15 +244,15 @@ func buildHoverContentWithTransactions(element *hoverElement, balances analyzer.
 	}
 }
 
-func buildAccountHoverWithTransactions(accountName string, balances analyzer.AccountBalances, transactions []ast.Transaction, directives []ast.Directive) string {
+func buildAccountHoverWithTransactions(accountName string, balances analyzer.AccountBalances, transactions []ast.Transaction, commodityFormats map[string]formatter.CommodityFormat, defSymbol string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "**Account:** `%s`\n\n", accountName)
 
 	if commodityBalances, ok := balances[accountName]; ok && len(commodityBalances) > 0 {
-		commodityFormats := formatter.ExtractCommodityFormats(directives)
-		defSymbol := defaultCommoditySymbol(directives)
-		enrichCommodityFormatsFromTransactions(commodityFormats, transactions)
+		displayFormats := make(map[string]formatter.CommodityFormat, len(commodityFormats))
+		maps.Copy(displayFormats, commodityFormats)
+		enrichCommodityFormatsFromTransactions(displayFormats, transactions)
 
 		displayBalances := make(map[string]decimal.Decimal, len(commodityBalances))
 		maps.Copy(displayBalances, commodityBalances)
@@ -254,7 +274,7 @@ func buildAccountHoverWithTransactions(accountName string, balances analyzer.Acc
 
 		for _, c := range commodities {
 			bal := displayBalances[c]
-			fmt.Fprintf(&sb, "- %s\n", formatter.FormatBalance(bal, c, commodityFormats))
+			fmt.Fprintf(&sb, "- %s\n", formatter.FormatBalance(bal, c, displayFormats))
 		}
 		sb.WriteString("\n")
 	}

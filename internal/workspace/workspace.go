@@ -45,7 +45,7 @@ type Workspace struct {
 	mu           sync.RWMutex
 	rootURI      string
 	trees        map[string]*IncludeTree // rootPath → tree
-	fileTree     map[string]string       // filePath → rootPath
+	fileTree     map[string][]string     // filePath → sorted owning root paths
 	includeGraph map[string][]string
 	reverseGraph map[string][]string
 	loader       *include.Loader
@@ -58,7 +58,7 @@ func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
 		rootURI:      rootURI,
 		loader:       loader,
 		trees:        make(map[string]*IncludeTree),
-		fileTree:     make(map[string]string),
+		fileTree:     make(map[string][]string),
 		includeGraph: make(map[string][]string),
 		reverseGraph: make(map[string][]string),
 		index:        NewWorkspaceIndex(),
@@ -71,7 +71,7 @@ func (w *Workspace) Initialize() error {
 
 	w.parseErrors = nil
 	w.trees = make(map[string]*IncludeTree)
-	w.fileTree = make(map[string]string)
+	w.fileTree = make(map[string][]string)
 	w.index = NewWorkspaceIndex()
 	w.includeGraph = make(map[string][]string)
 	w.reverseGraph = make(map[string][]string)
@@ -89,10 +89,10 @@ func (w *Workspace) Initialize() error {
 			LoadErrors: errs,
 		}
 		w.trees[rootPath] = tree
-		w.fileTree[rootPath] = rootPath
+		w.addOwnerLocked(rootPath, rootPath)
 		if resolved != nil {
 			for path := range resolved.Files {
-				w.fileTree[path] = rootPath
+				w.addOwnerLocked(path, rootPath)
 			}
 		}
 	}
@@ -245,12 +245,13 @@ func (w *Workspace) GetResolved() *include.ResolvedJournal {
 }
 
 // GetResolvedForFile returns the resolved journal for the include tree
-// that contains the given file path.
+// that contains the given file path. When multiple roots own the file,
+// the lexicographically smallest root is selected (deterministic policy).
 func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	rootPath, ok := w.fileTree[path]
-	if !ok {
+	rootPath := w.primaryRootLocked(path)
+	if rootPath == "" {
 		return nil
 	}
 	tree, ok := w.trees[rootPath]
@@ -264,7 +265,56 @@ func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 func (w *Workspace) RootForFile(path string) string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.fileTree[path]
+	return w.primaryRootLocked(path)
+}
+
+// primaryRootLocked returns the lexicographically smallest owning root for path.
+// Caller must hold at least a read lock.
+func (w *Workspace) primaryRootLocked(path string) string {
+	roots := w.fileTree[path]
+	if len(roots) == 0 {
+		return ""
+	}
+	return roots[0]
+}
+
+// addOwnerLocked adds root to the sorted owner list for path.
+// Caller must hold the write lock.
+func (w *Workspace) addOwnerLocked(path, root string) {
+	roots := w.fileTree[path]
+	for _, r := range roots {
+		if r == root {
+			return
+		}
+	}
+	w.fileTree[path] = append(roots, root)
+	sort.Strings(w.fileTree[path])
+}
+
+// removeOwnerLocked removes root from the owner list for path.
+// Caller must hold the write lock.
+func (w *Workspace) removeOwnerLocked(path, root string) {
+	roots := w.fileTree[path]
+	for i, r := range roots {
+		if r == root {
+			w.fileTree[path] = append(roots[:i], roots[i+1:]...)
+			break
+		}
+	}
+	if len(w.fileTree[path]) == 0 {
+		delete(w.fileTree, path)
+	}
+}
+
+// hasOwnerLocked reports whether root is in the owner list for path.
+// Caller must hold at least a read lock.
+func (w *Workspace) hasOwnerLocked(path, root string) bool {
+	for _, r := range w.fileTree[path] {
+		if r == root {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Workspace) sortedTrees() []*IncludeTree {
@@ -303,33 +353,65 @@ func (w *Workspace) UpdateFile(path, content string) {
 		return
 	}
 
-	rootPath := w.fileTree[path]
-	tree := w.trees[rootPath]
-	if tree == nil {
-		return
-	}
-
 	oldIndex := w.index.FileIndex(path)
 	oldIncludes := []string(nil)
 	if oldIndex != nil {
 		oldIncludes = append([]string(nil), oldIndex.Includes...)
 	}
 
-	fileIndex, journal, _ := BuildFileIndexFromContent(path, content)
+	fileIndex, _, _ := BuildFileIndexFromContent(path, content)
 	w.index.SetFileIndex(path, fileIndex)
 	w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
-	w.updateResolvedForTreeLocked(tree, path, journal)
-	tree.clearCaches()
 
-	if !sameStringSlice(oldIncludes, fileIndex.Includes) {
-		w.refreshTreeLocked(tree)
+	// Reload all owning roots with the edited content as an overlay so the
+	// loader produces fresh occurrences instead of mutating the legacy projection.
+	owners := append([]string(nil), w.fileTree[path]...)
+	w.loader.InvalidateFile(path)
+	for _, rootPath := range owners {
+		tree := w.trees[rootPath]
+		if tree == nil {
+			continue
+		}
+		opts := include.LoadOptions{
+			Overlays: map[string]include.OverlayEntry{
+				path: {SourcePath: path, Content: content},
+			},
+		}
+		resolved, errs := w.loader.LoadWithOptions(rootPath, opts)
+		tree.Resolved = resolved
+		tree.LoadErrors = errs
+		tree.clearCaches()
+		w.syncOwnershipFromResolvedLocked(tree)
+	}
+	w.buildIndexFromResolvedLocked()
+}
+
+// syncOwnershipFromResolvedLocked updates fileTree ownership from the tree's
+// resolved journal occurrences. Paths no longer in the resolved journal lose
+// this tree as an owner. Caller must hold the write lock.
+func (w *Workspace) syncOwnershipFromResolvedLocked(tree *IncludeTree) {
+	if tree.Resolved == nil {
+		return
+	}
+	inResolved := make(map[string]bool)
+	inResolved[tree.RootPath] = true
+	for i := range tree.Resolved.Occurrences {
+		inResolved[tree.Resolved.Occurrences[i].Path] = true
+	}
+	// Remove this tree as owner from paths no longer in the resolved journal.
+	for path := range w.fileTree {
+		if w.hasOwnerLocked(path, tree.RootPath) && !inResolved[path] {
+			w.removeOwnerLocked(path, tree.RootPath)
+		}
+	}
+	// Add this tree as owner for all paths in the resolved journal.
+	for path := range inResolved {
+		w.addOwnerLocked(path, tree.RootPath)
 	}
 }
 
 func (w *Workspace) buildIndexFromResolvedLocked() {
-	if w.index == nil {
-		w.index = NewWorkspaceIndex()
-	}
+	w.index = NewWorkspaceIndex()
 	for _, tree := range w.trees {
 		if tree.Resolved == nil || tree.Resolved.Primary == nil {
 			continue
@@ -344,23 +426,6 @@ func (w *Workspace) buildIndexFromResolvedLocked() {
 	}
 }
 
-func (w *Workspace) updateResolvedForTreeLocked(tree *IncludeTree, path string, journal *ast.Journal) {
-	if tree.Resolved == nil {
-		tree.Resolved = include.NewResolvedJournal(nil)
-	}
-	if path == tree.RootPath {
-		tree.Resolved.Primary = journal
-		return
-	}
-	if journal == nil {
-		delete(tree.Resolved.Files, path)
-		tree.Resolved.FileOrder = removeString(tree.Resolved.FileOrder, path)
-		return
-	}
-	tree.Resolved.Files[path] = journal
-	tree.Resolved.FileOrder = addString(tree.Resolved.FileOrder, path)
-}
-
 func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newIncludes []string) {
 	if len(oldIncludes) > 0 {
 		for _, inc := range oldIncludes {
@@ -373,124 +438,8 @@ func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newInclud
 	}
 }
 
-func (w *Workspace) refreshTreeLocked(tree *IncludeTree) {
-	if tree.RootPath == "" || w.index == nil {
-		return
-	}
-
-	for {
-		reachable := w.computeReachableFromLocked(tree.RootPath)
-		w.removeUnreachableFromTreeLocked(tree, reachable)
-		added := w.addMissingReachableToTreeLocked(tree, reachable)
-		if !added {
-			return
-		}
-	}
-}
-
-func (w *Workspace) computeReachableFromLocked(rootPath string) map[string]bool {
-	reachable := make(map[string]bool)
-	if rootPath == "" {
-		return reachable
-	}
-	queue := []string{rootPath}
-	for len(queue) > 0 {
-		path := queue[0]
-		queue = queue[1:]
-		if reachable[path] {
-			continue
-		}
-		reachable[path] = true
-		for _, inc := range w.includeGraph[path] {
-			if !reachable[inc] {
-				queue = append(queue, inc)
-			}
-		}
-	}
-	return reachable
-}
-
-func (w *Workspace) removeUnreachableFromTreeLocked(tree *IncludeTree, reachable map[string]bool) {
-	// Only remove files that belong to this tree
-	var toRemove []string
-	for path, root := range w.fileTree {
-		if root == tree.RootPath && !reachable[path] && path != tree.RootPath {
-			toRemove = append(toRemove, path)
-		}
-	}
-	for _, path := range toRemove {
-		oldIndex := w.index.FileIndex(path)
-		if oldIndex != nil {
-			w.updateIncludeEdgesLocked(path, oldIndex.Includes, nil)
-		}
-		w.index.RemoveFile(path)
-		delete(w.fileTree, path)
-		if tree.Resolved != nil {
-			delete(tree.Resolved.Files, path)
-			tree.Resolved.FileOrder = removeString(tree.Resolved.FileOrder, path)
-		}
-	}
-}
-
-func (w *Workspace) addMissingReachableToTreeLocked(tree *IncludeTree, reachable map[string]bool) bool {
-	added := false
-	for path := range reachable {
-		// Already in this tree
-		if w.fileTree[path] == tree.RootPath {
-			continue
-		}
-
-		// File is in another tree — move it
-		if oldRoot, ok := w.fileTree[path]; ok && oldRoot != tree.RootPath {
-			oldTree := w.trees[oldRoot]
-			if oldTree != nil {
-				// Get journal from old tree to add to new tree
-				var journal *ast.Journal
-				if path == oldTree.RootPath && oldTree.Resolved != nil {
-					journal = oldTree.Resolved.Primary
-				} else if oldTree.Resolved != nil {
-					journal = oldTree.Resolved.Files[path]
-				}
-				// Remove from old tree
-				if oldTree.Resolved != nil {
-					delete(oldTree.Resolved.Files, path)
-					oldTree.Resolved.FileOrder = removeString(oldTree.Resolved.FileOrder, path)
-					oldTree.clearCaches()
-				}
-				// If old tree was a standalone (only root, no files), remove it
-				if oldRoot == path {
-					delete(w.trees, oldRoot)
-				}
-				// Add to new tree
-				if journal != nil {
-					w.updateResolvedForTreeLocked(tree, path, journal)
-				}
-			}
-			w.fileTree[path] = tree.RootPath
-			added = true
-			continue
-		}
-
-		// File not in any tree — load from disk
-		content, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		fileIndex, journal, _ := BuildFileIndexFromContent(path, normalizeLineEndings(string(content)))
-		w.index.SetFileIndex(path, fileIndex)
-		w.updateIncludeEdgesLocked(path, nil, fileIndex.Includes)
-		w.updateResolvedForTreeLocked(tree, path, journal)
-		w.fileTree[path] = tree.RootPath
-		added = true
-	}
-	if added {
-		tree.clearCaches()
-	}
-	return added
-}
-
 func (w *Workspace) isWorkspaceFileLocked(path string) bool {
-	if _, ok := w.fileTree[path]; ok {
+	if len(w.fileTree[path]) > 0 {
 		return true
 	}
 	if w.index.FileIndex(path) != nil {
@@ -500,18 +449,6 @@ func (w *Workspace) isWorkspaceFileLocked(path string) bool {
 		return true
 	}
 	return false
-}
-
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func removeString(values []string, target string) []string {
@@ -569,7 +506,7 @@ func (w *Workspace) GetIncludedBy(path string) []string {
 // GetCommodityFormatsForFile returns commodity formats for the tree containing the given file.
 func (w *Workspace) GetCommodityFormatsForFile(path string) map[string]formatter.CommodityFormat {
 	w.mu.RLock()
-	rootPath := w.fileTree[path]
+	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]
 	if tree == nil {
 		w.mu.RUnlock()
@@ -611,7 +548,7 @@ func (w *Workspace) GetCommodityFormats() map[string]formatter.CommodityFormat {
 // GetDeclaredCommoditiesForFile returns declared commodities for the tree containing the given file.
 func (w *Workspace) GetDeclaredCommoditiesForFile(path string) map[string]bool {
 	w.mu.RLock()
-	rootPath := w.fileTree[path]
+	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]
 	if tree == nil {
 		w.mu.RUnlock()
@@ -659,7 +596,7 @@ func (w *Workspace) GetDeclaredCommodities() map[string]bool {
 // GetDeclaredAccountsForFile returns declared accounts for the tree containing the given file.
 func (w *Workspace) GetDeclaredAccountsForFile(path string) map[string]bool {
 	w.mu.RLock()
-	rootPath := w.fileTree[path]
+	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]
 	if tree == nil {
 		w.mu.RUnlock()

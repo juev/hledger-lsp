@@ -49,7 +49,9 @@ internal/
 
 - **Hand-written parser** (not generated) for better error recovery in LSP context
 - **Pure Go validation** (no hledger CLI dependency) for fast response times
-- **Include file handling**: set-based cycle detection, no depth limit
+- **Include file handling**: occurrence-aware resolution following hledger 1.52.1
+  (repeated/diamond includes counted per occurrence, textual-inline order, active
+  canonical ancestor cycle detection, edge-based depth limit, multi-owner reload)
 
 ## hledger Journal Format
 

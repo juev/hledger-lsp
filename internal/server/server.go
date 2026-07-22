@@ -12,6 +12,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/cli"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
@@ -391,11 +392,28 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	}
 
 	if filetype.IsRules(string(docURI)) {
+		path := uriToPath(docURI)
+		if path == "" {
+			return
+		}
+		// Use expansion-based loader for source-mapped diagnostics.
+		diagsByURI := s.analyzeRulesResolved(path, content)
+		// Publish for the current document.
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
 			Version:     version,
-			Diagnostics: s.analyzeRules(content),
+			Diagnostics: diagsByURI[docURI],
 		})
+		// Fan out diagnostics to included child documents.
+		for uri, diags := range diagsByURI {
+			if uri == docURI {
+				continue
+			}
+			_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
+				URI:         uri,
+				Diagnostics: diags,
+			})
+		}
 		return
 	}
 
@@ -494,21 +512,109 @@ func (s *Server) getJournalDoc(uri protocol.DocumentURI) (string, bool) {
 	return s.GetDocument(uri)
 }
 
-func (s *Server) analyzeRules(content string) []protocol.Diagnostic {
-	// Rules diagnostics use their own code set; shouldIncludeDiagnostic does not apply here.
-	rf, parseDiags := rules.Parse(content)
-	ruleDiags := rules.Diagnostics(rf, parseDiags)
-	diags := make([]protocol.Diagnostic, 0, len(ruleDiags))
-	for _, d := range ruleDiags {
-		diags = append(diags, protocol.Diagnostic{
-			Range:    *astRangeToProtocol(d.Range),
-			Severity: rulesDiagSeverity(d.Severity),
+// analyzeRulesResolved produces diagnostics for a rules file using the
+// expansion-based loader. Parse diagnostics from included files are remapped
+// to original source URIs. Load errors (cycle, depth, etc.) are also included.
+func (s *Server) analyzeRulesResolved(path, content string) map[protocol.DocumentURI][]protocol.Diagnostic {
+	result, loadErrors := s.rulesLoader.LoadFromContent(path, content)
+	if result == nil {
+		return nil
+	}
+
+	byURI := make(map[protocol.DocumentURI][]protocol.Diagnostic)
+
+	// Use the loader's already-parsed Primary for semantic diagnostics.
+	// The loader parsed the expanded text and remapped parse errors to
+	// original sources via SourceMap. We use result.Primary for semantic
+	// diagnostics (DUPLICATE_FIELDS, etc.) which are at expanded-text
+	// positions — remap them through the source map.
+	if result.Primary != nil {
+		_, parseDiags := rules.Parse(result.Expanded)
+		semanticDiags := rules.Diagnostics(result.Primary, parseDiags)
+		for _, d := range semanticDiags {
+			// Remap the diagnostic range from expanded-text coordinates
+			// to the original source file.
+			mapped := remapRulesDiagRange(d.Range, result.SourceMap, result.LineOffsets)
+			uri := pathToURI(mapped.Path)
+			if mapped.Path == "" {
+				uri = pathToURI(path)
+			}
+			byURI[uri] = append(byURI[uri], protocol.Diagnostic{
+				Range:    *astRangeToProtocol(mapped.Rng),
+				Severity: rulesDiagSeverity(d.Severity),
+				Source:   "hledger-lsp",
+				Message:  d.Message,
+				Code:     d.Code,
+			})
+		}
+	}
+
+	// Load errors include remapped parse errors (from the loader's source
+	// map) and structural errors (cycle, depth, file not found, etc.).
+	for _, e := range loadErrors {
+		targetPath := e.SourcePath
+		if targetPath == "" {
+			targetPath = path
+		}
+		uri := pathToURI(targetPath)
+		severity := protocol.DiagnosticSeverityError
+		if e.Kind == rules.ErrorNotRules {
+			severity = protocol.DiagnosticSeverityWarning
+		}
+		byURI[uri] = append(byURI[uri], protocol.Diagnostic{
+			Range:    *astRangeToProtocol(e.Range),
+			Severity: severity,
 			Source:   "hledger-lsp",
-			Message:  d.Message,
-			Code:     d.Code,
+			Message:  e.Message,
 		})
 	}
-	return diags
+
+	// Exact-dedup by (range, message, code, severity).
+	for uri, diags := range byURI {
+		byURI[uri] = exactDedupDiagnostics(diags)
+	}
+
+	return byURI
+}
+
+// remapRulesDiagRange maps a diagnostic range from expanded-text coordinates
+// to the original source file using the rules source map.
+func remapRulesDiagRange(rng ast.Range, sourceMap []rules.SourceMapping, lineOffsets map[string][]int) rules.RemappedRange {
+	return rules.RemapRange(rng.Start.Offset, rng.End.Offset, sourceMap, lineOffsets)
+}
+
+// exactDedupDiagnostics removes duplicate diagnostics by exact key
+// (range, message, code, severity).
+func exactDedupDiagnostics(diags []protocol.Diagnostic) []protocol.Diagnostic {
+	if len(diags) <= 1 {
+		return diags
+	}
+	type diagKey struct {
+		line, col       uint32
+		endLine, endCol uint32
+		message         string
+		code            interface{}
+		severity        protocol.DiagnosticSeverity
+	}
+	seen := make(map[diagKey]bool, len(diags))
+	result := make([]protocol.Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		key := diagKey{
+			line:     d.Range.Start.Line,
+			col:      d.Range.Start.Character,
+			endLine:  d.Range.End.Line,
+			endCol:   d.Range.End.Character,
+			message:  d.Message,
+			code:     d.Code,
+			severity: d.Severity,
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, d)
+	}
+	return result
 }
 
 func rulesDiagSeverity(s rules.DiagnosticSeverity) protocol.DiagnosticSeverity {
@@ -614,16 +720,28 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 	}
 
 	journal, _ := parser.Parse(doc)
-
-	var commodityFormats map[string]formatter.CommodityFormat
-	if s.workspace != nil {
-		commodityFormats = s.workspace.GetCommodityFormatsForFile(uriToPath(params.TextDocument.URI))
-	}
+	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()
 	opts := formatterOptionsFrom(settings.Formatting)
 
 	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
+}
+
+// commodityFormatsForDocument returns the commodity formats for the document
+// using context-at-position (FormatsAt) when occurrences are available, falling
+// back to the workspace tree-wide cache otherwise.
+func (s *Server) commodityFormatsForDocument(docURI protocol.DocumentURI) map[string]formatter.CommodityFormat {
+	if resolved := s.getWorkspaceResolved(docURI); resolved != nil && len(resolved.Occurrences) > 0 {
+		occID := firstOccurrenceIDForPath(resolved, uriToPath(docURI))
+		// Use a large offset to collect all directives and merge-forward
+		// commodity declarations for the whole document.
+		return resolved.FormatsAt(occID, 1<<30)
+	}
+	if s.workspace != nil {
+		return s.workspace.GetCommodityFormatsForFile(uriToPath(docURI))
+	}
+	return nil
 }
 
 // formatterOptionsFrom builds formatter.Options from the server's formatting
