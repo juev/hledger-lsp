@@ -330,6 +330,13 @@ func (w *Workspace) sortedTrees() []*IncludeTree {
 	return result
 }
 
+// AllTrees returns all include trees in deterministic order (sorted by root path).
+func (w *Workspace) AllTrees() []*IncludeTree {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.sortedTrees()
+}
+
 func (w *Workspace) IndexSnapshot() IndexSnapshot {
 	w.mu.RLock()
 	defer w.mu.RUnlock()

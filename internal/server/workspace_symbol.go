@@ -13,18 +13,61 @@ import (
 func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
 	query := strings.ToLower(params.Query)
 
+	type symbolKey struct {
+		name      string
+		kind      protocol.SymbolKind
+		uri       protocol.DocumentURI
+		startLine uint32
+		startChar uint32
+	}
+	seen := make(map[symbolKey]bool)
 	var symbols []protocol.SymbolInformation
 
-	s.documents.Range(func(key, value any) bool {
-		uri := key.(protocol.DocumentURI)
-		content := value.(string)
+	addSymbols := func(journal *ast.Journal, docURI protocol.DocumentURI) {
+		for _, sym := range extractSymbols(journal, docURI, query) {
+			key := symbolKey{
+				name:      sym.Name,
+				kind:      sym.Kind,
+				uri:       sym.Location.URI,
+				startLine: sym.Location.Range.Start.Line,
+				startChar: sym.Location.Range.Start.Character,
+			}
+			if !seen[key] {
+				seen[key] = true
+				symbols = append(symbols, sym)
+			}
+		}
+	}
 
+	coveredPaths := make(map[string]bool)
+
+	if s.workspace != nil {
+		for _, tree := range s.workspace.AllTrees() {
+			if tree.Resolved == nil {
+				continue
+			}
+			for i := range tree.Resolved.Occurrences {
+				occ := &tree.Resolved.Occurrences[i]
+				if occ.Journal == nil {
+					continue
+				}
+				coveredPaths[occ.Path] = true
+				addSymbols(occ.Journal, pathToURI(occ.Path))
+			}
+		}
+	}
+
+	s.documents.Range(func(key, value any) bool {
+		docURI := key.(protocol.DocumentURI)
+		if path := uriToPath(docURI); path != "" && coveredPaths[path] {
+			return true
+		}
+		content := value.(string)
 		journal, _ := parser.Parse(content)
 		if journal == nil {
 			return true
 		}
-
-		symbols = append(symbols, extractSymbols(journal, uri, query)...)
+		addSymbols(journal, docURI)
 		return true
 	})
 
