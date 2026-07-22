@@ -5,6 +5,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
 
@@ -15,6 +16,20 @@ import (
 const defaultIndentSize = 4
 const minSpaces = 2
 const minAssertionSpaces = 1
+
+// widthCondition is a fixed runewidth condition so formatting is deterministic
+// regardless of the server's locale. Full-width CJK characters always occupy
+// two cells; ambiguous-width characters are treated as narrow (the common
+// default for Western fonts/editors).
+var widthCondition = runewidth.NewCondition()
+
+// displayWidth returns the number of terminal cells s occupies when rendered:
+// full-width CJK characters count as two cells, unlike utf8.RuneCountInString
+// which counts them as one. Use it for visual alignment column math; keep
+// RuneCountInString for positional/UTF-16 arithmetic.
+func displayWidth(s string) int {
+	return widthCondition.StringWidth(s)
+}
 
 // Amount alignment targets for postings with cost notation (`@`/`@@`).
 // They select which amount anchors alignment:
@@ -323,7 +338,7 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 }
 
 func calculateAccountDisplayLength(p *ast.Posting) int {
-	accountLen := utf8.RuneCountInString(p.Account.Name)
+	accountLen := displayWidth(p.Account.Name)
 	switch p.Virtual {
 	case ast.VirtualBalanced, ast.VirtualUnbalanced:
 		accountLen += 2
@@ -338,7 +353,7 @@ func CalculateAlignmentColumn(postings []ast.Posting) int {
 			maxLen = accountLen
 		}
 	}
-	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
+	return displayWidth(defaultIndent) + maxLen + minSpaces
 }
 
 func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
@@ -350,7 +365,7 @@ func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
 			}
 		}
 	}
-	return utf8.RuneCountInString(defaultIndent) + maxLen + minSpaces
+	return displayWidth(defaultIndent) + maxLen + minSpaces
 }
 
 // CalculateGlobalAlignmentColumnWithIndent returns the column at which amounts
@@ -600,9 +615,9 @@ func calculateSingleAmountDecimalPrefix(amount *ast.Amount, commodityFormats map
 	effectiveQty := qty
 
 	if position == ast.CommodityLeft {
-		symbolRuneLen := utf8.RuneCountInString(symbol)
+		symbolWidth := displayWidth(symbol)
 		if amount.SignBeforeCommodity && len(qty) > 0 && (qty[0] == '-' || qty[0] == '+') {
-			prefixBeforeQty = 1 + symbolRuneLen // sign + symbol
+			prefixBeforeQty = 1 + symbolWidth // sign + symbol
 			if spaceBetween {
 				prefixBeforeQty++
 			}
@@ -613,7 +628,7 @@ func calculateSingleAmountDecimalPrefix(amount *ast.Amount, commodityFormats map
 				qtyDecimalIdx = -1
 			}
 		} else {
-			prefixBeforeQty = symbolRuneLen
+			prefixBeforeQty = symbolWidth
 			if spaceBetween {
 				prefixBeforeQty++
 			}
@@ -625,7 +640,7 @@ func calculateSingleAmountDecimalPrefix(amount *ast.Amount, commodityFormats map
 	}
 
 	// No decimal — prefix is the full integer part
-	return prefixBeforeQty + utf8.RuneCountInString(effectiveQty)
+	return prefixBeforeQty + displayWidth(effectiveQty)
 }
 
 func resolveDecimalMark(amount *ast.Amount, commodityFormats map[string]CommodityFormat) rune {
@@ -642,8 +657,8 @@ func resolveDecimalMark(amount *ast.Amount, commodityFormats map[string]Commodit
 
 func calculateSingleAmountLen(amount *ast.Amount, commodityFormats map[string]CommodityFormat) int {
 	_, spaceBetween := resolveCommodityDisplay(amount, commodityFormats)
-	symbolLen := utf8.RuneCountInString(commoditySymbolDisplay(&amount.Commodity))
-	qtyLen := utf8.RuneCountInString(formatAmountQuantity(amount, commodityFormats))
+	symbolLen := displayWidth(commoditySymbolDisplay(&amount.Commodity))
+	qtyLen := displayWidth(formatAmountQuantity(amount, commodityFormats))
 	length := qtyLen
 
 	if symbolLen > 0 {
@@ -696,15 +711,15 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		spaces := minSpaces
 		switch {
 		case alignAmounts && alignment.DecimalCol > 0:
-			currentLen := utf8.RuneCountInString(sb.String())
+			currentLen := displayWidth(sb.String())
 			prefix := calculateAlignmentTargetDecimalPrefix(posting, commodityFormats, target)
 			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
 		case alignAmounts && alignment.AmountEndCol > 0:
-			currentLen := utf8.RuneCountInString(sb.String())
+			currentLen := displayWidth(sb.String())
 			amountLen := calculateAlignmentTargetLen(posting, commodityFormats, target)
 			spaces = max(alignment.AmountEndCol-currentLen-amountLen, minSpaces)
 		case alignAmounts && alignment.AccountCol > 0:
-			currentLen := utf8.RuneCountInString(sb.String())
+			currentLen := displayWidth(sb.String())
 			spaces = max(alignment.AccountCol-currentLen, minSpaces)
 		}
 		sb.WriteString(strings.Repeat(" ", spaces))
@@ -730,7 +745,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		if posting.Amount == nil {
 			spaces = minSpaces
 			if alignAmounts && alignment.AccountCol > 0 {
-				currentLen := utf8.RuneCountInString(sb.String())
+				currentLen := displayWidth(sb.String())
 				spaces = max(alignment.AccountCol-currentLen, minSpaces)
 			}
 		}
