@@ -249,6 +249,33 @@ func TestExpansion_AncestorCycleDetected(t *testing.T) {
 	}
 }
 
+// TestExpansion_DroppedIncludeSourceMap verifies that silently dropped include
+// directives (self-include, cycle, depth, read error) do not corrupt the source
+// map for subsequent lines. A diagnostic on a line before the dropped include
+// must map to the correct source line, not the line after the include.
+func TestExpansion_DroppedIncludeSourceMap(t *testing.T) {
+	dir := t.TempDir()
+	selfFile := filepath.Join(dir, "self.rules")
+
+	// Line 1: a parse error (unknown directive)
+	// Line 2: self-include (silently dropped)
+	// Line 3: valid directive
+	writeRulesFile(t, selfFile, "bad-directive value\ninclude self.rules\nfields date,amount\n")
+
+	loader := NewLoader()
+	_, errs := loader.Load(selfFile)
+
+	// The parse error on line 1 must be mapped to line 1 of self.rules,
+	// not to line 2 or 3.
+	for _, e := range errs {
+		if e.Kind == ErrorParseError && e.SourcePath == selfFile {
+			if e.Range.Start.Line != 1 {
+				t.Errorf("parse error should map to line 1, got line %d (source map corrupted by dropped include)", e.Range.Start.Line)
+			}
+		}
+	}
+}
+
 // TestExpansion_CompletionDeclarationOrder verifies that completion sees fields
 // declared in included files in textual-expansion order.
 func TestExpansion_CompletionDeclarationOrder(t *testing.T) {

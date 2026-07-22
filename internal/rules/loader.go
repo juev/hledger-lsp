@@ -404,6 +404,10 @@ func (e *textExpander) expand(
 
 		// Self-include: silently ignore.
 		if childCanonical == canonical {
+			currentOffset += len(line)
+			if lineIdx < len(lines)-1 {
+				currentOffset++
+			}
 			continue
 		}
 
@@ -416,6 +420,10 @@ func (e *textExpander) expand(
 				Message:    fmt.Sprintf("cycle detected: %s", resolved),
 				Range:      lineRange(lineIdx, line),
 			})
+			currentOffset += len(line)
+			if lineIdx < len(lines)-1 {
+				currentOffset++
+			}
 			continue
 		}
 
@@ -429,6 +437,10 @@ func (e *textExpander) expand(
 				Message:    fmt.Sprintf("include depth limit exceeded (%d)", e.limits.MaxIncludeDepth),
 				Range:      lineRange(lineIdx, line),
 			})
+			currentOffset += len(line)
+			if lineIdx < len(lines)-1 {
+				currentOffset++
+			}
 			continue
 		}
 
@@ -438,6 +450,10 @@ func (e *textExpander) expand(
 			readErr.SourcePath = resolved
 			readErr.Range = lineRange(lineIdx, line)
 			errors = append(errors, *readErr)
+			currentOffset += len(line)
+			if lineIdx < len(lines)-1 {
+				currentOffset++
+			}
 			continue
 		}
 		childContent = normalizeLineEndings(childContent)
