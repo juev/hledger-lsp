@@ -113,6 +113,28 @@ func TestCalculateAccountBalances_InferredMultiCommodity(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(-20), balances["c"]["EUR"])
 }
 
+func TestCalculateAccountBalances_InferredWithinRealGroup(t *testing.T) {
+	// The elided real posting is inferred against the real group only. The
+	// balanced-virtual group (here summing to +20) must not skew the inferred
+	// amount: assets:cash balances the real postings ($50) to -$50, not the
+	// combined pool (-$70).
+	input := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+    [budget:food]  $-30
+    [budget:available]  $50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	balances := CalculateAccountBalances(journal)
+
+	assert.Equal(t, decimal.NewFromInt(50), balances["expenses:food"]["$"])
+	assert.Equal(t, decimal.NewFromInt(-50), balances["assets:cash"]["$"])
+	assert.Equal(t, decimal.NewFromInt(-30), balances["budget:food"]["$"])
+	assert.Equal(t, decimal.NewFromInt(50), balances["budget:available"]["$"])
+}
+
 func TestCalculateAccountBalances_EmptyJournal(t *testing.T) {
 	input := ``
 

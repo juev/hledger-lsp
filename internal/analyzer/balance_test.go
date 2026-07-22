@@ -131,7 +131,95 @@ func TestCheckBalance_WithCost_TotalPrice(t *testing.T) {
 }
 
 func TestCheckBalance_VirtualUnbalanced_Exempt(t *testing.T) {
-	t.Skip("Parser does not yet support virtual postings (task 3.4)")
+	// hledger: unbalanced (parenthesized) virtual postings are exempt from the
+	// balance rule; the real postings balance on their own.
+	input := `2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-50
+    (tracking:note)  $999`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.True(t, result.Balanced, "unbalanced virtual postings must be exempt from balancing")
+}
+
+func TestCheckBalance_BalancedVirtual_NotCombinedWithReal(t *testing.T) {
+	// hledger rejects this: the real postings sum to +50 and the balanced
+	// virtual postings sum to -50. They must balance to zero independently, not
+	// cancel each other out.
+	input := `2024-01-15 bad
+    expenses:food  $100
+    assets:cash  $-50
+    [budget:x]  $-50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.False(t, result.Balanced, "balanced virtual postings must not cancel real postings")
+	assert.Equal(t, decimal.NewFromInt(50), result.Differences["$"])
+}
+
+func TestCheckBalance_BalancedVirtual_IndependentlyBalanced(t *testing.T) {
+	// Both the real group and the balanced-virtual group sum to zero on their
+	// own → balanced.
+	input := `2024-01-15 ok
+    expenses:food  $50
+    assets:cash  $-50
+    [budget:food]  $-50
+    [budget:available]  $50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.True(t, result.Balanced, "real and balanced-virtual groups balance independently")
+}
+
+func TestCheckBalance_BalancedVirtual_GroupUnbalanced(t *testing.T) {
+	// Real postings balance, but the balanced-virtual group sums to +20 →
+	// unbalanced, reported against the balanced-virtual group.
+	input := `2024-01-15 bad
+    expenses:food  $50
+    assets:cash  $-50
+    [budget:food]  $-30
+    [budget:available]  $50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.False(t, result.Balanced, "balanced-virtual group must balance to zero on its own")
+	assert.Equal(t, decimal.NewFromInt(20), result.Differences["$"])
+}
+
+func TestCheckBalance_InferredWithBalancedVirtual(t *testing.T) {
+	// A single elided posting in the real group is inferred against the real
+	// group only; the balanced-virtual group balances on its own.
+	input := `2024-01-15 test
+    expenses:food  $50
+    assets:cash
+    [budget:food]  $-50
+    [budget:available]  $50`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.True(t, result.Balanced, "elided real posting inferred within the real group")
+	assert.GreaterOrEqual(t, result.InferredIdx, 0)
 }
 
 func TestCheckBalance_ZeroAmount(t *testing.T) {

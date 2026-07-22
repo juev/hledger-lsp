@@ -9,47 +9,83 @@ import (
 func CheckBalance(tx *ast.Transaction, userTolerance decimal.Decimal) *BalanceResult {
 	result := NewBalanceResult()
 
-	realPostings := filterRealPostings(tx.Postings)
-	inferredCount, inferredIdx := countInferredPostings(realPostings)
+	realPostings, balancedVirtual := groupPostings(tx.Postings)
 
-	if inferredCount > 1 {
+	realGroup := checkPostingGroup(realPostings, userTolerance)
+	virtualGroup := checkPostingGroup(balancedVirtual, userTolerance)
+
+	if realGroup.multipleInferred || virtualGroup.multipleInferred {
 		result.Balanced = false
 		return result
 	}
 
-	result.InferredIdx = inferredIdx
-
-	balances := sumByCommodity(realPostings)
-
-	if inferredCount == 1 {
-		result.Balanced = true
-		return result
+	result.InferredIdx = realGroup.inferredIdx
+	if result.InferredIdx < 0 {
+		result.InferredIdx = virtualGroup.inferredIdx
 	}
 
-	precisions := maxPrecisionByCommodity(realPostings)
+	for commodity, diff := range realGroup.differences {
+		result.Differences[commodity] = diff
+	}
+	for commodity, diff := range virtualGroup.differences {
+		result.Differences[commodity] = diff
+	}
+	result.Balanced = len(result.Differences) == 0
 
+	return result
+}
+
+// groupPostings splits a transaction's postings into the two groups that must
+// each balance to zero independently: real postings and balanced (bracketed)
+// virtual postings. Unbalanced (parenthesized) virtual postings are exempt from
+// the balance rule and are omitted.
+func groupPostings(postings []ast.Posting) (real, balancedVirtual []ast.Posting) {
+	for _, p := range postings {
+		switch p.Virtual {
+		case ast.VirtualNone:
+			real = append(real, p)
+		case ast.VirtualBalanced:
+			balancedVirtual = append(balancedVirtual, p)
+		}
+	}
+	return real, balancedVirtual
+}
+
+// postingGroupResult captures the balance outcome of a single posting group.
+type postingGroupResult struct {
+	multipleInferred bool
+	inferredIdx      int
+	differences      map[string]decimal.Decimal
+}
+
+// checkPostingGroup balances one posting group (real or balanced-virtual) per
+// the hledger rules: a single elided posting is inferred and always balances;
+// more than one cannot be inferred; otherwise the group must sum to zero within
+// each commodity's tolerance.
+func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) postingGroupResult {
+	inferredCount, inferredIdx := countInferredPostings(postings)
+	if inferredCount > 1 {
+		return postingGroupResult{multipleInferred: true, inferredIdx: -1}
+	}
+	if inferredCount == 1 {
+		return postingGroupResult{inferredIdx: inferredIdx}
+	}
+
+	balances := sumByCommodity(postings)
+	precisions := maxPrecisionByCommodity(postings)
+
+	differences := make(map[string]decimal.Decimal)
 	for commodity, sum := range balances {
 		tolerance := toleranceForPrecision(precisions[commodity])
 		if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
 			tolerance = userTolerance
 		}
 		if sum.Abs().GreaterThanOrEqual(tolerance) {
-			result.Balanced = false
-			result.Differences[commodity] = sum.Abs()
+			differences[commodity] = sum.Abs()
 		}
 	}
 
-	return result
-}
-
-func filterRealPostings(postings []ast.Posting) []ast.Posting {
-	var real []ast.Posting
-	for _, p := range postings {
-		if p.Virtual == ast.VirtualNone || p.Virtual == ast.VirtualBalanced {
-			real = append(real, p)
-		}
-	}
-	return real
+	return postingGroupResult{inferredIdx: -1, differences: differences}
 }
 
 func countInferredPostings(postings []ast.Posting) (count int, lastIdx int) {
