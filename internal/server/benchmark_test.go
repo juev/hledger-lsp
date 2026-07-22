@@ -343,7 +343,7 @@ func BenchmarkPublishDiagnostics_Small(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, smallContent)
+		srv.publishDiagnostics(ctx, docURI, smallContent, 0)
 	}
 }
 
@@ -354,7 +354,7 @@ func BenchmarkPublishDiagnostics_Medium(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, mediumContent)
+		srv.publishDiagnostics(ctx, docURI, mediumContent, 0)
 	}
 }
 
@@ -365,6 +365,6 @@ func BenchmarkPublishDiagnostics_Large(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, largeContent)
+		srv.publishDiagnostics(ctx, docURI, largeContent, 0)
 	}
 }
