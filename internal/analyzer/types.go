@@ -41,6 +41,7 @@ type AnalysisResult struct {
 
 	PayeeAccounts         map[string][]string
 	PayeeAccountPairUsage map[string]int
+	PayeeAccountLastUsed  map[string]string
 }
 
 type PostingTemplate struct {

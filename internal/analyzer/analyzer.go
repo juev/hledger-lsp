@@ -45,6 +45,7 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 		TagCounts:             CollectTagCounts(journal),
 		PayeeAccounts:         CollectPayeeAccounts(journal),
 		PayeeAccountPairUsage: CollectPayeeAccountPairUsage(journal),
+		PayeeAccountLastUsed:  CollectPayeeAccountLastUsed(journal),
 	}
 
 	declaredAccounts := collectDeclaredAccounts(journal)
@@ -102,6 +103,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		TagCounts:             make(map[string]int),
 		PayeeAccounts:         make(map[string][]string),
 		PayeeAccountPairUsage: make(map[string]int),
+		PayeeAccountLastUsed:  make(map[string]string),
 	}
 
 	if resolved == nil || resolved.Primary == nil {
@@ -123,6 +125,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.TagCounts = collectTagCountsFromResolved(resolved)
 	result.PayeeAccounts = collectPayeeAccountsFromResolved(resolved)
 	result.PayeeAccountPairUsage = collectPayeeAccountPairUsageFromResolved(resolved)
+	result.PayeeAccountLastUsed = collectPayeeAccountLastUsedFromResolved(resolved)
 
 	declaredAccounts := collectDeclaredAccountsFromResolved(resolved)
 	sortedDeclared := sortedKeys(declaredAccounts)

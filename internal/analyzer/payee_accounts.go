@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -120,4 +121,58 @@ func collectPayeeAccountPairUsageFromResolved(resolved *include.ResolvedJournal)
 	}
 
 	return counts
+}
+
+func formatDateKey(d ast.Date) string {
+	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
+}
+
+func CollectPayeeAccountLastUsed(journal *ast.Journal) map[string]string {
+	lastUsed := make(map[string]string)
+
+	for _, tx := range journal.Transactions {
+		payee := tx.Payee
+		if payee == "" {
+			payee = tx.Description
+		}
+		if payee == "" {
+			continue
+		}
+
+		dateKey := formatDateKey(tx.Date)
+
+		for _, posting := range tx.Postings {
+			account := posting.Account.GetResolvedName()
+			if account == "" {
+				continue
+			}
+			key := payee + "::" + account
+			if existing, ok := lastUsed[key]; !ok || dateKey > existing {
+				lastUsed[key] = dateKey
+			}
+		}
+	}
+
+	return lastUsed
+}
+
+func collectPayeeAccountLastUsedFromResolved(resolved *include.ResolvedJournal) map[string]string {
+	lastUsed := make(map[string]string)
+
+	merge := func(journal *ast.Journal) {
+		if journal == nil {
+			return
+		}
+		for k, v := range CollectPayeeAccountLastUsed(journal) {
+			if existing, ok := lastUsed[k]; !ok || v > existing {
+				lastUsed[k] = v
+			}
+		}
+	}
+
+	for _, journal := range resolved.SourceJournals() {
+		merge(journal)
+	}
+
+	return lastUsed
 }

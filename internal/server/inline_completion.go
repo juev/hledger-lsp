@@ -85,8 +85,8 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 	}
 
 	templates := s.getPayeeTemplates(p.TextDocument.URI, content)
-	postings, ok := templates[payee]
-	if !ok || len(postings) == 0 {
+	postings, ok := fuzzyMatchPayeeTemplate(templates, payee)
+	if !ok {
 		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
 	}
 
@@ -129,6 +129,32 @@ func (s *Server) getPayeeTemplates(uri protocol.DocumentURI, content string) map
 
 	s.payeeTemplatesCache.Store(uri, result.PayeeTemplates)
 	return result.PayeeTemplates
+}
+
+func fuzzyMatchPayeeTemplate(templates map[string][]analyzer.PostingTemplate, payee string) ([]analyzer.PostingTemplate, bool) {
+	if postings, ok := templates[payee]; ok && len(postings) > 0 {
+		return postings, true
+	}
+
+	bestScore := 0
+	var bestKey string
+	for key := range templates {
+		if score := fuzzyMatchScore(key, payee); score > bestScore {
+			bestScore = score
+			bestKey = key
+		}
+	}
+
+	minScore := fuzzyScoreBaseMatch * max(3, utf8.RuneCountInString(payee)/2)
+	if bestScore < minScore || bestKey == "" {
+		return nil, false
+	}
+
+	postings := templates[bestKey]
+	if len(postings) == 0 {
+		return nil, false
+	}
+	return postings, true
 }
 
 func isTransactionHeaderLine(line string) bool {

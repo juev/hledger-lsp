@@ -222,3 +222,61 @@ end apply account`
 	assert.Equal(t, 1, result["Grocery Store::personal:expenses:food"])
 	assert.Equal(t, 1, result["Grocery Store::personal:assets:cash"])
 }
+
+func TestCollectPayeeAccountLastUsed_Empty(t *testing.T) {
+	journal, _ := parser.Parse(``)
+
+	result := CollectPayeeAccountLastUsed(journal)
+
+	assert.Empty(t, result)
+}
+
+func TestCollectPayeeAccountLastUsed_SingleTransaction(t *testing.T) {
+	input := `2024-01-15 Grocery Store
+    expenses:food  $50
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	result := CollectPayeeAccountLastUsed(journal)
+
+	assert.Equal(t, "2024-01-15", result["Grocery Store::expenses:food"])
+	assert.Equal(t, "2024-01-15", result["Grocery Store::assets:cash"])
+}
+
+func TestCollectPayeeAccountLastUsed_KeepsLatestDate(t *testing.T) {
+	input := `2024-01-15 Grocery Store
+    expenses:food  $50
+    assets:cash
+
+2024-03-20 Grocery Store
+    expenses:food  $30
+    assets:bank
+
+2024-02-10 Grocery Store
+    expenses:food  $20
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	result := CollectPayeeAccountLastUsed(journal)
+
+	assert.Equal(t, "2024-03-20", result["Grocery Store::expenses:food"])
+	assert.Equal(t, "2024-02-10", result["Grocery Store::assets:cash"])
+	assert.Equal(t, "2024-03-20", result["Grocery Store::assets:bank"])
+}
+
+func TestCollectPayeeAccountLastUsed_UsesDescriptionWhenNoPayee(t *testing.T) {
+	input := `2024-06-01 coffee shop
+    expenses:food  $5
+    assets:cash`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	result := CollectPayeeAccountLastUsed(journal)
+
+	assert.Equal(t, "2024-06-01", result["coffee shop::expenses:food"])
+}
