@@ -1,12 +1,32 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.lsp.dev/protocol"
+
 	"github.com/juev/hledger-lsp/internal/cli"
 )
+
+// fakeCLIClient is a cliRunner that records the file path it was asked to run
+// against, so tests can assert which journal a command targeted without the
+// real hledger binary.
+type fakeCLIClient struct {
+	available bool
+	lastFile  string
+}
+
+func (f *fakeCLIClient) Available() bool { return f.available }
+
+func (f *fakeCLIClient) Run(_ context.Context, file string, _ ...string) (string, error) {
+	f.lastFile = file
+	return "", nil
+}
 
 func TestFormatOutputAsComment(t *testing.T) {
 	tests := []struct {
@@ -88,7 +108,7 @@ func TestServer_CodeAction_WithoutCLI(t *testing.T) {
 		cliClient: nil,
 	}
 
-	actions := s.getCodeActions()
+	actions := s.getCodeActions("file:///test.journal")
 	if len(actions) != 0 {
 		t.Errorf("expected no actions without CLI client, got %d", len(actions))
 	}
@@ -99,7 +119,7 @@ func TestServer_CodeAction_CLINotAvailable(t *testing.T) {
 		cliClient: cli.NewClient("/nonexistent/hledger", 5*time.Second),
 	}
 
-	actions := s.getCodeActions()
+	actions := s.getCodeActions("file:///test.journal")
 	if len(actions) != 0 {
 		t.Errorf("expected no actions with unavailable CLI, got %d", len(actions))
 	}
@@ -113,7 +133,7 @@ func TestServer_CodeAction_WithCLI(t *testing.T) {
 		t.Skip("hledger not available")
 	}
 
-	actions := s.getCodeActions()
+	actions := s.getCodeActions("file:///test.journal")
 	if len(actions) == 0 {
 		t.Error("expected code actions with CLI client")
 	}
@@ -171,4 +191,62 @@ func TestFooterLine(t *testing.T) {
 	if len(footer) != len(header) {
 		t.Errorf("footer length (%d) should match header length (%d)", len(footer), len(header))
 	}
+}
+
+func TestGetCodeActions_EmbedsDocumentURI(t *testing.T) {
+	s := NewServer()
+	s.cliClient = &fakeCLIClient{available: true}
+
+	docURI := protocol.DocumentURI("file:///test.journal")
+	actions := s.getCodeActions(docURI)
+
+	require.NotEmpty(t, actions)
+	for _, action := range actions {
+		require.NotNil(t, action.Command)
+		require.Len(t, action.Command.Arguments, 2, "command must carry the invoking document URI")
+		assert.Equal(t, string(docURI), action.Command.Arguments[1])
+	}
+}
+
+func TestExecuteCommand_TargetsInvokingURI(t *testing.T) {
+	s := NewServer()
+	fake := &fakeCLIClient{available: true}
+	s.cliClient = fake
+
+	uriA := protocol.DocumentURI("file:///a.journal")
+	uriB := protocol.DocumentURI("file:///b.journal")
+	s.documents.Store(uriA, "2024-01-01 a\n    expenses  $1\n    assets\n")
+	s.documents.Store(uriB, "2024-01-01 b\n    expenses  $2\n    assets\n")
+
+	params := &protocol.ExecuteCommandParams{
+		Command:   "hledger.run",
+		Arguments: []any{"bal", string(uriB)},
+	}
+
+	// The command must target the invoking document (B). Before the fix the
+	// handler ranged over the open documents in arbitrary order, so repeat to
+	// surface that nondeterminism reliably.
+	for i := 0; i < 20; i++ {
+		_, err := s.ExecuteCommand(context.Background(), params)
+		require.NoError(t, err)
+		assert.Equal(t, uriToPath(uriB), fake.lastFile)
+	}
+}
+
+func TestExecuteCommand_FallbackWithoutURI(t *testing.T) {
+	s := NewServer()
+	fake := &fakeCLIClient{available: true}
+	s.cliClient = fake
+
+	uriA := protocol.DocumentURI("file:///a.journal")
+	s.documents.Store(uriA, "2024-01-01 a\n    expenses  $1\n    assets\n")
+
+	params := &protocol.ExecuteCommandParams{
+		Command:   "hledger.run",
+		Arguments: []any{"bal"},
+	}
+
+	_, err := s.ExecuteCommand(context.Background(), params)
+	require.NoError(t, err)
+	assert.Equal(t, uriToPath(uriA), fake.lastFile)
 }

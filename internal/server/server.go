@@ -21,6 +21,13 @@ import (
 	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
+// cliRunner is the subset of the hledger CLI client the server depends on.
+// It is an interface so tests can substitute a fake without the real binary.
+type cliRunner interface {
+	Available() bool
+	Run(ctx context.Context, file string, args ...string) (string, error)
+}
+
 type Server struct {
 	client                protocol.Client
 	documents             sync.Map
@@ -28,7 +35,7 @@ type Server struct {
 	loader                *include.Loader
 	rulesLoader           *rules.Loader
 	resolved              sync.Map
-	cliClient             *cli.Client
+	cliClient             cliRunner
 	rootURI               string
 	workspace             *workspace.Workspace
 	settings              serverSettings
