@@ -8,7 +8,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) References(ctx context.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
@@ -17,7 +16,7 @@ func (s *Server) References(ctx context.Context, params *protocol.ReferenceParam
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
 	target := findDefinitionTarget(journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {

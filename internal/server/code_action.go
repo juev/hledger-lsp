@@ -16,7 +16,6 @@ import (
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type hledgerCommand struct {
@@ -73,7 +72,7 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 		var action protocol.CodeAction
 		switch fmt.Sprint(diag.Code) {
 		case "UNBALANCED":
-			journal, _ := parser.Parse(doc)
+			journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 			if journal == nil {
 				continue
 			}
@@ -124,7 +123,7 @@ func (s *Server) quickFixDiagnostics(params *protocol.CodeActionParams, doc stri
 		return filtered
 	}
 
-	diagnostics := s.analyze(uriToPath(params.TextDocument.URI), doc)
+	diagnostics := s.analyze(params.TextDocument.URI, uriToPath(params.TextDocument.URI), doc)
 	filtered := make([]protocol.Diagnostic, 0, len(diagnostics))
 	for _, diag := range diagnostics {
 		if !isQuickFixableCode(fmt.Sprint(diag.Code)) {
@@ -315,7 +314,7 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 	if !ok {
 		return nil, fmt.Errorf("document not open")
 	}
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(uri, doc)
 	if journal == nil {
 		return nil, fmt.Errorf("failed to parse document")
 	}

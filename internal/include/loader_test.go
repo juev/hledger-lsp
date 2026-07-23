@@ -502,6 +502,46 @@ func TestLoader_MaxFileSizeLimit(t *testing.T) {
 	}
 }
 
+func TestLoader_FileSizeError(t *testing.T) {
+	loader := NewLoader()
+	loader.SetLimits(Limits{
+		MaxFileSizeBytes: 10,
+		MaxIncludeDepth:  defaultMaxIncludeDepth,
+	})
+
+	tests := []struct {
+		name    string
+		content string
+		wantNil bool
+	}{
+		{name: "under limit", content: "12345", wantNil: true},
+		{name: "at limit boundary", content: "1234567890", wantNil: true},
+		{name: "over limit", content: "12345678901", wantNil: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := loader.FileSizeError(tt.content)
+			if tt.wantNil {
+				if err != nil {
+					t.Fatalf("expected nil for content len %d, got: %v", len(tt.content), err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected file too large error for content len %d, got nil", len(tt.content))
+			}
+			if err.Kind != ErrorFileTooLarge {
+				t.Fatalf("expected Kind=ErrorFileTooLarge, got %v", err.Kind)
+			}
+			wantMsg := "file too large: 11 bytes (max 10)"
+			if err.Message != wantMsg {
+				t.Fatalf("expected message %q, got %q", wantMsg, err.Message)
+			}
+		})
+	}
+}
+
 func TestLoader_MaxIncludeDepthLimit(t *testing.T) {
 	dir := t.TempDir()
 	mainFile := filepath.Join(dir, "main.journal")

@@ -14,11 +14,11 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/cli"
+	"github.com/juev/hledger-lsp/internal/document"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 	"github.com/juev/hledger-lsp/internal/workspace"
 )
@@ -52,6 +52,9 @@ type Server struct {
 	payeeTemplatesCache   sync.Map // map[protocol.DocumentURI]map[string][]analyzer.PostingTemplate
 	alignmentCache        sync.Map // map[protocol.DocumentURI]int
 	tokenCache            *semanticTokensCache
+	parseCache            sync.Map // map[protocol.DocumentURI]*cachedDoc
+	docTexts              sync.Map // map[protocol.DocumentURI]*document.Text
+	docTextMu             sync.Mutex
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -264,6 +267,14 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	content := normalizeLineEndings(params.TextDocument.Text)
 	s.documents.Store(params.TextDocument.URI, content)
 	s.alignmentCache.Delete(params.TextDocument.URI)
+	s.invalidateDocText(params.TextDocument.URI)
+	if s.workspace != nil && s.loader.FileSizeError(content) == nil {
+		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
+			journal, _ := s.cachedJournal(params.TextDocument.URI, content)
+			s.workspace.UpdateFileWithJournal(path, content, journal)
+			s.loader.InvalidateFile(path)
+		}
+	}
 	s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version))
 	return nil
 }
@@ -277,15 +288,19 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 		for _, change := range params.ContentChanges {
 			if isFullChange(change.Range) {
 				content = normalizeLineEndings(change.Text)
+				s.invalidateDocText(params.TextDocument.URI)
 			} else {
-				content = applyChange(content, change.Range, normalizeLineEndings(change.Text))
+				content = s.applyChange(params.TextDocument.URI, content, change.Range, normalizeLineEndings(change.Text))
 			}
 		}
 		s.documents.Store(params.TextDocument.URI, content)
 		s.alignmentCache.Delete(params.TextDocument.URI)
 		if s.workspace != nil {
 			if path := uriToPath(params.TextDocument.URI); path != "" {
-				s.workspace.UpdateFile(path, content)
+				// Parse once and reuse the cached journal for workspace indexing
+				// (analyze and handlers reuse the same cache entry).
+				journal, _ := s.cachedJournal(params.TextDocument.URI, content)
+				s.workspace.UpdateFileWithJournal(path, content, journal)
 				s.loader.InvalidateFile(path)
 			}
 		}
@@ -323,6 +338,16 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	s.documents.Delete(params.TextDocument.URI)
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
+	s.invalidateParseCache(params.TextDocument.URI)
+	s.invalidateDocText(params.TextDocument.URI)
+	if s.workspace != nil {
+		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
+			if data, err := os.ReadFile(path); err == nil {
+				s.workspace.UpdateFile(path, normalizeLineEndings(string(data)))
+				s.loader.InvalidateFile(path)
+			}
+		}
+	}
 	return nil
 }
 
@@ -427,10 +452,41 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	if path == "" {
 		return
 	}
-	resolved, loadErrors := s.loader.LoadFromContent(path, content)
-	s.resolved.Store(docURI, resolved)
 
-	diagnostics := s.analyze(path, content)
+	// Guard the analyze path: a file over the size limit is not parsed. Publish a
+	// single diagnostic instead of running the lexer/parser on every keystroke.
+	if sizeErr := s.loader.FileSizeError(content); sizeErr != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
+			URI:     docURI,
+			Version: version,
+			Diagnostics: []protocol.Diagnostic{
+				{
+					Severity: protocol.DiagnosticSeverityError,
+					Source:   "hledger-lsp",
+					Message:  sizeErr.Message,
+				},
+			},
+		})
+		return
+	}
+
+	// Prefer the workspace's already-resolved journal only when it was built
+	// from this root buffer. Otherwise LoadFromContent keeps diagnostics in sync
+	// with the editor after an included file invalidates the tree snapshot.
+	var resolved *include.ResolvedJournal
+	var loadErrors []include.LoadError
+	if s.workspace != nil {
+		resolved, loadErrors = s.workspace.ResolvedForRootContent(path, content)
+	}
+	if resolved == nil {
+		resolved, loadErrors = s.loader.LoadFromContent(path, content)
+		s.resolved.Store(docURI, resolved)
+	}
+
+	diagnostics := s.analyze(docURI, path, content)
 
 	if ctx.Err() != nil {
 		return
@@ -459,8 +515,8 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	})
 }
 
-func (s *Server) analyze(path, content string) []protocol.Diagnostic {
-	journal, parseErrs := parser.Parse(content)
+func (s *Server) analyze(docURI protocol.DocumentURI, path, content string) []protocol.Diagnostic {
+	journal, parseErrs := s.cachedJournal(docURI, content)
 
 	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
 	for _, err := range parseErrs {
@@ -725,7 +781,7 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()
@@ -767,6 +823,42 @@ func formatterOptionsFrom(f formattingSettings) formatter.Options {
 func applyChange(content string, r protocol.Range, text string) string {
 	mapper := lsputil.NewPositionMapper(content)
 	return mapper.ApplyChange(r, text)
+}
+
+// applyChange applies an incremental LSP edit to the document's cached rope and
+// returns the updated content. The rope is persisted per URI so consecutive
+// edits do not re-split the whole document: the edit itself is O(log n) in the
+// line count, and the returned string is materialized once (O(n)) for the
+// string-based consumers downstream. content is the authoritative pre-edit
+// document text.
+func (s *Server) applyChange(docURI protocol.DocumentURI, content string, r protocol.Range, text string) string {
+	s.docTextMu.Lock()
+	defer s.docTextMu.Unlock()
+	var dt *document.Text
+	if v, ok := s.docTexts.Load(docURI); ok {
+		dt = v.(*document.Text)
+	}
+	// The persisted rope is only trustworthy while it matches the authoritative
+	// content. If it diverged (e.g. concurrent DidChange interleaving), rebuild
+	// from content so the edit lands at the correct position instead of
+	// corrupting the buffer. In the common in-sync case dt.String() is the cached
+	// string identical to content, so this check is cheap.
+	if dt == nil || dt.String() != content {
+		dt = document.NewText(content)
+	}
+	dt.ApplyChange(r, text)
+	updated := dt.String()
+	s.docTexts.Store(docURI, dt)
+	return updated
+}
+
+// invalidateDocText drops the cached rope for a document so the next incremental
+// edit rebuilds it from the current content (called on DidOpen, full changes and
+// DidClose).
+func (s *Server) invalidateDocText(docURI protocol.DocumentURI) {
+	s.docTextMu.Lock()
+	s.docTexts.Delete(docURI)
+	s.docTextMu.Unlock()
 }
 
 func splitLines(s string) []string {

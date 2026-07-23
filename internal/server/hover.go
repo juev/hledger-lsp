@@ -16,7 +16,6 @@ import (
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type HoverContext int
@@ -50,7 +49,7 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
 	element := findElementAtPosition(journal, params.Position)
 	if element == nil || element.context == HoverUnknown {
@@ -76,7 +75,7 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		}
 	} else {
 		allTransactions = journal.Transactions
-		balances = analyzer.CalculateAccountBalances(journal)
+		balances = s.cachedBalances(params.TextDocument.URI, doc)
 		commodityFormats = formatter.ExtractCommodityFormats(journal.Directives)
 		defSymbol = defaultCommoditySymbol(journal.Directives)
 	}

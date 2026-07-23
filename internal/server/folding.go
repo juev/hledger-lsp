@@ -6,8 +6,8 @@ import (
 
 	"go.lsp.dev/protocol"
 
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -25,9 +25,11 @@ func (s *Server) FoldingRanges(ctx context.Context, params *protocol.FoldingRang
 		return rulesFoldingRanges(doc), nil
 	}
 
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
+
 	var ranges []protocol.FoldingRange
 
-	ranges = append(ranges, findTransactionFolds(doc)...)
+	ranges = append(ranges, findTransactionFolds(journal)...)
 	ranges = append(ranges, findDirectiveFolds(doc)...)
 	ranges = append(ranges, findCommentBlockFolds(doc)...)
 	ranges = append(ranges, findCommentDirectiveFolds(doc)...)
@@ -53,8 +55,10 @@ func rulesFoldingRanges(doc string) []protocol.FoldingRange {
 	return result
 }
 
-func findTransactionFolds(content string) []protocol.FoldingRange {
-	journal, _ := parser.Parse(content)
+func findTransactionFolds(journal *ast.Journal) []protocol.FoldingRange {
+	if journal == nil {
+		return nil
+	}
 	var ranges []protocol.FoldingRange
 
 	for i := range journal.Transactions {

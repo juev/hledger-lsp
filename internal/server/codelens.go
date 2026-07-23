@@ -10,7 +10,6 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([]protocol.CodeLens, error) {
@@ -24,7 +23,7 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if len(journal.Transactions) == 0 {
 		return nil, nil
 	}

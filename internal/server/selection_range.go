@@ -8,7 +8,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) SelectionRange(_ context.Context, params *protocol.SelectionRangeParams) ([]protocol.SelectionRange, error) {
@@ -17,7 +16,7 @@ func (s *Server) SelectionRange(_ context.Context, params *protocol.SelectionRan
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	lines := strings.Split(doc, "\n")
 	docRange := documentRange(lines)
 

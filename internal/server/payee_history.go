@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 
 	"go.lsp.dev/protocol"
-
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type PayeeAccountHistoryParams struct {
@@ -40,7 +38,7 @@ func (s *Server) PayeeAccountHistory(_ context.Context, params json.RawMessage) 
 		}, nil
 	}
 
-	journal, errs := parser.Parse(content)
+	journal, errs := s.cachedJournal(p.TextDocument.URI, content)
 	if len(errs) > 0 || journal == nil {
 		return &PayeeAccountHistoryResult{
 			PayeeAccounts: make(map[string][]string),

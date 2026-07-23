@@ -12,7 +12,6 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -76,7 +75,7 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 		filtered := resolvedWithoutTransaction(resolved, cursorLine, params.TextDocument.URI)
 		result = s.analyzer.AnalyzeResolved(filtered)
 	} else {
-		journal, _ := parser.Parse(doc)
+		journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 		txIdx := findCurrentTransactionIndex(journal.Transactions, cursorLine)
 		filtered := journalWithoutTransaction(journal, txIdx)
 		result = s.analyzer.Analyze(filtered)

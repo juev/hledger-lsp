@@ -9,7 +9,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type DefinitionContext int
@@ -33,7 +32,7 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
 	target := findDefinitionTarget(journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {

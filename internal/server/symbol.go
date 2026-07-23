@@ -9,7 +9,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -26,7 +25,7 @@ func (s *Server) DocumentSymbol(
 		return rulesDocumentSymbols(doc), nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if journal == nil {
 		return []any{}, nil
 	}

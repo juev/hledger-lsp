@@ -11,7 +11,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/formatter"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type InlineCompletionTriggerKind int
@@ -95,7 +94,7 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 	// here is independent of the payee-template path (which is cached and
 	// may not reflect the latest content); for inline completion latency,
 	// this is the same Parse cost as the cache-miss path of getPayeeTemplates.
-	journal, _ := parser.Parse(content)
+	journal, _ := s.cachedJournal(p.TextDocument.URI, content)
 	commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
 	alignment := formatter.ComputeAlignment(journal, commodityFormats, formatterOptionsFrom(settings.Formatting))
 
@@ -123,7 +122,7 @@ func (s *Server) getPayeeTemplates(uri protocol.DocumentURI, content string) map
 	if resolved := s.getWorkspaceResolved(uri); resolved != nil {
 		result = s.analyzer.AnalyzeResolved(resolved)
 	} else {
-		journal, _ := parser.Parse(content)
+		journal, _ := s.cachedJournal(uri, content)
 		result = s.analyzer.Analyze(journal)
 	}
 

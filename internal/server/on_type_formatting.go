@@ -8,7 +8,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type lineKind int
@@ -142,7 +141,7 @@ func (s *Server) formatPreviousPostingLine(doc string, uri protocol.DocumentURI,
 		return nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(uri, doc)
 	commodityFormats := s.commodityFormatsForDocument(uri)
 
 	settings := s.getSettings()
@@ -212,7 +211,7 @@ func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
 		}
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(uri, doc)
 	if len(journal.Transactions) == 0 {
 		return 0
 	}
