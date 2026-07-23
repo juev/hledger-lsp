@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 )
@@ -15,14 +16,14 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 	type symbolKey struct {
 		name      string
 		kind      protocol.SymbolKind
-		uri       protocol.DocumentURI
+		uri       uri.URI
 		startLine uint32
 		startChar uint32
 	}
 	seen := make(map[symbolKey]bool)
 	var symbols []protocol.SymbolInformation
 
-	addSymbols := func(journal *ast.Journal, docURI protocol.DocumentURI) {
+	addSymbols := func(journal *ast.Journal, docURI uri.URI) {
 		for _, sym := range extractSymbols(journal, docURI, query) {
 			key := symbolKey{
 				name:      sym.Name,
@@ -57,7 +58,7 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 	}
 
 	s.documents.Range(func(key, value any) bool {
-		docURI := key.(protocol.DocumentURI)
+		docURI := key.(uri.URI)
 		if path := uriToPath(docURI); path != "" && coveredPaths[path] {
 			return true
 		}
@@ -73,7 +74,7 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 	return symbols, nil
 }
 
-func extractSymbols(journal *ast.Journal, uri protocol.DocumentURI, query string) []protocol.SymbolInformation {
+func extractSymbols(journal *ast.Journal, uri uri.URI, query string) []protocol.SymbolInformation {
 	var symbols []protocol.SymbolInformation
 
 	for _, dir := range journal.Directives {
@@ -81,8 +82,7 @@ func extractSymbols(journal *ast.Journal, uri protocol.DocumentURI, query string
 		case ast.AccountDirective:
 			if matchesQuery(d.Account.Name, query) {
 				symbols = append(symbols, protocol.SymbolInformation{
-					Name: d.Account.Name,
-					Kind: protocol.SymbolKindClass,
+					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: d.Account.Name, Kind: protocol.SymbolKindClass},
 					Location: protocol.Location{
 						URI:   uri,
 						Range: *astRangeToProtocol(d.Account.Range),
@@ -92,8 +92,7 @@ func extractSymbols(journal *ast.Journal, uri protocol.DocumentURI, query string
 		case ast.CommodityDirective:
 			if matchesQuery(d.Commodity.Symbol, query) {
 				symbols = append(symbols, protocol.SymbolInformation{
-					Name: d.Commodity.Symbol,
-					Kind: protocol.SymbolKindEnum,
+					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: d.Commodity.Symbol, Kind: protocol.SymbolKindEnum},
 					Location: protocol.Location{
 						URI:   uri,
 						Range: *astRangeToProtocol(d.Commodity.Range),
@@ -111,8 +110,7 @@ func extractSymbols(journal *ast.Journal, uri protocol.DocumentURI, query string
 			if matchesQuery(payee, query) {
 				seen[payee] = true
 				symbols = append(symbols, protocol.SymbolInformation{
-					Name: payee,
-					Kind: protocol.SymbolKindFunction,
+					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: payee, Kind: protocol.SymbolKindFunction},
 					Location: protocol.Location{
 						URI:   uri,
 						Range: *astRangeToProtocol(payeeRange(tx, payee)),

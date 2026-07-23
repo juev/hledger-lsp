@@ -7,12 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestWillSaveWaitUntil_AlwaysReturnsNil(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash   $-50"
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WillSaveTextDocumentParams{
@@ -32,7 +33,7 @@ func TestWillSaveWaitUntil_FormattingDisabled(t *testing.T) {
 	srv.setSettings(settings)
 
 	content := "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash"
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WillSaveTextDocumentParams{
@@ -62,7 +63,7 @@ func TestWillSaveWaitUntil_RulesFile(t *testing.T) {
 	srv := NewServer()
 	// Journal-like content that the formatter would modify if not guarded
 	content := "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash   $-50"
-	uri := protocol.DocumentURI("file:///bank.rules")
+	uri := uri.URI("file:///bank.rules")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WillSaveTextDocumentParams{
@@ -79,7 +80,7 @@ func TestFormat_RulesFile(t *testing.T) {
 	srv := NewServer()
 	// Journal-like content that the formatter would modify if not guarded
 	content := "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash   $-50"
-	uri := protocol.DocumentURI("file:///bank.rules")
+	uri := uri.URI("file:///bank.rules")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentFormattingParams{

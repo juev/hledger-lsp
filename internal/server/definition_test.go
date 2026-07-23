@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestDefinition_AccountDirective(t *testing.T) {
@@ -17,7 +18,7 @@ func TestDefinition_AccountDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -47,7 +48,7 @@ func TestDefinition_AccountFallback(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -76,7 +77,7 @@ func TestDefinition_CommodityDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -106,7 +107,7 @@ func TestDefinition_Payee(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -132,7 +133,7 @@ func TestDefinition_UnknownPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -175,7 +176,7 @@ func TestDefinition_CommodityOnRight(t *testing.T) {
     expenses:food  100.00 EUR
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -203,7 +204,7 @@ func TestDefinition_CursorOnAccountDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -228,7 +229,7 @@ func TestDefinition_CursorOnCommodityDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -252,7 +253,7 @@ func TestDefinition_CursorOnPayeeDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DefinitionParams{
@@ -276,7 +277,7 @@ func TestDefinition_AccountBoundary(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	// Test cursor at start of account name

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/workspace"
@@ -24,7 +25,7 @@ account assets:cash
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WorkspaceSymbolParams{
@@ -53,7 +54,7 @@ commodity EUR
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WorkspaceSymbolParams{
@@ -83,7 +84,7 @@ func TestWorkspaceSymbol_Payees(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WorkspaceSymbolParams{
@@ -112,7 +113,7 @@ func TestWorkspaceSymbol_EmptyQuery(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WorkspaceSymbolParams{
@@ -130,7 +131,7 @@ func TestWorkspaceSymbol_NoMatches(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.WorkspaceSymbolParams{
@@ -202,7 +203,7 @@ func TestWorkspaceSymbol_DeduplicatesRepeatedIncludes(t *testing.T) {
 func TestWorkspaceSymbol_FallbackWithoutWorkspace(t *testing.T) {
 	srv := NewServer()
 	content := "account expenses:food\n\n2024-01-15 test\n    expenses:food  $50\n    assets:cash"
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "expenses"})
@@ -216,7 +217,7 @@ func TestWorkspaceSymbol_OpenFileOutsideTree(t *testing.T) {
 		"main.journal": "account assets:cash\n",
 	})
 
-	outsideURI := protocol.DocumentURI("file:///tmp/outside.journal")
+	outsideURI := uri.URI("file:///tmp/outside.journal")
 	srv.documents.Store(outsideURI, "account expenses:outside\n\n2024-01-01 Outside Payee\n    expenses:outside  $1\n    assets:x\n")
 
 	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "outside"})

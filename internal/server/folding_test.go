@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestFoldingRanges_Transaction(t *testing.T) {
@@ -19,14 +20,10 @@ func TestFoldingRanges_Transaction(t *testing.T) {
     expenses:rent  $1000
     assets:checking`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
@@ -34,7 +31,7 @@ func TestFoldingRanges_Transaction(t *testing.T) {
 
 	var txFolds []protocol.FoldingRange
 	for _, r := range result {
-		if r.Kind == protocol.RegionFoldingRange {
+		if r.Kind == protocol.FoldingRangeKindRegion {
 			txFolds = append(txFolds, r)
 		}
 	}
@@ -55,14 +52,10 @@ func TestFoldingRanges_Directive(t *testing.T) {
 
 account assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
@@ -82,14 +75,10 @@ func TestFoldingRanges_CommentBlock(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
@@ -97,7 +86,7 @@ func TestFoldingRanges_CommentBlock(t *testing.T) {
 
 	var commentFold *protocol.FoldingRange
 	for i := range result {
-		if result[i].Kind == protocol.CommentFoldingRange {
+		if result[i].Kind == protocol.FoldingRangeKindComment {
 			commentFold = &result[i]
 			break
 		}
@@ -109,14 +98,10 @@ func TestFoldingRanges_CommentBlock(t *testing.T) {
 
 func TestFoldingRanges_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, "")
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
@@ -138,21 +123,17 @@ end comment
     expenses:rent  $1000
     assets:checking`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
 
 	var commentFold *protocol.FoldingRange
 	for i := range result {
-		if result[i].Kind == protocol.CommentFoldingRange &&
+		if result[i].Kind == protocol.FoldingRangeKindComment &&
 			result[i].StartLine == 4 {
 			commentFold = &result[i]
 			break
@@ -173,21 +154,17 @@ comment
 This is ignored until EOF
 2024-02-01 Fake transaction`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)
 
 	var commentFold *protocol.FoldingRange
 	for i := range result {
-		if result[i].Kind == protocol.CommentFoldingRange &&
+		if result[i].Kind == protocol.FoldingRangeKindComment &&
 			result[i].StartLine == 4 {
 			commentFold = &result[i]
 			break
@@ -201,11 +178,7 @@ This is ignored until EOF
 func TestFoldingRanges_DocumentNotFound(t *testing.T) {
 	srv := NewServer()
 
-	params := &protocol.FoldingRangeParams{
-		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: "file:///nonexistent.journal"},
-		},
-	}
+	params := &protocol.FoldingRangeParams{TextDocument: protocol.TextDocumentIdentifier{URI: uri.URI("file:///nonexistent.journal")}}
 
 	result, err := srv.FoldingRanges(context.Background(), params)
 	require.NoError(t, err)

@@ -18,21 +18,10 @@ import (
 )
 
 type mockClient struct {
+	protocol.UnimplementedClient
 	mu            sync.Mutex
 	diagnostics   []protocol.PublishDiagnosticsParams
 	registrations []protocol.Registration
-}
-
-func (m *mockClient) Progress(ctx context.Context, params *protocol.ProgressParams) error {
-	return nil
-}
-
-func (m *mockClient) WorkDoneProgressCreate(ctx context.Context, params *protocol.WorkDoneProgressCreateParams) error {
-	return nil
-}
-
-func (m *mockClient) LogMessage(ctx context.Context, params *protocol.LogMessageParams) error {
-	return nil
 }
 
 func (m *mockClient) PublishDiagnostics(ctx context.Context, params *protocol.PublishDiagnosticsParams) error {
@@ -42,39 +31,11 @@ func (m *mockClient) PublishDiagnostics(ctx context.Context, params *protocol.Pu
 	return nil
 }
 
-func (m *mockClient) ShowMessage(ctx context.Context, params *protocol.ShowMessageParams) error {
-	return nil
-}
-
-func (m *mockClient) ShowMessageRequest(ctx context.Context, params *protocol.ShowMessageRequestParams) (*protocol.MessageActionItem, error) {
-	return nil, nil
-}
-
-func (m *mockClient) Telemetry(ctx context.Context, params interface{}) error {
-	return nil
-}
-
 func (m *mockClient) RegisterCapability(ctx context.Context, params *protocol.RegistrationParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.registrations = append(m.registrations, params.Registrations...)
 	return nil
-}
-
-func (m *mockClient) UnregisterCapability(ctx context.Context, params *protocol.UnregistrationParams) error {
-	return nil
-}
-
-func (m *mockClient) ApplyEdit(ctx context.Context, params *protocol.ApplyWorkspaceEditParams) (bool, error) {
-	return false, nil
-}
-
-func (m *mockClient) Configuration(ctx context.Context, params *protocol.ConfigurationParams) ([]interface{}, error) {
-	return nil, nil
-}
-
-func (m *mockClient) WorkspaceFolders(ctx context.Context) ([]protocol.WorkspaceFolder, error) {
-	return nil, nil
 }
 
 func (m *mockClient) getDiagnostics() []protocol.PublishDiagnosticsParams {
@@ -98,7 +59,7 @@ type slowMockClient struct {
 	delay time.Duration
 }
 
-func (m *slowMockClient) Configuration(_ context.Context, _ *protocol.ConfigurationParams) ([]interface{}, error) {
+func (m *slowMockClient) Configuration(_ context.Context, _ *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
 	time.Sleep(m.delay)
 	return nil, nil
 }
@@ -142,21 +103,15 @@ func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
 	registrations := client.getRegistrations()
 	require.Len(t, registrations, 1)
 
-	var watchedOptions protocol.DidChangeWatchedFilesRegistrationOptions
-	switch opts := registrations[0].RegisterOptions.(type) {
-	case protocol.DidChangeWatchedFilesRegistrationOptions:
-		watchedOptions = opts
-	case *protocol.DidChangeWatchedFilesRegistrationOptions:
-		watchedOptions = *opts
-	default:
-		t.Fatalf("unexpected registration options type %T", registrations[0].RegisterOptions)
-	}
+	watchedOptions, err := unmarshalLSPAny[protocol.DidChangeWatchedFilesRegistrationOptions](registrations[0].RegisterOptions)
+	require.NoError(t, err)
 
 	assert.Len(t, watchedOptions.Watchers, 6)
 
 	gotPricesPattern := false
 	for _, watcher := range watchedOptions.Watchers {
-		if watcher.GlobPattern == "**/*.prices" {
+		pattern, ok := watcher.GlobPattern.(protocol.Pattern)
+		if ok && pattern == "**/*.prices" {
 			gotPricesPattern = true
 		}
 	}
@@ -195,16 +150,28 @@ func TestServer_Initialize(t *testing.T) {
 	require.NotNil(t, result)
 
 	caps := result.Capabilities
-	assert.True(t, caps.TextDocumentSync.(protocol.TextDocumentSyncOptions).OpenClose)
-	assert.Equal(t, protocol.TextDocumentSyncKindIncremental, caps.TextDocumentSync.(protocol.TextDocumentSyncOptions).Change)
+	syncOptions, ok := caps.TextDocumentSync.(*protocol.TextDocumentSyncOptions)
+	require.True(t, ok)
+	require.NotNil(t, syncOptions.OpenClose)
+	assert.True(t, *syncOptions.OpenClose)
+	require.NotNil(t, syncOptions.Change)
+	assert.Equal(t, protocol.TextDocumentSyncKindIncremental, *syncOptions.Change)
 	assert.NotNil(t, caps.CompletionProvider)
 	assert.Equal(t, []string{":", "@", "=", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}, caps.CompletionProvider.TriggerCharacters)
-	assert.True(t, caps.HoverProvider.(bool))
-	assert.True(t, caps.DocumentFormattingProvider.(bool))
-	assert.True(t, caps.DocumentRangeFormattingProvider.(bool))
+	hoverEnabled, ok := caps.HoverProvider.(protocol.Boolean)
+	require.True(t, ok)
+	assert.True(t, bool(hoverEnabled))
+	formatEnabled, ok := caps.DocumentFormattingProvider.(protocol.Boolean)
+	require.True(t, ok)
+	assert.True(t, bool(formatEnabled))
+	rangeFormatEnabled, ok := caps.DocumentRangeFormattingProvider.(protocol.Boolean)
+	require.True(t, ok)
+	assert.True(t, bool(rangeFormatEnabled))
 	assert.NotNil(t, caps.DocumentOnTypeFormattingProvider)
 	assert.Equal(t, "\n", caps.DocumentOnTypeFormattingProvider.FirstTriggerCharacter)
-	assert.True(t, caps.DocumentSymbolProvider.(bool))
+	symbolEnabled, ok := caps.DocumentSymbolProvider.(protocol.Boolean)
+	require.True(t, ok)
+	assert.True(t, bool(symbolEnabled))
 	assert.NotNil(t, caps.SemanticTokensProvider)
 	assert.NotNil(t, caps.CodeActionProvider)
 	assert.NotNil(t, caps.ExecuteCommandProvider)
@@ -213,7 +180,7 @@ func TestServer_Initialize(t *testing.T) {
 
 	require.NotNil(t, result.ServerInfo)
 	assert.Equal(t, "hledger-lsp", result.ServerInfo.Name)
-	assert.Equal(t, "0.1.0", result.ServerInfo.Version)
+	assert.Equal(t, "0.1.0", optionalString(result.ServerInfo.Version))
 }
 
 func TestServer_Initialized(t *testing.T) {
@@ -227,9 +194,9 @@ func TestServer_Initialized(t *testing.T) {
 func TestServer_Initialize_WithRootURI(t *testing.T) {
 	srv := NewServer()
 
-	rootURI := protocol.DocumentURI("file:///tmp/test-workspace")
+	rootURI := uri.URI("file:///tmp/test-workspace")
 	params := &protocol.InitializeParams{
-		RootURI: rootURI,
+		RootURI: &rootURI,
 	}
 
 	_, err := srv.Initialize(context.Background(), params)
@@ -243,10 +210,10 @@ func TestServer_Initialize_WithWorkspaceFolders(t *testing.T) {
 	srv := NewServer()
 
 	params := &protocol.InitializeParams{
-		WorkspaceFolders: []protocol.WorkspaceFolder{
-			{URI: "file:///tmp/folder1", Name: "folder1"},
-			{URI: "file:///tmp/folder2", Name: "folder2"},
-		},
+		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{WorkspaceFolders: protocol.NewNullable([]protocol.WorkspaceFolder{
+			{URI: uri.URI("file:///tmp/folder1"), Name: "folder1"},
+			{URI: uri.URI("file:///tmp/folder2"), Name: "folder2"},
+		})},
 	}
 
 	_, err := srv.Initialize(context.Background(), params)
@@ -274,7 +241,7 @@ func TestServer_Exit(t *testing.T) {
 
 func TestServer_DidOpen(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -297,7 +264,7 @@ func TestServer_DidOpen(t *testing.T) {
 
 func TestServer_DidChange_FullDocument(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	initialContent := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -312,13 +279,7 @@ func TestServer_DidChange_FullDocument(t *testing.T) {
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: uri},
 		},
 		ContentChanges: []protocol.TextDocumentContentChangeEvent{
-			{
-				Range: protocol.Range{
-					Start: protocol.Position{Line: 0, Character: 0},
-					End:   protocol.Position{Line: 0, Character: 0},
-				},
-				Text: newContent,
-			},
+			&protocol.TextDocumentContentChangeWholeDocument{Text: newContent},
 		},
 	}
 
@@ -333,7 +294,7 @@ func TestServer_DidChange_FullDocument(t *testing.T) {
 
 func TestServer_DidChange_Incremental(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -345,7 +306,7 @@ func TestServer_DidChange_Incremental(t *testing.T) {
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: uri},
 		},
 		ContentChanges: []protocol.TextDocumentContentChangeEvent{
-			{
+			&protocol.TextDocumentContentChangePartial{
 				Range: protocol.Range{
 					Start: protocol.Position{Line: 0, Character: 11},
 					End:   protocol.Position{Line: 0, Character: 15},
@@ -367,14 +328,14 @@ func TestServer_DidChange_Incremental(t *testing.T) {
 
 func TestServer_DidChange_DocumentNotFound(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	params := &protocol.DidChangeTextDocumentParams{
 		TextDocument: protocol.VersionedTextDocumentIdentifier{
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: uri},
 		},
 		ContentChanges: []protocol.TextDocumentContentChangeEvent{
-			{Text: "new content"},
+			&protocol.TextDocumentContentChangeWholeDocument{Text: "new content"},
 		},
 	}
 
@@ -388,7 +349,7 @@ func TestServer_DidChange_DocumentNotFound(t *testing.T) {
 
 func TestServer_DidClose(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "test content"
 
 	srv.documents.Store(uri, content)
@@ -416,7 +377,8 @@ func TestServer_DidClose_RestoresWorkspaceIndexFromDisk(t *testing.T) {
 	require.NoError(t, os.WriteFile(journalPath, []byte(diskContent), 0644))
 
 	srv := NewServer()
-	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: uri.File(tmpDir)})
+	rootURI := uri.File(tmpDir)
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
 	require.NoError(t, err)
 	require.NoError(t, srv.workspace.Initialize())
 
@@ -440,7 +402,7 @@ func TestServer_DidClose_RestoresWorkspaceIndexFromDisk(t *testing.T) {
 
 func TestServer_DidSave(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	params := &protocol.DidSaveTextDocumentParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -453,7 +415,7 @@ func TestServer_DidSave(t *testing.T) {
 
 func TestServer_DidSave_InvalidatesAlignmentCache(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	srv.alignmentCache.Store(uri, 42)
 
@@ -596,50 +558,31 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-func TestIsFullChange(t *testing.T) {
+func TestContentChangeV1Arms(t *testing.T) {
 	tests := []struct {
-		name     string
-		r        protocol.Range
-		expected bool
+		name   string
+		change protocol.TextDocumentContentChangeEvent
+		whole  bool
 	}{
 		{
-			name: "full change (0,0 to 0,0)",
-			r: protocol.Range{
-				Start: protocol.Position{Line: 0, Character: 0},
-				End:   protocol.Position{Line: 0, Character: 0},
-			},
-			expected: true,
+			name:   "whole document",
+			change: &protocol.TextDocumentContentChangeWholeDocument{Text: "replacement"},
+			whole:  true,
 		},
 		{
-			name: "partial change start",
-			r: protocol.Range{
+			name: "partial range",
+			change: &protocol.TextDocumentContentChangePartial{Range: protocol.Range{
 				Start: protocol.Position{Line: 0, Character: 5},
 				End:   protocol.Position{Line: 0, Character: 0},
-			},
-			expected: false,
-		},
-		{
-			name: "partial change end",
-			r: protocol.Range{
-				Start: protocol.Position{Line: 0, Character: 0},
-				End:   protocol.Position{Line: 1, Character: 0},
-			},
-			expected: false,
-		},
-		{
-			name: "multiline range",
-			r: protocol.Range{
-				Start: protocol.Position{Line: 1, Character: 0},
-				End:   protocol.Position{Line: 5, Character: 10},
-			},
-			expected: false,
+			}, Text: "insert"},
+			whole: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := isFullChange(tt.r)
-			assert.Equal(t, tt.expected, result)
+			_, isWhole := tt.change.(*protocol.TextDocumentContentChangeWholeDocument)
+			assert.Equal(t, tt.whole, isWhole)
 		})
 	}
 }
@@ -650,7 +593,7 @@ func TestServer_PublishDiagnostics_ParseError(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     invalid posting without amount or account`
 
@@ -677,7 +620,7 @@ func TestServer_PublishDiagnostics_ParseError_RangeSpansToken(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     12345`
 
@@ -699,7 +642,7 @@ func TestServer_PublishDiagnostics_ParseError_RangeSpansToken(t *testing.T) {
 	var parseErrDiag *protocol.Diagnostic
 	for _, pub := range diagnostics {
 		for i, d := range pub.Diagnostics {
-			if d.Severity == protocol.DiagnosticSeverityError && d.Source == "hledger-lsp" {
+			if d.Severity == protocol.DiagnosticSeverityError && optionalString(d.Source) == "hledger-lsp" {
 				parseErrDiag = &pub.Diagnostics[i]
 				break
 			}
@@ -720,7 +663,7 @@ func TestServer_PublishDiagnostics_BalanceError(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash  $30`
@@ -757,7 +700,7 @@ func TestServer_PublishDiagnostics_NoErrors(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -782,7 +725,7 @@ func TestServer_PublishDiagnostics_NoErrors(t *testing.T) {
 
 func TestServer_PublishDiagnostics_NilClient(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -801,7 +744,7 @@ func TestServer_PublishDiagnostics_NilClient(t *testing.T) {
 
 func TestServer_GetDocument_Found(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "test content"
 
 	srv.documents.Store(uri, content)
@@ -814,7 +757,7 @@ func TestServer_GetDocument_Found(t *testing.T) {
 
 func TestServer_GetDocument_NotFound(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	doc, ok := srv.GetDocument(uri)
 
@@ -828,7 +771,7 @@ func TestServer_GetResolved_Found(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -851,7 +794,7 @@ func TestServer_GetResolved_Found(t *testing.T) {
 
 func TestServer_GetResolved_NotFound(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	resolved := srv.GetResolved(uri)
 
@@ -860,7 +803,7 @@ func TestServer_GetResolved_NotFound(t *testing.T) {
 
 func TestServer_Format(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -879,7 +822,7 @@ func TestServer_Format(t *testing.T) {
 
 func TestServer_Format_DocumentNotFound(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	params := &protocol.DocumentFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -917,9 +860,8 @@ include transactions.journal`
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	initParams := &protocol.InitializeParams{
-		RootURI: uri.File(tmpDir),
-	}
+	rootURI := uri.File(tmpDir)
+	initParams := &protocol.InitializeParams{RootURI: &rootURI}
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
@@ -946,11 +888,11 @@ include transactions.journal`
 	var foundRUBWarning bool
 	for _, pub := range diagnostics {
 		for _, d := range pub.Diagnostics {
-			if d.Code == "UNDECLARED_COMMODITY" {
-				if strings.Contains(d.Message, "EUR") {
+			if diagnosticCodeString(d.Code) == "UNDECLARED_COMMODITY" {
+				if strings.Contains(tooltipString(d.Message), "EUR") {
 					foundEURWarning = true
 				}
-				if strings.Contains(d.Message, "RUB") {
+				if strings.Contains(tooltipString(d.Message), "RUB") {
 					foundRUBWarning = true
 				}
 			}
@@ -984,9 +926,8 @@ include transactions.journal`
 
 	srv := NewServer()
 
-	initParams := &protocol.InitializeParams{
-		RootURI: uri.File(tmpDir),
-	}
+	rootURI := uri.File(tmpDir)
+	initParams := &protocol.InitializeParams{RootURI: &rootURI}
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
@@ -1038,27 +979,27 @@ func TestToProtocolSeverity(t *testing.T) {
 func TestUriToPath(t *testing.T) {
 	tests := []struct {
 		name     string
-		uri      protocol.DocumentURI
+		uri      uri.URI
 		expected string
 	}{
 		{
 			name:     "file URI",
-			uri:      protocol.DocumentURI("file:///test.journal"),
+			uri:      uri.URI("file:///test.journal"),
 			expected: "/test.journal",
 		},
 		{
 			name:     "git URI returns empty",
-			uri:      protocol.DocumentURI("git://github.com/user/repo/main/file.journal"),
+			uri:      uri.URI("git://github.com/user/repo/main/file.journal"),
 			expected: "",
 		},
 		{
 			name:     "untitled URI returns empty",
-			uri:      protocol.DocumentURI("untitled:Untitled-1"),
+			uri:      uri.URI("untitled:Untitled-1"),
 			expected: "",
 		},
 		{
 			name:     "vscode-notebook URI returns empty",
-			uri:      protocol.DocumentURI("vscode-notebook-cell://something"),
+			uri:      uri.URI("vscode-notebook-cell://something"),
 			expected: "",
 		},
 	}
@@ -1077,7 +1018,7 @@ func TestServer_DidOpen_NonFileURI(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("git://github.com/user/repo/main/file.journal")
+	uri := uri.URI("git://github.com/user/repo/main/file.journal")
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
@@ -1125,9 +1066,8 @@ include 2025.journal`
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	_, err = srv.Initialize(context.Background(), &protocol.InitializeParams{
-		RootURI: uri.File(tmpDir),
-	})
+	rootURI := uri.File(tmpDir)
+	_, err = srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
 	require.NoError(t, err)
 
 	err = srv.Initialized(context.Background(), &protocol.InitializedParams{})
@@ -1171,8 +1111,12 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 			initOptions: nil,
 			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
 				assert.NotNil(t, caps.CompletionProvider)
-				assert.True(t, caps.HoverProvider.(bool))
-				assert.True(t, caps.DocumentFormattingProvider.(bool))
+				hoverEnabled, ok := caps.HoverProvider.(protocol.Boolean)
+				require.True(t, ok)
+				assert.True(t, bool(hoverEnabled))
+				formatEnabled, ok := caps.DocumentFormattingProvider.(protocol.Boolean)
+				require.True(t, ok)
+				assert.True(t, bool(formatEnabled))
 				assert.NotNil(t, caps.SemanticTokensProvider)
 				assert.NotNil(t, caps.CodeActionProvider)
 			},
@@ -1209,7 +1153,7 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
 				assert.Nil(t, caps.DocumentFormattingProvider)
 				assert.Nil(t, caps.DocumentRangeFormattingProvider)
-				assert.Nil(t, caps.DocumentOnTypeFormattingProvider)
+				assert.Zero(t, caps.DocumentOnTypeFormattingProvider)
 			},
 		},
 		{
@@ -1232,7 +1176,7 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 			},
 			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
 				assert.Nil(t, caps.CodeActionProvider)
-				assert.Nil(t, caps.ExecuteCommandProvider)
+				assert.Zero(t, caps.ExecuteCommandProvider)
 			},
 		},
 		{
@@ -1245,7 +1189,7 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 			},
 			checkCaps: func(t *testing.T, caps protocol.ServerCapabilities) {
 				assert.NotNil(t, caps.CodeLensProvider)
-				require.NotNil(t, caps.ExecuteCommandProvider)
+				require.NotEmpty(t, caps.ExecuteCommandProvider.Commands)
 				assert.Equal(t, []string{"hledger.fixUnbalanced"}, caps.ExecuteCommandProvider.Commands)
 			},
 		},
@@ -1254,8 +1198,10 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := NewServer()
+			initOptions, err := marshalLSPAny(tt.initOptions)
+			require.NoError(t, err)
 			params := &protocol.InitializeParams{
-				InitializationOptions: tt.initOptions,
+				InitializationOptions: initOptions,
 			}
 			result, err := srv.Initialize(context.Background(), params)
 			require.NoError(t, err)
@@ -1281,7 +1227,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
     expenses:food  $50
     assets:cash
 `
-		uri := protocol.DocumentURI("file:///test.journal")
+		uri := uri.URI("file:///test.journal")
 		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
 		})
@@ -1315,7 +1261,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
     expenses:food  50 EUR
     assets:cash
 `
-		uri := protocol.DocumentURI("file:///test.journal")
+		uri := uri.URI("file:///test.journal")
 		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
 		})
@@ -1347,7 +1293,7 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
     expenses:food  $50
     assets:cash  $20
 `
-		uri := protocol.DocumentURI("file:///test.journal")
+		uri := uri.URI("file:///test.journal")
 		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
 		})
@@ -1386,7 +1332,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
     assets:foreign  3.00 USD @ 0.33510 EUR
     assets:eur  -1.00 EUR
 `
-		uri := protocol.DocumentURI("file:///test.journal")
+		uri := uri.URI("file:///test.journal")
 		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
 		})
@@ -1419,7 +1365,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
     assets:foreign  3.00 USD @ 0.337 EUR
     assets:eur  -1.00 EUR
 `
-		uri := protocol.DocumentURI("file:///test.journal")
+		uri := uri.URI("file:///test.journal")
 		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
 		})
@@ -1430,7 +1376,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
 		hasUnbalanced := false
 		for _, pub := range diagnostics {
 			for _, d := range pub.Diagnostics {
-				if d.Code == "UNBALANCED" {
+				if diagnosticCodeString(d.Code) == "UNBALANCED" {
 					hasUnbalanced = true
 				}
 			}
@@ -1487,7 +1433,7 @@ func TestNormalizeLineEndings(t *testing.T) {
 
 func TestServer_DidOpen_NormalizesCRLF(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 test\r\n    expenses:food  $50  ;date:2026-02-21\r\n    assets:cash\r\n"
 
 	params := &protocol.DidOpenTextDocumentParams{
@@ -1508,7 +1454,7 @@ func TestServer_DidOpen_NormalizesCRLF(t *testing.T) {
 
 func TestServer_DidChange_NormalizesCRLF(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	srv.documents.Store(uri, "initial")
 
@@ -1517,7 +1463,7 @@ func TestServer_DidChange_NormalizesCRLF(t *testing.T) {
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: uri},
 		},
 		ContentChanges: []protocol.TextDocumentContentChangeEvent{
-			{
+			&protocol.TextDocumentContentChangePartial{
 				Range: protocol.Range{
 					Start: protocol.Position{Line: 0, Character: 0},
 					End:   protocol.Position{Line: 0, Character: 0},
@@ -1537,7 +1483,7 @@ func TestServer_DidChange_NormalizesCRLF(t *testing.T) {
 
 func TestServer_Format_CRLFDocumentNoBlankLines(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 购买基金\r\n    资产:微信wx  $50  ;date:2026-02-21\r\n    资产:待报销费用bx\r\n"
 
 	srv.documents.Store(uri, normalizeLineEndings(content))
@@ -1557,7 +1503,7 @@ func TestServer_Format_CRLFDocumentNoBlankLines(t *testing.T) {
 
 func TestServer_RulesDiagnostics_PositionConversion(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.rules")
+	uri := uri.URI("file:///test.rules")
 
 	// "decimal-mark x" triggers INVALID_DECIMAL_MARK at the directive range.
 	// The rules lexer uses 1-based positions; analyzeRules must convert to 0-based.
@@ -1567,7 +1513,7 @@ func TestServer_RulesDiagnostics_PositionConversion(t *testing.T) {
 
 	var found *protocol.Diagnostic
 	for i := range diags {
-		if diags[i].Code == "INVALID_DECIMAL_MARK" {
+		if diagnosticCodeString(diags[i].Code) == "INVALID_DECIMAL_MARK" {
 			found = &diags[i]
 			break
 		}
@@ -1581,7 +1527,7 @@ func TestServer_RulesDiagnostics_PositionConversion(t *testing.T) {
 
 func TestServer_RulesSourceDirective_NoDiagnostics(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.rules")
+	uri := uri.URI("file:///test.rules")
 
 	content := "source data.csv\nskip 1\nfields date,description,amount"
 	diags, err := ts.openAndWait(uri, content)
@@ -1589,8 +1535,8 @@ func TestServer_RulesSourceDirective_NoDiagnostics(t *testing.T) {
 
 	// No diagnostics expected for a valid rules file with source directive
 	for _, d := range diags {
-		if strings.Contains(d.Message, "unexpected content") {
-			t.Errorf("unexpected journal parser error in rules file: %s", d.Message)
+		if strings.Contains(tooltipString(d.Message), "unexpected content") {
+			t.Errorf("unexpected journal parser error in rules file: %s", tooltipString(d.Message))
 		}
 	}
 	assert.Empty(t, diags, "valid rules file with source directive should have no diagnostics")
@@ -1598,23 +1544,23 @@ func TestServer_RulesSourceDirective_NoDiagnostics(t *testing.T) {
 
 func TestServer_RulesIncludeDirective_NoDiagnostics(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.rules")
+	uri := uri.URI("file:///test.rules")
 
 	content := "include common.rules\nskip 1\nfields date,description,amount"
 	diags, err := ts.openAndWait(uri, content)
 	require.NoError(t, err)
 
 	for _, d := range diags {
-		if strings.Contains(d.Message, "unexpected content") {
-			t.Errorf("unexpected journal parser error in rules file: %s", d.Message)
+		if strings.Contains(tooltipString(d.Message), "unexpected content") {
+			t.Errorf("unexpected journal parser error in rules file: %s", tooltipString(d.Message))
 		}
 	}
 	// With the expansion-based loader, a missing include produces a
 	// file-not-found diagnostic. This is correct behavior — the include
 	// target must exist on disk or be provided via overlay.
 	for _, d := range diags {
-		if d.Severity == protocol.DiagnosticSeverityError && !strings.Contains(d.Message, "cannot read file") {
-			t.Errorf("unexpected error diagnostic: %s", d.Message)
+		if d.Severity == protocol.DiagnosticSeverityError && !strings.Contains(tooltipString(d.Message), "cannot read file") {
+			t.Errorf("unexpected error diagnostic: %s", tooltipString(d.Message))
 		}
 	}
 }
@@ -1640,11 +1586,9 @@ func TestInitialize_RootURIParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := NewServer()
-			_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
-				WorkspaceFolders: []protocol.WorkspaceFolder{
-					{URI: tt.uri, Name: "test"},
-				},
-			})
+			_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
+				WorkspaceFolders: protocol.NewNullable([]protocol.WorkspaceFolder{{URI: uri.URI(tt.uri), Name: "test"}}),
+			}})
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantPath, srv.rootURI)
 		})
@@ -1653,9 +1597,8 @@ func TestInitialize_RootURIParsing(t *testing.T) {
 
 func TestInitialize_RootURIFromRootURI(t *testing.T) {
 	srv := NewServer()
-	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
-		RootURI: "file:///tmp/fallback-workspace", //nolint:staticcheck
-	})
+	rootURI := uri.URI("file:///tmp/fallback-workspace")
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/fallback-workspace", srv.rootURI)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/document"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -40,7 +41,7 @@ func setupWorkspaceAt(t *testing.T, dir string) *workspace.Workspace {
 func TestNFR_1_1_CompletionLatency(t *testing.T) {
 	content := testutil.GenerateJournal(1000)
 	srv := server.NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.StoreDocument(uri, content)
 
 	params := &protocol.CompletionParams{
@@ -174,7 +175,12 @@ func newBenchmarkServerWithWorkspace(t *testing.T, dir string) *server.Server {
 	t.Helper()
 	srv := server.NewServer()
 	if _, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
-		WorkspaceFolders: []protocol.WorkspaceFolder{{URI: "file://" + dir, Name: "bench"}},
+		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
+			WorkspaceFolders: protocol.NewNullable([]protocol.WorkspaceFolder{{
+				URI:  uri.URI("file://" + dir),
+				Name: "bench",
+			}}),
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +204,7 @@ func TestNFR_PerKeystrokeCycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			srv := newBenchmarkServerWithWorkspace(t, tmpDir)
-			docURI := protocol.DocumentURI("file://" + mainPath)
+			docURI := uri.URI("file://" + mainPath)
 			srv.StoreDocument(docURI, content)
 
 			completionParams := &protocol.CompletionParams{
@@ -214,7 +220,7 @@ func TestNFR_PerKeystrokeCycle(t *testing.T) {
 				// Incremental insert at line 1 (NOT {0,0}-{0,0}, which the server
 				// treats as a full-document replace). Keeps the document large so
 				// each keystroke does a real parse of the whole journal.
-				change := protocol.TextDocumentContentChangeEvent{
+				change := &protocol.TextDocumentContentChangePartial{
 					Range: protocol.Range{
 						Start: protocol.Position{Line: 1, Character: 0},
 						End:   protocol.Position{Line: 1, Character: 0},
@@ -250,7 +256,7 @@ func TestNFR_PerKeystrokeCycle(t *testing.T) {
 func TestNFR_RepeatedRequestReusesCache(t *testing.T) {
 	content := testutil.GenerateJournal(10000)
 	srv := server.NewServer()
-	docURI := protocol.DocumentURI("file:///test.journal")
+	docURI := uri.URI("file:///test.journal")
 	srv.StoreDocument(docURI, content)
 
 	hoverParams := &protocol.HoverParams{

@@ -25,7 +25,7 @@ account expenses:food
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -62,7 +62,7 @@ func TestCompletion_AccountsShowUsageCount(t *testing.T) {
 2024-01-18 new
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -81,11 +81,11 @@ func TestCompletion_AccountsShowUsageCount(t *testing.T) {
 	for _, item := range result.Items {
 		switch item.Label {
 		case "expenses:food":
-			foodDetail = item.Detail
+			foodDetail = completionDetail(item)
 		case "assets:cash":
-			cashDetail = item.Detail
+			cashDetail = completionDetail(item)
 		case "assets:bank":
-			bankDetail = item.Detail
+			bankDetail = completionDetail(item)
 		}
 	}
 
@@ -110,7 +110,7 @@ func TestCompletion_PayeesShowUsageCount(t *testing.T) {
 
 2024-01-18 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -129,9 +129,9 @@ func TestCompletion_PayeesShowUsageCount(t *testing.T) {
 	for _, item := range result.Items {
 		switch item.Label {
 		case "Grocery Store":
-			groceryDetail = item.Detail
+			groceryDetail = completionDetail(item)
 		case "Coffee Shop":
-			coffeeDetail = item.Detail
+			coffeeDetail = completionDetail(item)
 		}
 	}
 
@@ -150,7 +150,7 @@ account assets:cash
     expenses:food:restaurant  $20
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -159,9 +159,9 @@ account assets:cash
 			},
 			Position: protocol.Position{Line: 5, Character: 14},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: ":",
+			TriggerCharacter: stringPtr(":"),
 		},
 	}
 
@@ -186,7 +186,7 @@ func TestCompletion_Payees(t *testing.T) {
 
 2024-01-17 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -218,7 +218,7 @@ func TestCompletion_Commodities(t *testing.T) {
     expenses:rent  EUR 100
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -227,9 +227,9 @@ func TestCompletion_Commodities(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 6, Character: 20},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "@",
+			TriggerCharacter: stringPtr("@"),
 		},
 	}
 
@@ -244,7 +244,7 @@ func TestCompletion_Commodities(t *testing.T) {
 
 func TestCompletion_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), "")
+	srv.documents.Store(uri.URI("file:///test.journal"), "")
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -295,7 +295,7 @@ account expenses:food
 2024-01-15 test
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -375,7 +375,7 @@ func TestDetermineContext_Date_EmptyLine_SpaceTrigger(t *testing.T) {
 
 	completionCtx := &protocol.CompletionContext{
 		TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-		TriggerCharacter: " ",
+		TriggerCharacter: stringPtr(" "),
 	}
 
 	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, completionCtx)
@@ -405,7 +405,7 @@ func TestCompletion_TagNames(t *testing.T) {
 
 2024-01-16 another ; `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -438,7 +438,7 @@ func TestCompletion_TagNames_NoDuplicates(t *testing.T) {
 
 2024-01-17 new ; `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -475,7 +475,7 @@ func TestCompletion_TagValues(t *testing.T) {
 
 2024-01-17 new ; project:`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -507,7 +507,7 @@ func TestCompletion_TagValues_OnlyForCurrentTag(t *testing.T) {
 
 2024-01-17 new ; status:`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -573,7 +573,7 @@ func TestCompletion_Date_BuiltIn(t *testing.T) {
 	srv := NewServer()
 	content := ``
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -609,7 +609,7 @@ func TestCompletion_Date_Historical(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -637,7 +637,7 @@ func TestCompletion_Date_UsesFileFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -654,7 +654,7 @@ func TestCompletion_Date_UsesFileFormat(t *testing.T) {
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -672,7 +672,7 @@ func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -689,7 +689,7 @@ func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -705,7 +705,7 @@ func TestCompletion_Date_DefaultFormatWhenNoValidDates(t *testing.T) {
 account expenses:food
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -722,7 +722,7 @@ account expenses:food
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -740,7 +740,7 @@ func TestCompletion_Date_UsesDotSeparator(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -757,7 +757,7 @@ func TestCompletion_Date_UsesDotSeparator(t *testing.T) {
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -775,7 +775,7 @@ func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -792,7 +792,7 @@ func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -814,7 +814,7 @@ func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -831,7 +831,7 @@ func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
 
 	var historicalItems []protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "from history" {
+		if completionDetail(item) == "from history" {
 			historicalItems = append(historicalItems, item)
 		}
 	}
@@ -845,7 +845,7 @@ func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
 func extractDetails(items []protocol.CompletionItem) []string {
 	details := make([]string, len(items))
 	for i, item := range items {
-		details[i] = item.Detail
+		details[i] = completionDetail(item)
 	}
 	return details
 }
@@ -858,7 +858,7 @@ func TestCompletion_PayeeInsertsOnlyPayeeName(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -883,7 +883,7 @@ func TestCompletion_PayeeInsertsOnlyPayeeName(t *testing.T) {
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
 	assert.Empty(t, groceryItem.InsertText, "Payee should insert only the label")
-	assert.Equal(t, "Payee (1)", groceryItem.Detail, "Detail should show count")
+	assert.Equal(t, "Payee (1)", completionDetail(*groceryItem), "Detail should show count")
 }
 
 func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
@@ -902,7 +902,7 @@ func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -931,15 +931,15 @@ func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
 
 	require.NotNil(t, eurItem, "Shop EUR should be in completion items")
 	assert.Empty(t, eurItem.InsertText, "Payee should insert only the label")
-	assert.Equal(t, "Payee (1)", eurItem.Detail)
+	assert.Equal(t, "Payee (1)", completionDetail(*eurItem))
 
 	require.NotNil(t, dollarItem, "Dollar Store should be in completion items")
 	assert.Empty(t, dollarItem.InsertText, "Payee should insert only the label")
-	assert.Equal(t, "Payee (1)", dollarItem.Detail)
+	assert.Equal(t, "Payee (1)", completionDetail(*dollarItem))
 
 	require.NotNil(t, euroSymItem, "Euro Shop should be in completion items")
 	assert.Empty(t, euroSymItem.InsertText, "Payee should insert only the label")
-	assert.Equal(t, "Payee (1)", euroSymItem.Detail)
+	assert.Equal(t, "Payee (1)", completionDetail(*euroSymItem))
 }
 
 func TestCompletion_RankingByFrequency(t *testing.T) {
@@ -962,7 +962,7 @@ func TestCompletion_RankingByFrequency(t *testing.T) {
 
 2024-01-05 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -990,11 +990,11 @@ func TestCompletion_RankingByFrequency(t *testing.T) {
 	require.NotNil(t, frequentItem, "Frequent Store should be in completion items")
 	require.NotNil(t, rareItem, "Rare Shop should be in completion items")
 
-	assert.NotEmpty(t, frequentItem.SortText, "Frequent item should have SortText")
-	assert.NotEmpty(t, rareItem.SortText, "Rare item should have SortText")
-	assert.True(t, frequentItem.SortText < rareItem.SortText,
+	assert.NotEmpty(t, completionSortText(*frequentItem), "Frequent item should have SortText")
+	assert.NotEmpty(t, completionSortText(*rareItem), "Rare item should have SortText")
+	assert.True(t, completionSortText(*frequentItem) < completionSortText(*rareItem),
 		"Frequent item (SortText=%s) should sort before rare item (SortText=%s)",
-		frequentItem.SortText, rareItem.SortText)
+		completionSortText(*frequentItem), completionSortText(*rareItem))
 }
 
 func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
@@ -1018,7 +1018,7 @@ func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
 2024-01-05 Test5
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1050,14 +1050,14 @@ func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
 	require.NotNil(t, rareItem, "expenses:rare should be in completion items")
 	require.NotNil(t, cashItem, "assets:cash should be in completion items")
 
-	assert.NotEmpty(t, foodItem.SortText, "expenses:food should have SortText")
-	assert.NotEmpty(t, rareItem.SortText, "expenses:rare should have SortText")
+	assert.NotEmpty(t, completionSortText(*foodItem), "expenses:food should have SortText")
+	assert.NotEmpty(t, completionSortText(*rareItem), "expenses:rare should have SortText")
 
-	assert.True(t, foodItem.SortText < rareItem.SortText,
+	assert.True(t, completionSortText(*foodItem) < completionSortText(*rareItem),
 		"Frequent account expenses:food (SortText=%s) should sort before rare expenses:rare (SortText=%s)",
-		foodItem.SortText, rareItem.SortText)
+		completionSortText(*foodItem), completionSortText(*rareItem))
 
-	assert.True(t, cashItem.SortText < rareItem.SortText,
+	assert.True(t, completionSortText(*cashItem) < completionSortText(*rareItem),
 		"assets:cash (used 4 times) should sort before expenses:rare (used 1 time)")
 }
 
@@ -1090,7 +1090,7 @@ func TestCompletion_MaxResultsPreservesFrequent(t *testing.T) {
 
 2024-01-06 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1138,7 +1138,7 @@ func TestCompletion_MaxResultsAccountsPreservesFrequent(t *testing.T) {
 2024-01-05 Test5
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1198,9 +1198,8 @@ include transactions.journal`
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	initParams := &protocol.InitializeParams{
-		RootURI: uri.File(tmpDir),
-	}
+	rootURI := uri.File(tmpDir)
+	initParams := &protocol.InitializeParams{RootURI: &rootURI}
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
@@ -1226,7 +1225,7 @@ include transactions.journal`
 	var foodDetail string
 	for _, item := range result.Items {
 		if item.Label == "expenses:food" {
-			foodDetail = item.Detail
+			foodDetail = completionDetail(item)
 			break
 		}
 	}
@@ -1241,7 +1240,7 @@ func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1269,7 +1268,7 @@ func TestCompletion_FilterTextSameForAllItems(t *testing.T) {
 2024-01-16 another
     exp`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1492,7 +1491,7 @@ func TestCompletion_FiltersAndSortsByFrequency(t *testing.T) {
 2024-01-04 Test4
     альа`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1548,7 +1547,7 @@ func TestCompletion_ConsecutiveMatchBeforeSparse(t *testing.T) {
 2024-01-05 Test5
     альф`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1662,7 +1661,7 @@ commodity RUB
 2024-01-15 test
     expenses:food  100 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1692,7 +1691,7 @@ account expenses:food
 
 account `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1720,7 +1719,7 @@ func TestCompletion_DirectiveCommodity(t *testing.T) {
 
 commodity U`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1780,7 +1779,7 @@ account expenses:food
 2024-01-15 test
     exp`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1807,7 +1806,7 @@ account expenses:food
 	require.NotNil(t, foodItem, "expenses:food should be in completion items")
 	require.NotNil(t, foodItem.TextEdit, "TextEdit should be set for proper replacement")
 
-	textEdit := foodItem.TextEdit
+	textEdit := completionTextEdit(*foodItem)
 
 	assert.Equal(t, uint32(4), textEdit.Range.Start.Line)
 	assert.Equal(t, uint32(4), textEdit.Range.Start.Character, "TextEdit should start at column 4 (after indent)")
@@ -1819,7 +1818,7 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 	srv := NewServer()
 	content := "account expenses:food:supermarket\naccount expenses:food:electronics\n\n2024-01-15 test\n    expenses:food:supermarket"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Cursor right after "food:" at "expenses:food:|supermarket" — UTF-16 col 18
 	params := &protocol.CompletionParams{
@@ -1829,8 +1828,8 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 4, Character: 18},
 		},
-		Context: &protocol.CompletionContext{
-			TriggerCharacter: ":",
+		Context: protocol.CompletionContext{
+			TriggerCharacter: stringPtr(":"),
 		},
 	}
 
@@ -1849,7 +1848,7 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 	require.NotNil(t, electronicsItem, "expenses:food:electronics should be in completions")
 	require.NotNil(t, electronicsItem.TextEdit, "TextEdit should be set")
 
-	textEdit := electronicsItem.TextEdit
+	textEdit := completionTextEdit(*electronicsItem)
 	assert.Equal(t, uint32(4), textEdit.Range.Start.Character, "Start: after indent")
 	assert.Equal(t, uint32(29), textEdit.Range.End.Character, "End: covers full existing account token")
 	assert.Equal(t, "expenses:food:electronics", textEdit.NewText)
@@ -2017,7 +2016,7 @@ func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2042,13 +2041,13 @@ func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
 
 	require.NotNil(t, groceryItem, "Grocery Store should be in completion items")
 
-	if groceryItem.InsertText != "" {
-		assert.Equal(t, "Grocery Store", groceryItem.InsertText,
+	if insertText := optionalString(groceryItem.InsertText); insertText != "" {
+		assert.Equal(t, "Grocery Store", insertText,
 			"Payee completion should insert ONLY the payee name, not template")
 	}
-	assert.NotContains(t, groceryItem.InsertText, "expenses:food",
+	assert.NotContains(t, optionalString(groceryItem.InsertText), "expenses:food",
 		"Payee completion should NOT contain template postings")
-	assert.NotContains(t, groceryItem.InsertText, "\n",
+	assert.NotContains(t, optionalString(groceryItem.InsertText), "\n",
 		"Payee completion should NOT contain newlines (template)")
 }
 
@@ -2063,7 +2062,7 @@ account expenses:food:groceries
 
 2024-01-15 test
     exp`
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.StoreDocument(uri, content)
 
 	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
@@ -2100,7 +2099,7 @@ func TestCompletion_ShowCountsDisabled(t *testing.T) {
 
 2024-01-17 test
     `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.StoreDocument(uri, content)
 
 	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
@@ -2113,7 +2112,7 @@ func TestCompletion_ShowCountsDisabled(t *testing.T) {
 
 	for _, item := range result.Items {
 		if item.Label == "expenses:food" {
-			assert.NotContains(t, item.Detail, "(", "counts should not be shown when disabled")
+			assert.NotContains(t, completionDetail(item), "(", "counts should not be shown when disabled")
 			return
 		}
 	}
@@ -2135,7 +2134,7 @@ func TestCompletion_Date_UsesNearbyFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2152,7 +2151,7 @@ func TestCompletion_Date_UsesNearbyFormat(t *testing.T) {
 
 	var todayItem protocol.CompletionItem
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			todayItem = item
 			break
 		}
@@ -2268,7 +2267,7 @@ func TestCompletion_PartialDateReturnsDates(t *testing.T) {
 
 2026-`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2296,9 +2295,9 @@ func TestCompletion_PartialDateReturnsDates(t *testing.T) {
 		assert.Equal(t, protocol.CompletionItemKindConstant, item.Kind,
 			"date items should have Constant kind, got item: %s", item.Label)
 		if item.TextEdit != nil {
-			assert.Equal(t, uint32(0), item.TextEdit.Range.Start.Character,
+			assert.Equal(t, uint32(0), completionTextEdit(item).Range.Start.Character,
 				"TextEdit should replace from column 0")
-			assert.Equal(t, uint32(5), item.TextEdit.Range.End.Character,
+			assert.Equal(t, uint32(5), completionTextEdit(item).Range.End.Character,
 				"TextEdit should replace to cursor position")
 		}
 	}
@@ -2312,7 +2311,7 @@ func TestCompletion_PartialDateOverridesFileFormat(t *testing.T) {
 
 2026-`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2334,7 +2333,7 @@ func TestCompletion_PartialDateOverridesFileFormat(t *testing.T) {
 	assert.Contains(t, details, "tomorrow", "should contain tomorrow")
 
 	for _, item := range result.Items {
-		if item.Detail == "today" || item.Detail == "yesterday" || item.Detail == "tomorrow" {
+		if detail := completionDetail(item); detail == "today" || detail == "yesterday" || detail == "tomorrow" {
 			assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, item.Label,
 				"when user types '2026-', dates should be YYYY-MM-DD, not MM-DD; got %s", item.Label)
 		}
@@ -2352,7 +2351,7 @@ func TestCompletion_ShortDateKeepsShortFormat(t *testing.T) {
 
 ` + prefix
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2369,7 +2368,7 @@ func TestCompletion_ShortDateKeepsShortFormat(t *testing.T) {
 	require.True(t, len(result.Items) > 0, "should have completion items for short date prefix")
 
 	for _, item := range result.Items {
-		if item.Detail == "today" || item.Detail == "yesterday" || item.Detail == "tomorrow" {
+		if detail := completionDetail(item); detail == "today" || detail == "yesterday" || detail == "tomorrow" {
 			assert.Regexp(t, `^\d{2}-\d{2}$`, item.Label,
 				"when user types '%s' and file uses MM-DD, dates should stay MM-DD; got %s", prefix, item.Label)
 		}
@@ -2419,7 +2418,7 @@ commodity RUB
 2024-01-15 test
     expenses:food  `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2618,7 +2617,7 @@ func TestCompletion_PayeeWithTab(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 Grocery Store\n    expenses:food  $50\n    assets:cash\n\n2024-01-16\t"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2639,8 +2638,8 @@ func TestCompletion_PayeeWithTab(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "Grocery Store" {
 			require.NotNil(t, item.TextEdit, "TextEdit should be set")
-			assert.Equal(t, uint32(11), item.TextEdit.Range.Start.Character, "TextEdit should start after tab")
-			assert.Equal(t, uint32(11), item.TextEdit.Range.End.Character, "TextEdit should end at cursor")
+			assert.Equal(t, uint32(11), completionTextEdit(item).Range.Start.Character, "TextEdit should start after tab")
+			assert.Equal(t, uint32(11), completionTextEdit(item).Range.End.Character, "TextEdit should end at cursor")
 		}
 	}
 }
@@ -2851,7 +2850,7 @@ func TestCompletion_IncludeNotes_True_ShowsFullDescription(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2885,7 +2884,7 @@ func TestCompletion_IncludeNotes_False_ShowsPayeeOnly(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2916,7 +2915,7 @@ func TestCompletion_IncludeNotes_DefaultTrue(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2945,7 +2944,7 @@ func TestCompletion_ExcludesCurrentTransactionAccounts(t *testing.T) {
 2024-01-16 new
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2973,7 +2972,7 @@ func TestCompletion_ExcludesCurrentTransactionPayee(t *testing.T) {
 
 2024-01-16 Groc`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3004,7 +3003,7 @@ func TestCompletion_CursorBetweenTransactions(t *testing.T) {
     assets:cash
 `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3022,7 +3021,7 @@ func TestCompletion_CursorBetweenTransactions(t *testing.T) {
 	labels := extractLabels(result.Items)
 	var hasToday bool
 	for _, item := range result.Items {
-		if item.Detail == "today" {
+		if completionDetail(item) == "today" {
 			hasToday = true
 			break
 		}
@@ -3039,7 +3038,7 @@ account assets:cash
 2024-01-15 test
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3107,7 +3106,7 @@ func TestFindTokenEnd(t *testing.T) {
 func TestRulesCompletion_HasTextEdit(t *testing.T) {
 	srv := NewServer()
 	content := "  acco"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3128,7 +3127,7 @@ func TestRulesCompletion_HasTextEdit(t *testing.T) {
 func TestRulesCompletion_TextEditRange(t *testing.T) {
 	srv := NewServer()
 	content := "  acco"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3143,14 +3142,14 @@ func TestRulesCompletion_TextEditRange(t *testing.T) {
 	require.NotEmpty(t, result.Items)
 	item := result.Items[0]
 	require.NotNil(t, item.TextEdit)
-	assert.Equal(t, uint32(2), item.TextEdit.Range.Start.Character, "Start.Character should be 2 (after indent)")
-	assert.Equal(t, uint32(6), item.TextEdit.Range.End.Character, "End.Character should be 6")
+	assert.Equal(t, uint32(2), completionTextEdit(item).Range.Start.Character, "Start.Character should be 2 (after indent)")
+	assert.Equal(t, uint32(6), completionTextEdit(item).Range.End.Character, "End.Character should be 6")
 }
 
 func TestRulesCompletion_TextEditRange_TopLevel(t *testing.T) {
 	srv := NewServer()
 	content := "sep"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3165,8 +3164,8 @@ func TestRulesCompletion_TextEditRange_TopLevel(t *testing.T) {
 	require.NotEmpty(t, result.Items)
 	item := result.Items[0]
 	require.NotNil(t, item.TextEdit)
-	assert.Equal(t, uint32(0), item.TextEdit.Range.Start.Character, "Start.Character should be 0")
-	assert.Equal(t, uint32(3), item.TextEdit.Range.End.Character, "End.Character should be 3")
+	assert.Equal(t, uint32(0), completionTextEdit(item).Range.Start.Character, "Start.Character should be 0")
+	assert.Equal(t, uint32(3), completionTextEdit(item).Range.End.Character, "End.Character should be 3")
 }
 
 // Regression: issue #23 — inside an `if` block, the LSP should offer
@@ -3175,7 +3174,7 @@ func TestRulesCompletion_TextEditRange_TopLevel(t *testing.T) {
 func TestRulesCompletion_InsideIfBlock_FieldReferences(t *testing.T) {
 	srv := NewServer()
 	content := "fields date, description, amount\nif\n%d"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3203,8 +3202,8 @@ func TestRulesCompletion_InsideIfBlock_FieldReferences(t *testing.T) {
 	// TextEdit range should cover the '%d' prefix so the completion replaces it.
 	for _, it := range result.Items {
 		require.NotNil(t, it.TextEdit, "item %q must have TextEdit", it.Label)
-		assert.Equal(t, uint32(0), it.TextEdit.Range.Start.Character, "Start should cover the %% prefix")
-		assert.Equal(t, uint32(2), it.TextEdit.Range.End.Character, "End should match cursor col")
+		assert.Equal(t, uint32(0), completionTextEdit(it).Range.Start.Character, "Start should cover the %% prefix")
+		assert.Equal(t, uint32(2), completionTextEdit(it).Range.End.Character, "End should match cursor col")
 	}
 }
 
@@ -3213,7 +3212,7 @@ func TestRulesCompletion_InsideIfBlock_FieldReferences(t *testing.T) {
 func TestRulesCompletion_InsideIfBlock_NoFieldsDeclared(t *testing.T) {
 	srv := NewServer()
 	content := "if\n%d"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3241,7 +3240,7 @@ func TestRulesCompletion_InsideIfBlock_NoFieldsDeclared(t *testing.T) {
 func TestRulesCompletion_TopLevelStillOffersDirectives(t *testing.T) {
 	srv := NewServer()
 	content := "ski"
-	docURI := protocol.DocumentURI("file:///test.rules")
+	docURI := uri.URI("file:///test.rules")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.CompletionParams{
@@ -3270,7 +3269,7 @@ func TestCompletion_DigitTriggerOnEmptyLine(t *testing.T) {
 
 2`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3279,9 +3278,9 @@ func TestCompletion_DigitTriggerOnEmptyLine(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 4, Character: 1},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "2",
+			TriggerCharacter: stringPtr("2"),
 		},
 	}
 
@@ -3304,7 +3303,7 @@ func TestCompletion_DigitTriggerPartialYear(t *testing.T) {
 
 202`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3313,9 +3312,9 @@ func TestCompletion_DigitTriggerPartialYear(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 4, Character: 3},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "2",
+			TriggerCharacter: stringPtr("2"),
 		},
 	}
 
@@ -3339,7 +3338,7 @@ func TestCompletion_DigitTriggerInPostingDoesNotReturnDates(t *testing.T) {
     expenses:food  $5
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3348,9 +3347,9 @@ func TestCompletion_DigitTriggerInPostingDoesNotReturnDates(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 1, Character: 20},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "5",
+			TriggerCharacter: stringPtr("5"),
 		},
 	}
 
@@ -3366,7 +3365,7 @@ func TestCompletion_DigitTriggerInPayeeArea(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 3`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3375,9 +3374,9 @@ func TestCompletion_DigitTriggerInPayeeArea(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 0, Character: 12},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "3",
+			TriggerCharacter: stringPtr("3"),
 		},
 	}
 
@@ -3393,7 +3392,7 @@ func TestCompletion_DigitTriggerOnEmptyDocument(t *testing.T) {
 	srv := NewServer()
 	content := `2`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3402,9 +3401,9 @@ func TestCompletion_DigitTriggerOnEmptyDocument(t *testing.T) {
 			},
 			Position: protocol.Position{Line: 0, Character: 1},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "2",
+			TriggerCharacter: stringPtr("2"),
 		},
 	}
 
@@ -3493,7 +3492,7 @@ func TestCompletion_Directive_TypingAccProducesAccount(t *testing.T) {
 	srv := NewServer()
 	content := "acc"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3515,8 +3514,8 @@ func TestCompletion_Directive_TypingAccProducesAccount(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "account" {
 			assert.Equal(t, protocol.CompletionItemKindKeyword, item.Kind)
-			assert.Equal(t, "account ", item.InsertText)
-			assert.Equal(t, "Directive", item.Detail)
+			assert.Equal(t, "account ", optionalString(item.InsertText))
+			assert.Equal(t, "Directive", completionDetail(item))
 			break
 		}
 	}
@@ -3526,7 +3525,7 @@ func TestCompletion_Directive_InsertTextHasTrailingSpace(t *testing.T) {
 	srv := NewServer()
 	content := "inc"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3543,7 +3542,7 @@ func TestCompletion_Directive_InsertTextHasTrailingSpace(t *testing.T) {
 
 	for _, item := range result.Items {
 		if item.Label == "include" {
-			assert.Equal(t, "include ", item.InsertText)
+			assert.Equal(t, "include ", optionalString(item.InsertText))
 			return
 		}
 	}
@@ -3554,7 +3553,7 @@ func TestCompletion_Directive_TextEditFromColumnZero(t *testing.T) {
 	srv := NewServer()
 	content := "acc"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3572,8 +3571,8 @@ func TestCompletion_Directive_TextEditFromColumnZero(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "account" {
 			require.NotNil(t, item.TextEdit)
-			assert.Equal(t, uint32(0), item.TextEdit.Range.Start.Character)
-			assert.Equal(t, uint32(3), item.TextEdit.Range.End.Character)
+			assert.Equal(t, uint32(0), completionTextEdit(item).Range.Start.Character)
+			assert.Equal(t, uint32(3), completionTextEdit(item).Range.End.Character)
 			return
 		}
 	}
@@ -3584,7 +3583,7 @@ func TestCompletion_Directive_FuzzyFiltering(t *testing.T) {
 	srv := NewServer()
 	content := "com"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3610,7 +3609,7 @@ func TestCompletion_Directive_AllDirectivesShownOnSingleLetter(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test\n    expenses:food  $50\n    assets:cash\n\na"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3635,7 +3634,7 @@ func TestCompletion_Directive_MultiWordDirective(t *testing.T) {
 	srv := NewServer()
 	content := "app"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3694,7 +3693,7 @@ func TestCompletion_Directive_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\nacc"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3717,7 +3716,7 @@ func TestCompletion_Directive_BlockDirectiveNewlineInsertText(t *testing.T) {
 	srv := NewServer()
 	content := "com"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3734,7 +3733,7 @@ func TestCompletion_Directive_BlockDirectiveNewlineInsertText(t *testing.T) {
 
 	for _, item := range result.Items {
 		if item.Label == "comment" {
-			assert.Equal(t, "comment\n", item.InsertText, "block directive should have newline-terminated insertText")
+			assert.Equal(t, "comment\n", optionalString(item.InsertText), "block directive should have newline-terminated insertText")
 			return
 		}
 	}
@@ -3745,7 +3744,7 @@ func TestCompletion_Directive_TextEditCoversFullLine(t *testing.T) {
 	srv := NewServer()
 	content := "apply a"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3763,8 +3762,8 @@ func TestCompletion_Directive_TextEditCoversFullLine(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "apply account" {
 			require.NotNil(t, item.TextEdit)
-			assert.Equal(t, uint32(0), item.TextEdit.Range.Start.Character)
-			assert.Equal(t, uint32(7), item.TextEdit.Range.End.Character,
+			assert.Equal(t, uint32(0), completionTextEdit(item).Range.Start.Character)
+			assert.Equal(t, uint32(7), completionTextEdit(item).Range.End.Character,
 				"TextEdit should cover full typed text including spaces")
 			return
 		}
@@ -3788,7 +3787,7 @@ func TestCompletion_TagName_TextEditRange(t *testing.T) {
 
 2024-01-16 another ; proj`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3806,8 +3805,8 @@ func TestCompletion_TagName_TextEditRange(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "project" {
 			require.NotNil(t, item.TextEdit, "tag name completion should have TextEdit")
-			assert.Equal(t, uint32(4), item.TextEdit.Range.Start.Line)
-			assert.Equal(t, uint32(21), item.TextEdit.Range.Start.Character,
+			assert.Equal(t, uint32(4), completionTextEdit(item).Range.Start.Line)
+			assert.Equal(t, uint32(21), completionTextEdit(item).Range.Start.Character,
 				"TextEdit should start after '; '")
 			return
 		}
@@ -3829,7 +3828,7 @@ func TestCompletion_TagValue_TextEditRange(t *testing.T) {
 
 2024-01-17 new ; project:al`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3847,8 +3846,8 @@ func TestCompletion_TagValue_TextEditRange(t *testing.T) {
 	for _, item := range result.Items {
 		if item.Label == "alpha" {
 			require.NotNil(t, item.TextEdit, "tag value completion should have TextEdit")
-			assert.Equal(t, uint32(8), item.TextEdit.Range.Start.Line)
-			assert.Equal(t, uint32(25), item.TextEdit.Range.Start.Character,
+			assert.Equal(t, uint32(8), completionTextEdit(item).Range.Start.Line)
+			assert.Equal(t, uint32(25), completionTextEdit(item).Range.Start.Character,
 				"TextEdit should start after 'project:'")
 			return
 		}
@@ -3864,7 +3863,7 @@ func TestCompletion_TagName_FuzzyMatch(t *testing.T) {
 
 2024-01-16 another ; proj`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3956,7 +3955,7 @@ func TestCompletion_TagName_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test  ; project:alpha, status:done\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\n2024-01-16 another ; proj"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3979,7 +3978,7 @@ func TestCompletion_TagValue_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test1  ; project:alpha\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\n2024-01-16 test2  ; project:beta\r\n    expenses:rent  $1000\r\n    assets:bank\r\n\r\n2024-01-17 new ; project:"
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4007,7 +4006,7 @@ func TestCompletion_TagName_PostingComment(t *testing.T) {
 2024-01-16 another
     expenses:rent  $1000  ; `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4038,7 +4037,7 @@ func TestCompletion_TagValue_PostingComment(t *testing.T) {
 2024-01-16 another
     expenses:rent  $1000  ; project:`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4102,7 +4101,7 @@ func TestCompletion_PayeeAwareAccountRanking(t *testing.T) {
 2024-01-04 Grocery Store
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4130,9 +4129,9 @@ func TestCompletion_PayeeAwareAccountRanking(t *testing.T) {
 	require.NotNil(t, foodItem, "expenses:food should be in completion items")
 	require.NotNil(t, fuelItem, "expenses:fuel should be in completion items")
 
-	assert.True(t, foodItem.SortText < fuelItem.SortText,
+	assert.True(t, completionSortText(*foodItem) < completionSortText(*fuelItem),
 		"Payee-associated account expenses:food (SortText=%s) should rank before expenses:fuel (SortText=%s)",
-		foodItem.SortText, fuelItem.SortText)
+		completionSortText(*foodItem), completionSortText(*fuelItem))
 }
 
 func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T) {
@@ -4152,7 +4151,7 @@ func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T
 2024-01-04 Unknown Place
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4180,9 +4179,9 @@ func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T
 	require.NotNil(t, foodItem, "expenses:food should be in completion items")
 	require.NotNil(t, fuelItem, "expenses:fuel should be in completion items")
 
-	assert.True(t, foodItem.SortText < fuelItem.SortText,
+	assert.True(t, completionSortText(*foodItem) < completionSortText(*fuelItem),
 		"Unknown payee: globally frequent expenses:food (SortText=%s) should rank before expenses:fuel (SortText=%s)",
-		foodItem.SortText, fuelItem.SortText)
+		completionSortText(*foodItem), completionSortText(*fuelItem))
 }
 
 func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
@@ -4206,7 +4205,7 @@ func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
 2024-05-01 Grocery Store
     `
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4237,7 +4236,7 @@ func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
 	// Both have payee pair usage count 2 for "Grocery Store".
 	// assets:cash last used 2024-02-01, assets:bank last used 2024-04-01.
 	// Recency tiebreaker: bank is more recent.
-	assert.True(t, bankItem.SortText < cashItem.SortText,
+	assert.True(t, completionSortText(*bankItem) < completionSortText(*cashItem),
 		"More recently used assets:bank (SortText=%s) should rank before assets:cash (SortText=%s)",
-		bankItem.SortText, cashItem.SortText)
+		completionSortText(*bankItem), completionSortText(*cashItem))
 }

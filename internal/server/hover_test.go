@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
@@ -104,7 +105,7 @@ func TestHover_Account(t *testing.T) {
     expenses:food  $30
     assets:cash  $-30`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -119,8 +120,8 @@ func TestHover_Account(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "expenses:food")
-	assert.Contains(t, result.Contents.Value, "80")
+	assert.Contains(t, hoverContent(result), "expenses:food")
+	assert.Contains(t, hoverContent(result), "80")
 }
 
 func TestHover_Amount(t *testing.T) {
@@ -131,7 +132,7 @@ func TestHover_Amount(t *testing.T) {
     expenses:food  $50.00
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -146,7 +147,7 @@ func TestHover_Amount(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "$50")
+	assert.Contains(t, hoverContent(result), "$50")
 }
 
 func TestHover_AmountSuffixCommodity(t *testing.T) {
@@ -155,7 +156,7 @@ func TestHover_AmountSuffixCommodity(t *testing.T) {
     expenses:food  50.00 EUR
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -170,7 +171,7 @@ func TestHover_AmountSuffixCommodity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "50.00 EUR")
+	assert.Contains(t, hoverContent(result), "50.00 EUR")
 }
 
 func TestHover_Payee(t *testing.T) {
@@ -187,7 +188,7 @@ func TestHover_Payee(t *testing.T) {
     expenses:food  $5
     assets:cash  $-5`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -202,8 +203,8 @@ func TestHover_Payee(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Grocery Store")
-	assert.Contains(t, result.Contents.Value, "2")
+	assert.Contains(t, hoverContent(result), "Grocery Store")
+	assert.Contains(t, hoverContent(result), "2")
 }
 
 func TestHover_EmptyPosition(t *testing.T) {
@@ -212,7 +213,7 @@ func TestHover_EmptyPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -251,7 +252,7 @@ func TestHover_AmountWithCost(t *testing.T) {
     assets:stocks  10 AAPL @ $150
     assets:cash  $-1500`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -266,7 +267,7 @@ func TestHover_AmountWithCost(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	content = strings.ToLower(result.Contents.Value)
+	content = strings.ToLower(hoverContent(result))
 	assert.True(t, strings.Contains(content, "10") || strings.Contains(content, "aapl"))
 }
 
@@ -280,7 +281,7 @@ func TestHover_TagName(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over "project" tag name (position right after semicolon and space)
 	params := &protocol.HoverParams{
@@ -296,9 +297,9 @@ func TestHover_TagName(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "project")
-	assert.Contains(t, result.Contents.Value, "2") // usage count
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "project")
+	assert.Contains(t, hoverContent(result), "2") // usage count
 }
 
 func TestHover_TagValue(t *testing.T) {
@@ -315,7 +316,7 @@ func TestHover_TagValue(t *testing.T) {
     expenses:food  $20
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over "home" tag value
 	params := &protocol.HoverParams{
@@ -331,10 +332,10 @@ func TestHover_TagValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "project")
-	assert.Contains(t, result.Contents.Value, "home")
-	assert.Contains(t, result.Contents.Value, "2") // usage count for project:home
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "project")
+	assert.Contains(t, hoverContent(result), "home")
+	assert.Contains(t, hoverContent(result), "2") // usage count for project:home
 }
 
 func TestHover_PostingTag(t *testing.T) {
@@ -343,7 +344,7 @@ func TestHover_PostingTag(t *testing.T) {
     expenses:food  $50 ; category:groceries
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over posting tag
 	params := &protocol.HoverParams{
@@ -359,8 +360,8 @@ func TestHover_PostingTag(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "category")
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "category")
 }
 
 func TestHover_TagWithValuesListed(t *testing.T) {
@@ -377,7 +378,7 @@ func TestHover_TagWithValuesListed(t *testing.T) {
     expenses:food  $20
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over tag name to see all values
 	params := &protocol.HoverParams{
@@ -394,7 +395,7 @@ func TestHover_TagWithValuesListed(t *testing.T) {
 	require.NotNil(t, result)
 
 	// Should show all unique values for this tag
-	assert.Contains(t, result.Contents.Value, "Values")
+	assert.Contains(t, hoverContent(result), "Values")
 }
 
 func TestHover_TagWithEmptyValue(t *testing.T) {
@@ -403,7 +404,7 @@ func TestHover_TagWithEmptyValue(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over tag name with empty value
 	params := &protocol.HoverParams{
@@ -419,9 +420,9 @@ func TestHover_TagWithEmptyValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "completed")
-	assert.Contains(t, result.Contents.Value, "(empty)")
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "completed")
+	assert.Contains(t, hoverContent(result), "(empty)")
 }
 
 func TestHover_TagValueEmpty(t *testing.T) {
@@ -430,7 +431,7 @@ func TestHover_TagValueEmpty(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over empty tag value (position after the colon)
 	params := &protocol.HoverParams{
@@ -446,9 +447,9 @@ func TestHover_TagValueEmpty(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "done")
-	assert.Contains(t, result.Contents.Value, "(empty)")
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "done")
+	assert.Contains(t, hoverContent(result), "(empty)")
 }
 
 func TestHover_TagWithUnicodeValue(t *testing.T) {
@@ -462,7 +463,7 @@ func TestHover_TagWithUnicodeValue(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over ASCII tag name "project"
 	// "2024-01-15 grocery ; " = 21 chars, so "project" starts at char 21
@@ -479,12 +480,12 @@ func TestHover_TagWithUnicodeValue(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "project")
-	assert.Contains(t, result.Contents.Value, "2") // usage count
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "project")
+	assert.Contains(t, hoverContent(result), "2") // usage count
 	// Check that Unicode values are listed
-	assert.Contains(t, result.Contents.Value, "дом")
-	assert.Contains(t, result.Contents.Value, "работа")
+	assert.Contains(t, hoverContent(result), "дом")
+	assert.Contains(t, hoverContent(result), "работа")
 }
 
 func TestHover_TagValueWithUnicodeContent(t *testing.T) {
@@ -498,7 +499,7 @@ func TestHover_TagValueWithUnicodeContent(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over Unicode tag value "дом"
 	// "2024-01-15 grocery ; project:" = 30 chars, "дом" starts at char 30
@@ -515,10 +516,10 @@ func TestHover_TagValueWithUnicodeContent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Tag")
-	assert.Contains(t, result.Contents.Value, "project")
-	assert.Contains(t, result.Contents.Value, "дом")
-	assert.Contains(t, result.Contents.Value, "2") // usage count for project:дом
+	assert.Contains(t, hoverContent(result), "Tag")
+	assert.Contains(t, hoverContent(result), "project")
+	assert.Contains(t, hoverContent(result), "дом")
+	assert.Contains(t, hoverContent(result), "2") // usage count for project:дом
 }
 
 func TestHover_PayeeWithCode(t *testing.T) {
@@ -531,7 +532,7 @@ func TestHover_PayeeWithCode(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover on payee "test" after code (test:123)
 	// "2026-01-01 (test:123) test" — "test" starts at column 22 (0-indexed)
@@ -548,9 +549,9 @@ func TestHover_PayeeWithCode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result, "hover on payee after code should return result")
 
-	assert.Contains(t, result.Contents.Value, "Payee")
-	assert.Contains(t, result.Contents.Value, "test")
-	assert.Contains(t, result.Contents.Value, "2")
+	assert.Contains(t, hoverContent(result), "Payee")
+	assert.Contains(t, hoverContent(result), "test")
+	assert.Contains(t, hoverContent(result), "2")
 }
 
 func TestHover_InsideCodeParentheses(t *testing.T) {
@@ -559,7 +560,7 @@ func TestHover_InsideCodeParentheses(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover inside code parentheses "(test:123)" — should NOT return payee
 	// Column 14 (0-indexed) is inside "test:123"
@@ -583,7 +584,7 @@ func TestHover_PayeeWithStatusAndCode(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover on payee "grocery store" after status and code
 	// "2026-01-01 * (test:123) grocery store" — "grocery" starts at column 24 (0-indexed)
@@ -600,8 +601,8 @@ func TestHover_PayeeWithStatusAndCode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result, "hover on payee after status+code should return result")
 
-	assert.Contains(t, result.Contents.Value, "Payee")
-	assert.Contains(t, result.Contents.Value, "grocery store")
+	assert.Contains(t, hoverContent(result), "Payee")
+	assert.Contains(t, hoverContent(result), "grocery store")
 }
 
 func TestHover_PartialDateWithComment(t *testing.T) {
@@ -613,7 +614,7 @@ func TestHover_PartialDateWithComment(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over plain comment text (no tags) - should return nil
 	// "01-22 Магазин ; просто текст"
@@ -645,7 +646,7 @@ func TestHover_PartialDatePayee(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over "Магазин" payee with partial date
 	// "01-22 Магазин" - payee starts at column 6 (0-indexed: 6)
@@ -662,9 +663,9 @@ func TestHover_PartialDatePayee(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Payee")
-	assert.Contains(t, result.Contents.Value, "Магазин")
-	assert.Contains(t, result.Contents.Value, "2") // transaction count
+	assert.Contains(t, hoverContent(result), "Payee")
+	assert.Contains(t, hoverContent(result), "Магазин")
+	assert.Contains(t, hoverContent(result), "2") // transaction count
 }
 
 func TestHover_PartialDateWithStatus(t *testing.T) {
@@ -675,7 +676,7 @@ func TestHover_PartialDateWithStatus(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over "Магазин" payee with partial date and status
 	// "01-22 * Магазин" - payee starts at column 8 (0-indexed: 8)
@@ -692,8 +693,8 @@ func TestHover_PartialDateWithStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "Payee")
-	assert.Contains(t, result.Contents.Value, "Магазин")
+	assert.Contains(t, hoverContent(result), "Payee")
+	assert.Contains(t, hoverContent(result), "Магазин")
 }
 
 func TestDefaultCommoditySymbol(t *testing.T) {
@@ -733,7 +734,7 @@ func TestHover_AmountWithDefaultCommodity(t *testing.T) {
     expenses:food  1.000,00
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -748,7 +749,7 @@ func TestHover_AmountWithDefaultCommodity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "1.000,00 EUR")
+	assert.Contains(t, hoverContent(result), "1.000,00 EUR")
 }
 
 func TestHover_AmountWithDefaultCommodityPrefix(t *testing.T) {
@@ -759,7 +760,7 @@ func TestHover_AmountWithDefaultCommodityPrefix(t *testing.T) {
     expenses:food  1,000.00
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -774,7 +775,7 @@ func TestHover_AmountWithDefaultCommodityPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "$1,000.00")
+	assert.Contains(t, hoverContent(result), "$1,000.00")
 }
 
 func TestHover_AmountWithDefaultCommodity_ExplicitOverrides(t *testing.T) {
@@ -785,7 +786,7 @@ func TestHover_AmountWithDefaultCommodity_ExplicitOverrides(t *testing.T) {
     expenses:food  $50.00
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -800,8 +801,8 @@ func TestHover_AmountWithDefaultCommodity_ExplicitOverrides(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "$50.00")
-	assert.NotContains(t, result.Contents.Value, "EUR")
+	assert.Contains(t, hoverContent(result), "$50.00")
+	assert.NotContains(t, hoverContent(result), "EUR")
 }
 
 func TestHover_AmountWithCommodityDirective(t *testing.T) {
@@ -812,7 +813,7 @@ func TestHover_AmountWithCommodityDirective(t *testing.T) {
     expenses:food  10000 RUB
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -827,7 +828,7 @@ func TestHover_AmountWithCommodityDirective(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "10.000,00 RUB")
+	assert.Contains(t, hoverContent(result), "10.000,00 RUB")
 }
 
 func TestHover_AmountNoDirectivesFallback(t *testing.T) {
@@ -836,7 +837,7 @@ func TestHover_AmountNoDirectivesFallback(t *testing.T) {
     expenses:food  50.00 EUR
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -851,7 +852,7 @@ func TestHover_AmountNoDirectivesFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "50.00 EUR")
+	assert.Contains(t, hoverContent(result), "50.00 EUR")
 }
 
 func TestHover_AccountBalanceWithDefaultCommodity(t *testing.T) {
@@ -862,7 +863,7 @@ func TestHover_AccountBalanceWithDefaultCommodity(t *testing.T) {
     expenses:food  $80
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -877,8 +878,8 @@ func TestHover_AccountBalanceWithDefaultCommodity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "$80.00")
-	assert.NotContains(t, result.Contents.Value, "80 $")
+	assert.Contains(t, hoverContent(result), "$80.00")
+	assert.NotContains(t, hoverContent(result), "80 $")
 }
 
 func TestHover_AccountBalanceWithCommodityDirective(t *testing.T) {
@@ -889,7 +890,7 @@ func TestHover_AccountBalanceWithCommodityDirective(t *testing.T) {
     expenses:food  500 EUR
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -904,7 +905,7 @@ func TestHover_AccountBalanceWithCommodityDirective(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "500,00 EUR")
+	assert.Contains(t, hoverContent(result), "500,00 EUR")
 }
 
 func TestHover_AccountBalanceWithPrefixCommodity(t *testing.T) {
@@ -913,7 +914,7 @@ func TestHover_AccountBalanceWithPrefixCommodity(t *testing.T) {
     expenses:food  $80
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -928,8 +929,8 @@ func TestHover_AccountBalanceWithPrefixCommodity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "$80")
-	assert.NotContains(t, result.Contents.Value, "80 $")
+	assert.Contains(t, hoverContent(result), "$80")
+	assert.NotContains(t, hoverContent(result), "80 $")
 }
 
 func TestHover_AccountBalanceNegativeWithDirective(t *testing.T) {
@@ -940,7 +941,7 @@ func TestHover_AccountBalanceNegativeWithDirective(t *testing.T) {
     assets:cash  $80
     expenses:food  $-80`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -955,7 +956,7 @@ func TestHover_AccountBalanceNegativeWithDirective(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "-$80.00")
+	assert.Contains(t, hoverContent(result), "-$80.00")
 }
 
 func TestHover_CostFormattedWithCommodityDirective(t *testing.T) {
@@ -966,7 +967,7 @@ func TestHover_CostFormattedWithCommodityDirective(t *testing.T) {
     assets:stocks  10 AAPL @ 15000 EUR
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -981,7 +982,7 @@ func TestHover_CostFormattedWithCommodityDirective(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "15.000,00 EUR")
+	assert.Contains(t, hoverContent(result), "15.000,00 EUR")
 }
 
 func TestHover_AccountBalanceMergesEmptyCommodityWithDefault(t *testing.T) {
@@ -999,7 +1000,7 @@ func TestHover_AccountBalanceMergesEmptyCommodityWithDefault(t *testing.T) {
     Расходы:Транспорт  71,00
     Активы:Банк  -71,00`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over Активы:Банк — should show single consolidated RUB balance
 	params := &protocol.HoverParams{
@@ -1016,7 +1017,7 @@ func TestHover_AccountBalanceMergesEmptyCommodityWithDefault(t *testing.T) {
 	require.NotNil(t, result)
 
 	// Should show exactly one balance line, not two separate "RUB" lines
-	balanceSection := result.Contents.Value
+	balanceSection := hoverContent(result)
 	assert.Contains(t, balanceSection, "RUB")
 	// Count occurrences of "RUB" in balance lines — should be exactly 1
 	rubCount := strings.Count(balanceSection, "RUB")
@@ -1035,7 +1036,7 @@ func TestHover_AccountBalanceNoDefaultCommodityKeepsSeparate(t *testing.T) {
     Расходы:Транспорт  71,00
     Активы:Банк  -71,00`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	// Hover over Активы:Банк
 	params := &protocol.HoverParams{
@@ -1052,9 +1053,9 @@ func TestHover_AccountBalanceNoDefaultCommodityKeepsSeparate(t *testing.T) {
 	require.NotNil(t, result)
 
 	// Without default commodity, we can't merge — should have two balance lines
-	assert.Contains(t, result.Contents.Value, "Balance")
-	assert.Contains(t, result.Contents.Value, "RUB")
-	assert.Contains(t, result.Contents.Value, "-71")
+	assert.Contains(t, hoverContent(result), "Balance")
+	assert.Contains(t, hoverContent(result), "RUB")
+	assert.Contains(t, hoverContent(result), "-71")
 }
 
 func TestHover_AccountBalanceDecimalPrecision(t *testing.T) {
@@ -1067,7 +1068,7 @@ func TestHover_AccountBalanceDecimalPrecision(t *testing.T) {
     expenses:food  9.00 USD
     assets:cash  -9.00 USD`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1082,9 +1083,9 @@ func TestHover_AccountBalanceDecimalPrecision(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Contains(t, result.Contents.Value, "expenses:food")
-	assert.Contains(t, result.Contents.Value, "34.70")
-	assert.Contains(t, result.Contents.Value, "Postings:** 2")
+	assert.Contains(t, hoverContent(result), "expenses:food")
+	assert.Contains(t, hoverContent(result), "34.70")
+	assert.Contains(t, hoverContent(result), "Postings:** 2")
 }
 
 func TestEnrichCommodityFormatsFromTransactions_DecimalPlaces(t *testing.T) {

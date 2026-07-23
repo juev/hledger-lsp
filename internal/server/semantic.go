@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -56,28 +57,28 @@ type SemanticTokensServerCapabilities struct {
 
 func GetSemanticTokensLegend() protocol.SemanticTokensLegend {
 	return protocol.SemanticTokensLegend{
-		TokenTypes: []protocol.SemanticTokenTypes{
-			protocol.SemanticTokenNamespace,          // 0: account, accountVirtual
-			protocol.SemanticTokenType,               // 1: commodity
-			protocol.SemanticTokenFunction,           // 2: payee
-			protocol.SemanticTokenNumber,             // 3: date (both date and amount use number superType)
-			protocol.SemanticTokenNumber,             // 4: amount
-			protocol.SemanticTokenTypes("decorator"), // 5: tag
-			protocol.SemanticTokenKeyword,            // 6: directive, rules keyword
-			protocol.SemanticTokenString,             // 7: code, tagValue, text
-			protocol.SemanticTokenOperator,           // 8: status, operator
-			protocol.SemanticTokenComment,            // 9: comment, note
-			protocol.SemanticTokenRegexp,             // 10: rules regexp
-			protocol.SemanticTokenParameter,          // 11: rules parameter
+		TokenTypes: []string{
+			string(protocol.SemanticTokenTypesNamespace), // 0: account, accountVirtual
+			string(protocol.SemanticTokenTypesType),      // 1: commodity
+			string(protocol.SemanticTokenTypesFunction),  // 2: payee
+			string(protocol.SemanticTokenTypesNumber),    // 3: date (both date and amount use number superType)
+			string(protocol.SemanticTokenTypesNumber),    // 4: amount
+			"decorator", // 5: tag
+			string(protocol.SemanticTokenTypesKeyword),   // 6: directive, rules keyword
+			string(protocol.SemanticTokenTypesString),    // 7: code, tagValue, text
+			string(protocol.SemanticTokenTypesOperator),  // 8: status, operator
+			string(protocol.SemanticTokenTypesComment),   // 9: comment, note
+			string(protocol.SemanticTokenTypesRegexp),    // 10: rules regexp
+			string(protocol.SemanticTokenTypesParameter), // 11: rules parameter
 		},
-		TokenModifiers: []protocol.SemanticTokenModifiers{
-			protocol.SemanticTokenModifierDeclaration,   // 0
-			protocol.SemanticTokenModifierDefinition,    // 1
-			protocol.SemanticTokenModifierReadonly,      // 2
-			protocol.SemanticTokenModifierStatic,        // 3
-			protocol.SemanticTokenModifierDeprecated,    // 4
-			protocol.SemanticTokenModifierAbstract,      // 5: virtual accounts
-			protocol.SemanticTokenModifiers("negative"), // 6: negative amounts
+		TokenModifiers: []string{
+			string(protocol.SemanticTokenModifiersDeclaration), // 0
+			string(protocol.SemanticTokenModifiersDefinition),  // 1
+			string(protocol.SemanticTokenModifiersReadonly),    // 2
+			string(protocol.SemanticTokenModifiersStatic),      // 3
+			string(protocol.SemanticTokenModifiersDeprecated),  // 4
+			string(protocol.SemanticTokenModifiersAbstract),    // 5: virtual accounts
+			"negative", // 6: negative amounts
 		},
 	}
 }
@@ -119,7 +120,7 @@ func (e *SemanticTokenEncoder) Reset() {
 
 type semanticTokensCache struct {
 	mu       sync.RWMutex
-	cache    map[protocol.DocumentURI]*cachedSemanticTokens
+	cache    map[uri.URI]*cachedSemanticTokens
 	resultID uint64
 }
 
@@ -131,11 +132,11 @@ type cachedSemanticTokens struct {
 
 func newSemanticTokensCache() *semanticTokensCache {
 	return &semanticTokensCache{
-		cache: make(map[protocol.DocumentURI]*cachedSemanticTokens),
+		cache: make(map[uri.URI]*cachedSemanticTokens),
 	}
 }
 
-func (c *semanticTokensCache) set(uri protocol.DocumentURI, tokens []semanticToken, data []uint32) string {
+func (c *semanticTokensCache) set(uri uri.URI, tokens []semanticToken, data []uint32) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.resultID++
@@ -148,7 +149,7 @@ func (c *semanticTokensCache) set(uri protocol.DocumentURI, tokens []semanticTok
 	return resultID
 }
 
-func (c *semanticTokensCache) delete(uri protocol.DocumentURI) {
+func (c *semanticTokensCache) delete(uri uri.URI) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.cache, uri)
@@ -169,7 +170,7 @@ func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.Semant
 	resultID := s.tokenCache.set(params.TextDocument.URI, tokens, data)
 
 	return &protocol.SemanticTokens{
-		ResultID: resultID,
+		ResultID: &resultID,
 		Data:     data,
 	}, nil
 }
@@ -194,7 +195,7 @@ func (s *Server) SemanticTokensRange(ctx context.Context, params *protocol.Seman
 }
 
 // tokenizeDoc dispatches to the appropriate tokenizer based on file type.
-func tokenizeDoc(uri protocol.DocumentURI, doc string) []semanticToken {
+func tokenizeDoc(uri uri.URI, doc string) []semanticToken {
 	if filetype.IsRules(string(uri)) {
 		return tokenizeRulesForSemantics(doc)
 	}

@@ -43,7 +43,7 @@ func TestDidChangeWatchedFiles_RepublishesDiagnostics(t *testing.T) {
 	ts.client.mu.Unlock()
 
 	err = ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
-		Changes: []*protocol.FileEvent{
+		Changes: []protocol.FileEvent{
 			{
 				URI:  uri.File(subPath),
 				Type: protocol.FileChangeTypeChanged,
@@ -89,7 +89,7 @@ func TestDidChangeWatchedFiles_SkipsOpenDocuments(t *testing.T) {
 	ts.client.mu.Unlock()
 
 	err = ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
-		Changes: []*protocol.FileEvent{
+		Changes: []protocol.FileEvent{
 			{
 				URI:  subURI,
 				Type: protocol.FileChangeTypeChanged,

@@ -104,7 +104,7 @@ func TestCompletion_RulesIncludedFields_InvalidationAfterDidChange(t *testing.T)
 			Version:                2,
 		},
 		ContentChanges: []protocol.TextDocumentContentChangeEvent{
-			{Text: "fields date, payee, amount\n"},
+			&protocol.TextDocumentContentChangeWholeDocument{Text: "fields date, payee, amount\n"},
 		},
 	}))
 

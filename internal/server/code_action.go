@@ -9,6 +9,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -23,6 +24,12 @@ type hledgerCommand struct {
 	title string
 }
 
+func boolPtr(value bool) *bool { return &value }
+
+func stringPtr(value string) *string { return &value }
+
+func codeActionKind(value protocol.CodeActionKind) *protocol.CodeActionKind { return &value }
+
 func getHledgerCommands() []hledgerCommand {
 	return []hledgerCommand{
 		{cmd: "bal", title: "Run hledger bal (balance)"},
@@ -33,20 +40,25 @@ func getHledgerCommands() []hledgerCommand {
 	}
 }
 
-func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CodeAction, error) {
+func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CommandOrCodeAction, error) {
 	if filetype.IsRules(string(params.TextDocument.URI)) {
 		return nil, nil
 	}
 
-	actions := s.getCodeActions(params.TextDocument.URI)
+	actions, err := s.getCodeActions(params.TextDocument.URI)
+	if err != nil {
+		return nil, err
+	}
 	quickFixes := s.getQuickFixCodeActions(params)
 
-	result := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes))
-	result = append(result, quickFixes...)
+	result := make([]protocol.CommandOrCodeAction, 0, len(actions)+len(quickFixes))
+	for i := range quickFixes {
+		result = append(result, &quickFixes[i])
+	}
 	for _, action := range actions {
 		a := action
 		a.Diagnostics = nil
-		result = append(result, a)
+		result = append(result, &a)
 	}
 
 	return result, nil
@@ -106,7 +118,8 @@ func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []pro
 	// Preferred quickfixes first (the single correct amount fix) so the editor
 	// surfaces the best action when several quickfixes are available.
 	sort.SliceStable(actions, func(i, j int) bool {
-		return actions[i].IsPreferred && !actions[j].IsPreferred
+		return actions[i].IsPreferred != nil && *actions[i].IsPreferred &&
+			(actions[j].IsPreferred == nil || !*actions[j].IsPreferred)
 	})
 
 	return actions
@@ -145,7 +158,7 @@ func isQuickFixableCode(code string) bool {
 }
 
 func (s *Server) quickFixForUnbalanced(
-	uri protocol.DocumentURI,
+	uri uri.URI,
 	doc string,
 	mapper *lsputil.PositionMapper,
 	journal *ast.Journal,
@@ -168,9 +181,9 @@ func (s *Server) quickFixForUnbalanced(
 	}
 	return protocol.CodeAction{
 		Title:       title,
-		Kind:        protocol.QuickFix,
+		Kind:        codeActionKind(protocol.CodeActionKindQuickFix),
 		Diagnostics: []protocol.Diagnostic{diag},
-		IsPreferred: true,
+		IsPreferred: boolPtr(true),
 		Edit:        edit,
 	}, true
 }
@@ -179,7 +192,7 @@ func (s *Server) quickFixForUnbalanced(
 // posting of a single-commodity unbalanced transaction. Shared by the
 // UNBALANCED quickfix and the hledger.fixUnbalanced code-lens command.
 func buildUnbalancedFix(
-	uri protocol.DocumentURI,
+	docURI uri.URI,
 	doc string,
 	mapper *lsputil.PositionMapper,
 	commodityFormats map[string]formatter.CommodityFormat,
@@ -217,43 +230,44 @@ func buildUnbalancedFix(
 
 	title := fmt.Sprintf("Fix final posting amount to %s", formatter.FormatAmount(&newAmount, commodityFormats))
 	return &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-			uri: {lineEdit},
+		Changes: map[uri.URI][]protocol.TextEdit{
+			docURI: {lineEdit},
 		},
 	}, title, true
 }
 
-func (s *Server) getCodeActions(uri protocol.DocumentURI) []protocol.CodeAction {
+func (s *Server) getCodeActions(uri uri.URI) ([]protocol.CodeAction, error) {
 	settings := s.getSettings()
 	if s.cliClient == nil || !s.cliClient.Available() || !settings.CLI.Enabled {
-		return nil
+		return nil, nil
 	}
 
 	commands := getHledgerCommands()
 	actions := make([]protocol.CodeAction, 0, len(commands))
 
 	for _, cmd := range commands {
+		arguments, err := commandArguments(cmd.cmd, string(uri))
+		if err != nil {
+			return nil, fmt.Errorf("marshal command arguments: %w", err)
+		}
 		actions = append(actions, protocol.CodeAction{
 			Title: cmd.title,
-			Kind:  "source.hledger",
-			Command: &protocol.Command{
+			Kind:  codeActionKind("source.hledger"),
+			Command: protocol.Command{
 				Title:   cmd.title,
 				Command: "hledger.run",
 				// The invoking document URI is carried alongside the command so
 				// ExecuteCommand can target the journal the action came from
 				// (LSP ExecuteCommandParams has no URI field of its own).
-				Arguments: []any{
-					cmd.cmd,
-					string(uri),
-				},
+				Arguments: arguments,
 			},
 		})
 	}
 
-	return actions
+	return actions, nil
 }
 
-func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
+func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (protocol.LSPAny, error) {
 	switch params.Command {
 	case "hledger.run":
 		return s.executeRunCommand(ctx, params)
@@ -264,13 +278,13 @@ func (s *Server) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCom
 	}
 }
 
-func (s *Server) executeRunCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
+func (s *Server) executeRunCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (protocol.LSPAny, error) {
 	if len(params.Arguments) < 1 {
 		return nil, fmt.Errorf("missing command argument")
 	}
 
-	cmd, ok := params.Arguments[0].(string)
-	if !ok {
+	cmd, err := unmarshalLSPAny[string](params.Arguments[0])
+	if err != nil {
 		return nil, fmt.Errorf("invalid command argument type")
 	}
 
@@ -285,28 +299,28 @@ func (s *Server) executeRunCommand(ctx context.Context, params *protocol.Execute
 
 	output, err := s.cliClient.Run(ctx, filePath, cmd)
 	if err != nil {
-		return formatOutputAsComment(cmd, fmt.Sprintf("Error: %v", err)), nil
+		return marshalLSPAny(formatOutputAsComment(cmd, fmt.Sprintf("Error: %v", err)))
 	}
 
-	return formatOutputAsComment(cmd, output), nil
+	return marshalLSPAny(formatOutputAsComment(cmd, output))
 }
 
 // executeFixUnbalanced resolves the transaction targeted by the unbalanced
 // code lens and applies the balance quickfix via
 // workspace/applyEdit so clicking the lens fixes the transaction in place.
-func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
+func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.ExecuteCommandParams) (protocol.LSPAny, error) {
 	if len(params.Arguments) < 2 {
 		return nil, fmt.Errorf("missing arguments")
 	}
 
-	uriRaw, ok := params.Arguments[0].(string)
-	if !ok {
+	uriRaw, err := unmarshalLSPAny[string](params.Arguments[0])
+	if err != nil {
 		return nil, fmt.Errorf("invalid uri argument")
 	}
-	uri := protocol.DocumentURI(uriRaw)
+	uri := uri.URI(uriRaw)
 
-	txRange, ok := commandRangeArg(params.Arguments[1])
-	if !ok {
+	txRange, err := commandRangeArg(params.Arguments[1])
+	if err != nil {
 		return nil, fmt.Errorf("invalid transaction range argument")
 	}
 
@@ -339,17 +353,17 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 	}
 
 	if s.client == nil {
-		return edit, nil
+		return marshalLSPAny(edit)
 	}
 
 	applied, err := s.client.ApplyEdit(ctx, &protocol.ApplyWorkspaceEditParams{
-		Label: "hledger-lsp: fix unbalanced transaction",
+		Label: stringPtr("hledger-lsp: fix unbalanced transaction"),
 		Edit:  *edit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("apply workspace edit: %w", err)
 	}
-	if !applied {
+	if applied == nil || !applied.Applied {
 		return nil, fmt.Errorf("client rejected the edit")
 	}
 	return nil, nil
@@ -365,65 +379,36 @@ func findTransactionByRange(transactions []ast.Transaction, target protocol.Rang
 	return nil
 }
 
-func commandRangeArg(v any) (protocol.Range, bool) {
-	switch value := v.(type) {
-	case protocol.Range:
-		return value, true
-	case *protocol.Range:
-		if value != nil {
-			return *value, true
-		}
-		return protocol.Range{}, false
-	case map[string]any:
-		start, startOK := commandPositionArg(value["start"])
-		end, endOK := commandPositionArg(value["end"])
-		return protocol.Range{Start: start, End: end}, startOK && endOK
-	default:
-		return protocol.Range{}, false
-	}
+func commandRangeArg(v protocol.LSPAny) (protocol.Range, error) {
+	return unmarshalLSPAny[protocol.Range](v)
 }
 
-func commandPositionArg(v any) (protocol.Position, bool) {
-	value, ok := v.(map[string]any)
-	if !ok {
-		return protocol.Position{}, false
+func commandArguments(values ...any) ([]protocol.LSPAny, error) {
+	arguments := make([]protocol.LSPAny, 0, len(values))
+	for _, value := range values {
+		encoded, err := marshalLSPAny(value)
+		if err != nil {
+			return nil, err
+		}
+		arguments = append(arguments, encoded)
 	}
-	line, lineOK := argUint32(value["line"])
-	character, characterOK := argUint32(value["character"])
-	return protocol.Position{Line: line, Character: character}, lineOK && characterOK
+	return arguments, nil
 }
 
-func argUint32(v any) (uint32, bool) {
-	switch n := v.(type) {
-	case float64:
-		if n < 0 || n > float64(^uint32(0)) || n != float64(uint32(n)) {
-			return 0, false
-		}
-		return uint32(n), true
-	case float32:
-		if n < 0 || float64(n) > float64(^uint32(0)) || n != float32(uint32(n)) {
-			return 0, false
-		}
-		return uint32(n), true
-	case int:
-		if n < 0 || uint64(n) > uint64(^uint32(0)) {
-			return 0, false
-		}
-		return uint32(n), true
-	case int64:
-		if n < 0 || uint64(n) > uint64(^uint32(0)) {
-			return 0, false
-		}
-		return uint32(n), true
-	case uint32:
-		return n, true
-	case uint64:
-		if n > uint64(^uint32(0)) {
-			return 0, false
-		}
-		return uint32(n), true
+func unmarshalLSPAny[T any](value protocol.LSPAny) (T, error) {
+	var decoded T
+	if err := protocol.Unmarshal(value, &decoded); err != nil {
+		return decoded, err
 	}
-	return 0, false
+	return decoded, nil
+}
+
+func marshalLSPAny(value any) (protocol.LSPAny, error) {
+	encoded, err := protocol.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return protocol.LSPAny(encoded), nil
 }
 
 // resolveCommandFile determines which journal file an hledger.run command
@@ -432,10 +417,10 @@ func argUint32(v any) (uint32, bool) {
 // journal it was invoked from even with multiple documents open. Without a
 // usable URI (e.g. a client that omits it) it falls back to the first open
 // document, preserving the legacy behavior.
-func (s *Server) resolveCommandFile(args []any) string {
+func (s *Server) resolveCommandFile(args []protocol.LSPAny) string {
 	if len(args) >= 2 {
-		if rawURI, ok := args[1].(string); ok && rawURI != "" {
-			if path := uriToPath(protocol.DocumentURI(rawURI)); path != "" {
+		if rawURI, err := unmarshalLSPAny[string](args[1]); err == nil && rawURI != "" {
+			if path := uriToPath(uri.URI(rawURI)); path != "" {
 				return path
 			}
 		}
@@ -443,7 +428,7 @@ func (s *Server) resolveCommandFile(args []any) string {
 
 	var filePath string
 	s.documents.Range(func(key, _ any) bool {
-		docURI := key.(protocol.DocumentURI)
+		docURI := key.(uri.URI)
 		if path := uriToPath(docURI); path != "" {
 			filePath = path
 			return false
@@ -573,42 +558,50 @@ const (
 // declarationTarget identifies the file and position where a new directive
 // should be inserted.
 type declarationTarget struct {
-	URI      protocol.DocumentURI
+	URI      uri.URI
 	Position protocol.Position
 }
 
-func (s *Server) quickFixForUndeclaredAccount(uri protocol.DocumentURI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
-	name, ok := extractQuotedName(diag.Message, "account '", "' is not declared")
+func (s *Server) quickFixForUndeclaredAccount(uri uri.URI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
+	message, ok := diag.Message.(protocol.String)
+	if !ok {
+		return protocol.CodeAction{}, false
+	}
+	name, ok := extractQuotedName(string(message), "account '", "' is not declared")
 	if !ok || name == "" {
 		return protocol.CodeAction{}, false
 	}
 	target := selectDeclarationInsertion(s.declarationResolved(uri), uri, kindAccount)
 	return protocol.CodeAction{
 		Title:       "Declare account " + name,
-		Kind:        protocol.QuickFix,
+		Kind:        codeActionKind(protocol.CodeActionKindQuickFix),
 		Diagnostics: []protocol.Diagnostic{diag},
 		Edit:        declarationEdit(target.URI, target.Position, declarationDirectiveText(target.Position, "account "+name)),
 	}, true
 }
 
-func (s *Server) quickFixForUndeclaredCommodity(uri protocol.DocumentURI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
-	symbol, ok := extractQuotedName(diag.Message, "commodity '", "' has no directive")
+func (s *Server) quickFixForUndeclaredCommodity(uri uri.URI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
+	message, ok := diag.Message.(protocol.String)
+	if !ok {
+		return protocol.CodeAction{}, false
+	}
+	symbol, ok := extractQuotedName(string(message), "commodity '", "' has no directive")
 	if !ok || symbol == "" {
 		return protocol.CodeAction{}, false
 	}
 	target := selectDeclarationInsertion(s.declarationResolved(uri), uri, kindCommodity)
 	return protocol.CodeAction{
 		Title:       "Declare commodity " + symbol,
-		Kind:        protocol.QuickFix,
+		Kind:        codeActionKind(protocol.CodeActionKindQuickFix),
 		Diagnostics: []protocol.Diagnostic{diag},
 		Edit:        declarationEdit(target.URI, target.Position, declarationDirectiveText(target.Position, formatCommodityDirectiveText(symbol))),
 	}, true
 }
 
-func declarationEdit(uri protocol.DocumentURI, pos protocol.Position, text string) *protocol.WorkspaceEdit {
+func declarationEdit(docURI uri.URI, pos protocol.Position, text string) *protocol.WorkspaceEdit {
 	return &protocol.WorkspaceEdit{
-		Changes: map[protocol.DocumentURI][]protocol.TextEdit{
-			uri: {{
+		Changes: map[uri.URI][]protocol.TextEdit{
+			docURI: {{
 				Range:   protocol.Range{Start: pos, End: pos},
 				NewText: text,
 			}},
@@ -616,7 +609,7 @@ func declarationEdit(uri protocol.DocumentURI, pos protocol.Position, text strin
 	}
 }
 
-func (s *Server) declarationResolved(uri protocol.DocumentURI) *include.ResolvedJournal {
+func (s *Server) declarationResolved(uri uri.URI) *include.ResolvedJournal {
 	if resolved := s.GetResolved(uri); resolved != nil {
 		return resolved
 	}
@@ -628,7 +621,7 @@ func (s *Server) declarationResolved(uri protocol.DocumentURI) *include.Resolved
 // tree, so it wins when it already declares the same kind; otherwise the first
 // included file with same-kind declarations is chosen; otherwise the directive
 // is inserted at the top of the current file.
-func selectDeclarationInsertion(resolved *include.ResolvedJournal, currentURI protocol.DocumentURI, kind directiveKind) declarationTarget {
+func selectDeclarationInsertion(resolved *include.ResolvedJournal, currentURI uri.URI, kind directiveKind) declarationTarget {
 	if resolved == nil || resolved.Primary == nil {
 		return declarationTarget{URI: currentURI}
 	}

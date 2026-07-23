@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,16 +50,16 @@ type Server struct {
 	settings              serverSettings
 	settingsMu            sync.RWMutex
 	supportsConfiguration bool
-	payeeTemplatesCache   sync.Map // map[protocol.DocumentURI]map[string][]analyzer.PostingTemplate
-	alignmentCache        sync.Map // map[protocol.DocumentURI]int
+	payeeTemplatesCache   sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
+	alignmentCache        sync.Map // map[uri.URI]int
 	tokenCache            *semanticTokensCache
-	parseCache            sync.Map // map[protocol.DocumentURI]*cachedDoc
-	docTexts              sync.Map // map[protocol.DocumentURI]*document.Text
+	parseCache            sync.Map // map[uri.URI]*cachedDoc
+	docTexts              sync.Map // map[uri.URI]*document.Text
 	docTextMu             sync.Mutex
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
-	diagEntries  map[protocol.DocumentURI]*diagEntry
+	diagEntries  map[uri.URI]*diagEntry
 }
 
 func NewServer() *Server {
@@ -67,7 +68,7 @@ func NewServer() *Server {
 		loader:       include.NewLoader(),
 		rulesLoader:  rules.NewLoader(),
 		diagDebounce: 100 * time.Millisecond,
-		diagEntries:  make(map[protocol.DocumentURI]*diagEntry),
+		diagEntries:  make(map[uri.URI]*diagEntry),
 		tokenCache:   newSemanticTokensCache(),
 	}
 	// Honour unsaved editor content for .rules files that are pulled in via
@@ -100,24 +101,26 @@ func (s *Server) SetClient(client protocol.Client) {
 	s.client = client
 }
 
-func (s *Server) StoreDocument(uri protocol.DocumentURI, content string) {
+func (s *Server) StoreDocument(uri uri.URI, content string) {
 	s.documents.Store(uri, content)
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
 	if params != nil && params.Capabilities.Workspace != nil {
-		s.supportsConfiguration = params.Capabilities.Workspace.Configuration
+		if configuration := params.Capabilities.Workspace.Configuration; configuration != nil {
+			s.supportsConfiguration = *configuration
+		}
 	}
 	if params != nil {
-		settings := parseSettingsFromRaw(s.getSettings(), params.InitializationOptions)
+		settings := parseSettingsFromLSPAny(s.getSettings(), params.InitializationOptions)
 		s.setSettings(settings)
 
-		if len(params.WorkspaceFolders) > 0 {
-			s.rootURI = uriToPath(protocol.DocumentURI(params.WorkspaceFolders[0].URI))
+		if folders, ok := params.WorkspaceFolders.Get(); ok && len(folders) > 0 {
+			s.rootURI = uriToPath(folders[0].URI)
 		} else {
 			rootURI := params.RootURI //nolint:staticcheck
-			if rootURI != "" {
-				s.rootURI = uriToPath(rootURI)
+			if rootURI != nil {
+				s.rootURI = uriToPath(*rootURI)
 			}
 		}
 	}
@@ -133,57 +136,61 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 	// a feature via DidChangeConfiguration requires a server restart to
 	// take effect. This is a protocol limitation, not a bug.
 	caps := protocol.ServerCapabilities{
-		TextDocumentSync: protocol.TextDocumentSyncOptions{
-			OpenClose: true,
-			Change:    protocol.TextDocumentSyncKindIncremental,
+		TextDocumentSync: &protocol.TextDocumentSyncOptions{
+			OpenClose: boolPtr(true),
+			Change:    syncKindPtr(protocol.TextDocumentSyncKindIncremental),
 			Save: &protocol.SaveOptions{
-				IncludeText: false,
+				IncludeText: boolPtr(false),
 			},
-			WillSaveWaitUntil: false,
+			WillSaveWaitUntil: boolPtr(false),
 		},
-		DocumentSymbolProvider:    true,
-		DocumentHighlightProvider: true,
-		SelectionRangeProvider:    true,
-		DefinitionProvider:        true,
-		ReferencesProvider:        true,
+		DocumentSymbolProvider:    protocol.Boolean(true),
+		DocumentHighlightProvider: protocol.Boolean(true),
+		SelectionRangeProvider:    protocol.Boolean(true),
+		DefinitionProvider:        protocol.Boolean(true),
+		ReferencesProvider:        protocol.Boolean(true),
 		RenameProvider: &protocol.RenameOptions{
-			PrepareProvider: true,
+			PrepareProvider: boolPtr(true),
 		},
 	}
 
 	if settings.Features.Completion {
 		caps.CompletionProvider = &protocol.CompletionOptions{
 			TriggerCharacters: []string{":", "@", "=", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
-			ResolveProvider:   true,
+			ResolveProvider:   boolPtr(true),
 		}
 	}
 	if settings.Features.Hover {
-		caps.HoverProvider = true
+		caps.HoverProvider = protocol.Boolean(true)
 	}
 	if settings.Features.Formatting {
-		caps.DocumentFormattingProvider = true
-		caps.DocumentRangeFormattingProvider = true
-		caps.DocumentOnTypeFormattingProvider = &protocol.DocumentOnTypeFormattingOptions{
+		caps.DocumentFormattingProvider = protocol.Boolean(true)
+		caps.DocumentRangeFormattingProvider = protocol.Boolean(true)
+		caps.DocumentOnTypeFormattingProvider = protocol.DocumentOnTypeFormattingOptions{
 			FirstTriggerCharacter: "\n",
 			MoreTriggerCharacter:  []string{"\t"},
 		}
 	}
 	if settings.Features.SemanticTokens {
-		caps.SemanticTokensProvider = GetSemanticTokensCapabilities()
+		caps.SemanticTokensProvider = &protocol.SemanticTokensOptions{
+			Legend: GetSemanticTokensLegend(),
+			Range:  protocol.Boolean(true),
+			Full:   protocol.Boolean(true),
+		}
 	}
 	if settings.Features.FoldingRanges {
-		caps.FoldingRangeProvider = true
+		caps.FoldingRangeProvider = protocol.Boolean(true)
 	}
 	if settings.Features.DocumentLinks {
 		caps.DocumentLinkProvider = &protocol.DocumentLinkOptions{}
 	}
 	if settings.Features.WorkspaceSymbol {
-		caps.WorkspaceSymbolProvider = true
+		caps.WorkspaceSymbolProvider = protocol.Boolean(true)
 	}
 	if settings.Features.CodeActions {
 		caps.CodeActionProvider = &protocol.CodeActionOptions{
 			CodeActionKinds: []protocol.CodeActionKind{
-				protocol.QuickFix,
+				protocol.CodeActionKindQuickFix,
 				"source.hledger",
 			},
 		}
@@ -200,19 +207,23 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		commands = append(commands, "hledger.fixUnbalanced")
 	}
 	if len(commands) > 0 {
-		caps.ExecuteCommandProvider = &protocol.ExecuteCommandOptions{Commands: commands}
+		caps.ExecuteCommandProvider = protocol.ExecuteCommandOptions{Commands: commands}
 	}
 	if settings.Features.InlineCompletion {
-		caps.Experimental = map[string]any{
+		experimental, err := protocol.Marshal(map[string]any{
 			"inlineCompletionProvider": true,
+		})
+		if err != nil {
+			return nil, err
 		}
+		caps.Experimental = protocol.LSPAny(experimental)
 	}
 
 	return &protocol.InitializeResult{
 		Capabilities: caps,
-		ServerInfo: &protocol.ServerInfo{
+		ServerInfo: protocol.ServerInfo{
 			Name:    "hledger-lsp",
-			Version: "0.1.0",
+			Version: protocol.NewOptional("0.1.0"),
 		},
 	}, nil
 }
@@ -238,18 +249,22 @@ func (s *Server) registerFileWatchers() {
 	watchers := make([]protocol.FileSystemWatcher, 0, 6)
 	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.prices", "**/*.rules"} {
 		watchers = append(watchers, protocol.FileSystemWatcher{
-			GlobPattern: pattern,
+			GlobPattern: protocol.Pattern(pattern),
 		})
 	}
 
+	options, err := protocol.Marshal(protocol.DidChangeWatchedFilesRegistrationOptions{
+		Watchers: watchers,
+	})
+	if err != nil {
+		return
+	}
 	_ = s.client.RegisterCapability(context.Background(), &protocol.RegistrationParams{
 		Registrations: []protocol.Registration{
 			{
-				ID:     "workspace/didChangeWatchedFiles",
-				Method: "workspace/didChangeWatchedFiles",
-				RegisterOptions: protocol.DidChangeWatchedFilesRegistrationOptions{
-					Watchers: watchers,
-				},
+				ID:              "workspace/didChangeWatchedFiles",
+				Method:          "workspace/didChangeWatchedFiles",
+				RegisterOptions: protocol.LSPAny(options),
 			},
 		},
 	})
@@ -286,10 +301,17 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 			return nil
 		}
 		for _, change := range params.ContentChanges {
-			if isFullChange(change.Range) {
+			switch change := change.(type) {
+			case *protocol.TextDocumentContentChangeWholeDocument:
+				if change == nil {
+					continue
+				}
 				content = normalizeLineEndings(change.Text)
 				s.invalidateDocText(params.TextDocument.URI)
-			} else {
+			case *protocol.TextDocumentContentChangePartial:
+				if change == nil {
+					continue
+				}
 				content = s.applyChange(params.TextDocument.URI, content, change.Range, normalizeLineEndings(change.Text))
 			}
 		}
@@ -321,10 +343,7 @@ func normalizeLineEndings(s string) string {
 	return s
 }
 
-func isFullChange(r protocol.Range) bool {
-	return r.Start.Line == 0 && r.Start.Character == 0 &&
-		r.End.Line == 0 && r.End.Character == 0
-}
+func syncKindPtr(value protocol.TextDocumentSyncKind) *protocol.TextDocumentSyncKind { return &value }
 
 func (s *Server) clearAlignmentCache() {
 	s.alignmentCache.Range(func(key, _ any) bool {
@@ -374,7 +393,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 // scheduleDiagnostics debounces diagnostics computation for the given URI.
 // A trailing timer coalesces rapid edits; the previous in-flight computation
 // is cancelled so a stale result never overwrites newer diagnostics.
-func (s *Server) scheduleDiagnostics(docURI protocol.DocumentURI, content string, version uint32) {
+func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uint32) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 
@@ -397,7 +416,7 @@ func (s *Server) scheduleDiagnostics(docURI protocol.DocumentURI, content string
 	}
 }
 
-func (s *Server) cancelDiagnostics(docURI protocol.DocumentURI) {
+func (s *Server) cancelDiagnostics(docURI uri.URI) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 	if entry, ok := s.diagEntries[docURI]; ok {
@@ -407,7 +426,7 @@ func (s *Server) cancelDiagnostics(docURI protocol.DocumentURI) {
 	}
 }
 
-func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.DocumentURI, content string, version uint32) {
+func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content string, version uint32) {
 	if s.client == nil {
 		return
 	}
@@ -416,7 +435,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 	if !settings.Features.Diagnostics {
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
-			Version:     version,
+			Version:     protocol.NewOptional(int32(version)),
 			Diagnostics: []protocol.Diagnostic{},
 		})
 		return
@@ -432,7 +451,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 		// Publish for the current document.
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
-			Version:     version,
+			Version:     protocol.NewOptional(int32(version)),
 			Diagnostics: diagsByURI[docURI],
 		})
 		// Fan out diagnostics to included child documents.
@@ -461,12 +480,12 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 		}
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:     docURI,
-			Version: version,
+			Version: protocol.NewOptional(int32(version)),
 			Diagnostics: []protocol.Diagnostic{
 				{
 					Severity: protocol.DiagnosticSeverityError,
-					Source:   "hledger-lsp",
-					Message:  sizeErr.Message,
+					Source:   protocol.NewOptional("hledger-lsp"),
+					Message:  protocol.String(sizeErr.Message),
 				},
 			},
 		})
@@ -503,19 +522,19 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI protocol.Documen
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range:    *astRangeToProtocol(err.Range),
 			Severity: severity,
-			Source:   "hledger-lsp",
-			Message:  err.Message,
+			Source:   protocol.NewOptional("hledger-lsp"),
+			Message:  protocol.String(err.Message),
 		})
 	}
 
 	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 		URI:         docURI,
-		Version:     version,
+		Version:     protocol.NewOptional(int32(version)),
 		Diagnostics: diagnostics,
 	})
 }
 
-func (s *Server) analyze(docURI protocol.DocumentURI, path, content string) []protocol.Diagnostic {
+func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagnostic {
 	journal, parseErrs := s.cachedJournal(docURI, content)
 
 	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
@@ -532,8 +551,8 @@ func (s *Server) analyze(docURI protocol.DocumentURI, path, content string) []pr
 				},
 			},
 			Severity: protocol.DiagnosticSeverityError,
-			Source:   "hledger-lsp",
-			Message:  err.Message,
+			Source:   protocol.NewOptional("hledger-lsp"),
+			Message:  protocol.String(err.Message),
 		})
 	}
 
@@ -558,16 +577,16 @@ func (s *Server) analyze(docURI protocol.DocumentURI, path, content string) []pr
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range:    *astRangeToProtocol(diag.Range),
 			Severity: toProtocolSeverity(diag.Severity),
-			Source:   "hledger-lsp",
-			Message:  diag.Message,
-			Code:     diag.Code,
+			Source:   protocol.NewOptional("hledger-lsp"),
+			Message:  protocol.String(diag.Message),
+			Code:     protocol.String(diag.Code),
 		})
 	}
 
 	return diagnostics
 }
 
-func (s *Server) getJournalDoc(uri protocol.DocumentURI) (string, bool) {
+func (s *Server) getJournalDoc(uri uri.URI) (string, bool) {
 	if filetype.IsRules(string(uri)) {
 		return "", false
 	}
@@ -577,13 +596,13 @@ func (s *Server) getJournalDoc(uri protocol.DocumentURI) (string, bool) {
 // analyzeRulesResolved produces diagnostics for a rules file using the
 // expansion-based loader. Parse diagnostics from included files are remapped
 // to original source URIs. Load errors (cycle, depth, etc.) are also included.
-func (s *Server) analyzeRulesResolved(path, content string) map[protocol.DocumentURI][]protocol.Diagnostic {
+func (s *Server) analyzeRulesResolved(path, content string) map[uri.URI][]protocol.Diagnostic {
 	result, loadErrors := s.rulesLoader.LoadFromContent(path, content)
 	if result == nil {
 		return nil
 	}
 
-	byURI := make(map[protocol.DocumentURI][]protocol.Diagnostic)
+	byURI := make(map[uri.URI][]protocol.Diagnostic)
 
 	// Use the loader's already-parsed Primary for semantic diagnostics.
 	// The loader parsed the expanded text and remapped parse errors to
@@ -604,9 +623,9 @@ func (s *Server) analyzeRulesResolved(path, content string) map[protocol.Documen
 			byURI[uri] = append(byURI[uri], protocol.Diagnostic{
 				Range:    *astRangeToProtocol(mapped.Rng),
 				Severity: rulesDiagSeverity(d.Severity),
-				Source:   "hledger-lsp",
-				Message:  d.Message,
-				Code:     d.Code,
+				Source:   protocol.NewOptional("hledger-lsp"),
+				Message:  protocol.String(d.Message),
+				Code:     protocol.String(d.Code),
 			})
 		}
 	}
@@ -626,8 +645,8 @@ func (s *Server) analyzeRulesResolved(path, content string) map[protocol.Documen
 		byURI[uri] = append(byURI[uri], protocol.Diagnostic{
 			Range:    *astRangeToProtocol(e.Range),
 			Severity: severity,
-			Source:   "hledger-lsp",
-			Message:  e.Message,
+			Source:   protocol.NewOptional("hledger-lsp"),
+			Message:  protocol.String(e.Message),
 		})
 	}
 
@@ -666,7 +685,7 @@ func exactDedupDiagnostics(diags []protocol.Diagnostic) []protocol.Diagnostic {
 			col:      d.Range.Start.Character,
 			endLine:  d.Range.End.Line,
 			endCol:   d.Range.End.Character,
-			message:  d.Message,
+			message:  fmt.Sprint(d.Message),
 			code:     d.Code,
 			severity: d.Severity,
 		}
@@ -719,7 +738,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		return nil
 	}
 
-	affected := make(map[protocol.DocumentURI]bool)
+	affected := make(map[uri.URI]bool)
 
 	for _, change := range params.Changes {
 		path := uriToPath(change.URI)
@@ -760,7 +779,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 	return nil
 }
 
-func (s *Server) GetDocument(uri protocol.DocumentURI) (string, bool) {
+func (s *Server) GetDocument(uri uri.URI) (string, bool) {
 	if doc, ok := s.documents.Load(uri); ok {
 		if content, ok := doc.(string); ok {
 			return content, true
@@ -793,7 +812,7 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 // commodityFormatsForDocument returns the commodity formats for the document
 // using context-at-position (FormatsAt) when occurrences are available, falling
 // back to the workspace tree-wide cache otherwise.
-func (s *Server) commodityFormatsForDocument(docURI protocol.DocumentURI) map[string]formatter.CommodityFormat {
+func (s *Server) commodityFormatsForDocument(docURI uri.URI) map[string]formatter.CommodityFormat {
 	if resolved := s.getWorkspaceResolved(docURI); resolved != nil && len(resolved.Occurrences) > 0 {
 		occID := firstOccurrenceIDForPath(resolved, uriToPath(docURI))
 		// Use a large offset to collect all directives and merge-forward
@@ -831,7 +850,7 @@ func applyChange(content string, r protocol.Range, text string) string {
 // line count, and the returned string is materialized once (O(n)) for the
 // string-based consumers downstream. content is the authoritative pre-edit
 // document text.
-func (s *Server) applyChange(docURI protocol.DocumentURI, content string, r protocol.Range, text string) string {
+func (s *Server) applyChange(docURI uri.URI, content string, r protocol.Range, text string) string {
 	s.docTextMu.Lock()
 	defer s.docTextMu.Unlock()
 	var dt *document.Text
@@ -855,7 +874,7 @@ func (s *Server) applyChange(docURI protocol.DocumentURI, content string, r prot
 // invalidateDocText drops the cached rope for a document so the next incremental
 // edit rebuilds it from the current content (called on DidOpen, full changes and
 // DidClose).
-func (s *Server) invalidateDocText(docURI protocol.DocumentURI) {
+func (s *Server) invalidateDocText(docURI uri.URI) {
 	s.docTextMu.Lock()
 	s.docTexts.Delete(docURI)
 	s.docTextMu.Unlock()
@@ -876,20 +895,15 @@ func splitLines(s string) []string {
 	return lines
 }
 
-func uriToPath(docURI protocol.DocumentURI) string {
+func uriToPath(docURI uri.URI) string {
 	s := string(docURI)
 	if !strings.HasPrefix(s, "file://") {
 		return ""
 	}
-	u := uri.URI(docURI) //nolint:unconvert // protocol.DocumentURI and uri.URI are different types
-	path := u.Filename()
-	if path == "" {
-		path = s[7:]
-	}
-	return filepath.Clean(path)
+	return filepath.Clean(docURI.FsPath())
 }
 
-func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJournal {
+func (s *Server) GetResolved(docURI uri.URI) *include.ResolvedJournal {
 	if r, ok := s.resolved.Load(docURI); ok {
 		if resolved, ok := r.(*include.ResolvedJournal); ok {
 			return resolved
@@ -898,7 +912,7 @@ func (s *Server) GetResolved(docURI protocol.DocumentURI) *include.ResolvedJourn
 	return nil
 }
 
-func (s *Server) getWorkspaceResolved(docURI protocol.DocumentURI) *include.ResolvedJournal {
+func (s *Server) getWorkspaceResolved(docURI uri.URI) *include.ResolvedJournal {
 	if s.workspace != nil {
 		path := uriToPath(docURI)
 		if resolved := s.workspace.GetResolvedForFile(path); resolved != nil {

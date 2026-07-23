@@ -10,7 +10,6 @@ import (
 
 	"go.lsp.dev/jsonrpc2"
 	"go.lsp.dev/protocol"
-	"go.uber.org/zap"
 
 	"github.com/juev/hledger-lsp/internal/server"
 )
@@ -28,23 +27,17 @@ func main() {
 	}
 
 	ctx := context.Background()
-	logger := zap.NewNop()
-
 	srv := server.NewServer()
-	handler := protocol.ServerHandler(newServerDispatcher(srv), nil)
-
-	stream := jsonrpc2.NewStream(stdrwc{})
-	conn := jsonrpc2.NewConn(stream)
-
-	client := protocol.ClientDispatcher(conn, logger)
-	srv.SetClient(client)
-
-	conn.Go(ctx, handler)
+	_, conn, _ := newServerConnection(ctx, stdrwc{}, srv)
 	<-conn.Done()
 
 	if code := exitCodeForConnErr(conn.Err()); code != 0 {
 		os.Exit(code)
 	}
+}
+
+func newServerConnection(ctx context.Context, rwc io.ReadWriteCloser, srv *server.Server) (context.Context, jsonrpc2.Conn, protocol.Client) {
+	return protocol.NewServer(ctx, newServerDispatcher(srv), jsonrpc2.NewStream(rwc))
 }
 
 func exitCodeForConnErr(err error) int {
@@ -69,6 +62,7 @@ func (stdrwc) Close() error {
 }
 
 type serverDispatcher struct {
+	protocol.UnimplementedServer
 	srv *server.Server
 }
 
@@ -77,6 +71,9 @@ func newServerDispatcher(srv *server.Server) protocol.Server {
 }
 
 func (d *serverDispatcher) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if client, ok := protocol.ClientFromContext(ctx); ok {
+		d.srv.SetClient(client)
+	}
 	return d.srv.Initialize(ctx, params)
 }
 
@@ -104,7 +101,11 @@ func (d *serverDispatcher) SetTrace(ctx context.Context, params *protocol.SetTra
 	return nil
 }
 
-func (d *serverDispatcher) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CodeAction, error) {
+func (d *serverDispatcher) Progress(ctx context.Context, params *protocol.ProgressParams) error {
+	return nil
+}
+
+func (d *serverDispatcher) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CommandOrCodeAction, error) {
 	return d.srv.CodeAction(ctx, params)
 }
 
@@ -120,20 +121,22 @@ func (d *serverDispatcher) ColorPresentation(ctx context.Context, params *protoc
 	return nil, nil
 }
 
-func (d *serverDispatcher) Completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
-	return d.srv.Completion(ctx, params)
+func (d *serverDispatcher) Completion(ctx context.Context, params *protocol.CompletionParams) (protocol.CompletionResult, error) {
+	result, err := d.srv.Completion(ctx, params)
+	return result, err
 }
 
 func (d *serverDispatcher) CompletionResolve(ctx context.Context, params *protocol.CompletionItem) (*protocol.CompletionItem, error) {
 	return d.srv.CompletionResolve(ctx, params)
 }
 
-func (d *serverDispatcher) Declaration(ctx context.Context, params *protocol.DeclarationParams) ([]protocol.Location, error) {
+func (d *serverDispatcher) Declaration(ctx context.Context, params *protocol.DeclarationParams) (protocol.DeclarationResult, error) {
 	return nil, nil
 }
 
-func (d *serverDispatcher) Definition(ctx context.Context, params *protocol.DefinitionParams) ([]protocol.Location, error) {
-	return d.srv.Definition(ctx, params)
+func (d *serverDispatcher) Definition(ctx context.Context, params *protocol.DefinitionParams) (protocol.DefinitionResult, error) {
+	result, err := d.srv.Definition(ctx, params)
+	return protocol.LocationSlice(result), err
 }
 
 func (d *serverDispatcher) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
@@ -180,11 +183,24 @@ func (d *serverDispatcher) DocumentLinkResolve(ctx context.Context, params *prot
 	return nil, nil
 }
 
-func (d *serverDispatcher) DocumentSymbol(ctx context.Context, params *protocol.DocumentSymbolParams) ([]any, error) {
-	return d.srv.DocumentSymbol(ctx, params)
+func (d *serverDispatcher) DocumentSymbol(ctx context.Context, params *protocol.DocumentSymbolParams) (protocol.DocumentSymbolResult, error) {
+	result, err := d.srv.DocumentSymbol(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	symbols := make(protocol.DocumentSymbolSlice, 0, len(result))
+	for _, symbol := range result {
+		documentSymbol, ok := symbol.(protocol.DocumentSymbol)
+		if !ok {
+			return nil, fmt.Errorf("unexpected document symbol type %T", symbol)
+		}
+		symbols = append(symbols, documentSymbol)
+	}
+	return symbols, nil
 }
 
-func (d *serverDispatcher) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (any, error) {
+func (d *serverDispatcher) ExecuteCommand(ctx context.Context, params *protocol.ExecuteCommandParams) (protocol.LSPAny, error) {
 	return d.srv.ExecuteCommand(ctx, params)
 }
 
@@ -200,7 +216,7 @@ func (d *serverDispatcher) Hover(ctx context.Context, params *protocol.HoverPara
 	return d.srv.Hover(ctx, params)
 }
 
-func (d *serverDispatcher) Implementation(ctx context.Context, params *protocol.ImplementationParams) ([]protocol.Location, error) {
+func (d *serverDispatcher) Implementation(ctx context.Context, params *protocol.ImplementationParams) (protocol.DefinitionResult, error) {
 	return nil, nil
 }
 
@@ -208,8 +224,9 @@ func (d *serverDispatcher) OnTypeFormatting(ctx context.Context, params *protoco
 	return d.srv.OnTypeFormatting(ctx, params)
 }
 
-func (d *serverDispatcher) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {
-	return d.srv.PrepareRename(ctx, params)
+func (d *serverDispatcher) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (protocol.PrepareRenameResult, error) {
+	result, err := d.srv.PrepareRename(ctx, params)
+	return result, err
 }
 
 func (d *serverDispatcher) RangeFormatting(ctx context.Context, params *protocol.DocumentRangeFormattingParams) ([]protocol.TextEdit, error) {
@@ -228,11 +245,12 @@ func (d *serverDispatcher) SignatureHelp(ctx context.Context, params *protocol.S
 	return nil, nil
 }
 
-func (d *serverDispatcher) Symbols(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
-	return d.srv.WorkspaceSymbol(ctx, params)
+func (d *serverDispatcher) Symbols(ctx context.Context, params *protocol.WorkspaceSymbolParams) (protocol.WorkspaceSymbolResult, error) {
+	result, err := d.srv.WorkspaceSymbol(ctx, params)
+	return protocol.SymbolInformationSlice(result), err
 }
 
-func (d *serverDispatcher) TypeDefinition(ctx context.Context, params *protocol.TypeDefinitionParams) ([]protocol.Location, error) {
+func (d *serverDispatcher) TypeDefinition(ctx context.Context, params *protocol.TypeDefinitionParams) (protocol.DefinitionResult, error) {
 	return nil, nil
 }
 
@@ -276,12 +294,13 @@ func (d *serverDispatcher) SemanticTokensFull(ctx context.Context, params *proto
 	return d.srv.SemanticTokensFull(ctx, params)
 }
 
-func (d *serverDispatcher) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (any, error) {
+func (d *serverDispatcher) SemanticTokensFullDelta(ctx context.Context, params *protocol.SemanticTokensDeltaParams) (protocol.SemanticTokensDeltaResult, error) {
 	// Delta is not advertised (Delta: false); clients should not call this.
 	// Fall back to a full response for safety.
-	return d.srv.SemanticTokensFull(ctx, &protocol.SemanticTokensParams{
+	result, err := d.srv.SemanticTokensFull(ctx, &protocol.SemanticTokensParams{
 		TextDocument: params.TextDocument,
 	})
+	return result, err
 }
 
 func (d *serverDispatcher) SemanticTokensRange(ctx context.Context, params *protocol.SemanticTokensRangeParams) (*protocol.SemanticTokens, error) {
@@ -312,38 +331,22 @@ func (d *serverDispatcher) OutgoingCalls(ctx context.Context, params *protocol.C
 	return nil, nil
 }
 
-func (d *serverDispatcher) handlePayeeAccountHistory(ctx context.Context, params any) (any, error) {
-	paramsJSON, err := json.Marshal(params)
-	if err != nil {
-		return nil, err
-	}
-	return d.srv.PayeeAccountHistory(ctx, paramsJSON)
+func (d *serverDispatcher) InlineCompletion(ctx context.Context, params *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
+	return d.srv.InlineCompletion(ctx, params)
 }
 
-func (d *serverDispatcher) NonstandardRequest(ctx context.Context, method string, params any) (any, error) {
-	fmt.Fprintf(os.Stderr, "[LSP DEBUG] NonstandardRequest called: method=%s\n", method)
-	if method == "textDocument/inlineCompletion" {
-		paramsJSON, err := json.Marshal(params)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] json.Marshal error: %v\n", err)
-			return nil, err
-		}
-		fmt.Fprintf(os.Stderr, "[LSP DEBUG] calling InlineCompletion with params: %s\n", string(paramsJSON))
-		result, err := d.srv.InlineCompletion(ctx, paramsJSON)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion error: %v\n", err)
-		} else if result != nil {
-			resultJSON, _ := json.Marshal(result)
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion result: %s\n", string(resultJSON))
-		} else {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion returned nil\n")
-		}
-		return result, err
+func (d *serverDispatcher) handlePayeeAccountHistory(ctx context.Context, params any) (any, error) {
+	rawParams, ok := params.(protocol.LSPAny)
+	if !ok {
+		return nil, fmt.Errorf("hledger/payeeAccountHistory params type = %T, want protocol.LSPAny", params)
 	}
-	if method == "hledger/payeeAccountHistory" {
-		return d.handlePayeeAccountHistory(ctx, params)
+
+	var decoded server.PayeeAccountHistoryParams
+	if err := protocol.Unmarshal(rawParams, &decoded); err != nil {
+		return nil, err
 	}
-	return nil, nil
+
+	return d.srv.PayeeAccountHistory(ctx, json.RawMessage(rawParams))
 }
 
 func (d *serverDispatcher) CodeLensRefresh(ctx context.Context) error {
@@ -356,24 +359,6 @@ func (d *serverDispatcher) SelectionRange(ctx context.Context, params *protocol.
 
 func (d *serverDispatcher) Request(ctx context.Context, method string, params any) (any, error) {
 	fmt.Fprintf(os.Stderr, "[LSP DEBUG] Request called: method=%s\n", method)
-	if method == "textDocument/inlineCompletion" {
-		paramsJSON, err := json.Marshal(params)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] json.Marshal error: %v\n", err)
-			return nil, err
-		}
-		fmt.Fprintf(os.Stderr, "[LSP DEBUG] calling InlineCompletion with params: %s\n", string(paramsJSON))
-		result, err := d.srv.InlineCompletion(ctx, paramsJSON)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion error: %v\n", err)
-		} else if result != nil {
-			resultJSON, _ := json.Marshal(result)
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion result: %s\n", string(resultJSON))
-		} else {
-			fmt.Fprintf(os.Stderr, "[LSP DEBUG] InlineCompletion returned nil\n")
-		}
-		return result, err
-	}
 	if method == "hledger/payeeAccountHistory" {
 		return d.handlePayeeAccountHistory(ctx, params)
 	}

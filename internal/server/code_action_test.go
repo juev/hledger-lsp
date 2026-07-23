@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/cli"
 	"github.com/juev/hledger-lsp/internal/parser"
@@ -109,7 +110,8 @@ func TestServer_CodeAction_WithoutCLI(t *testing.T) {
 		cliClient: nil,
 	}
 
-	actions := s.getCodeActions("file:///test.journal")
+	actions, err := s.getCodeActions("file:///test.journal")
+	require.NoError(t, err)
 	if len(actions) != 0 {
 		t.Errorf("expected no actions without CLI client, got %d", len(actions))
 	}
@@ -120,7 +122,8 @@ func TestServer_CodeAction_CLINotAvailable(t *testing.T) {
 		cliClient: cli.NewClient("/nonexistent/hledger", 5*time.Second),
 	}
 
-	actions := s.getCodeActions("file:///test.journal")
+	actions, err := s.getCodeActions("file:///test.journal")
+	require.NoError(t, err)
 	if len(actions) != 0 {
 		t.Errorf("expected no actions with unavailable CLI, got %d", len(actions))
 	}
@@ -134,7 +137,8 @@ func TestServer_CodeAction_WithCLI(t *testing.T) {
 		t.Skip("hledger not available")
 	}
 
-	actions := s.getCodeActions("file:///test.journal")
+	actions, err := s.getCodeActions("file:///test.journal")
+	require.NoError(t, err)
 	if len(actions) == 0 {
 		t.Error("expected code actions with CLI client")
 	}
@@ -143,8 +147,8 @@ func TestServer_CodeAction_WithCLI(t *testing.T) {
 		if action.Title == "" {
 			t.Error("action title should not be empty")
 		}
-		if action.Kind != "source.hledger" {
-			t.Errorf("action kind = %q; want %q", action.Kind, "source.hledger")
+		if action.Kind == nil || *action.Kind != "source.hledger" {
+			t.Errorf("action kind = %v; want %q", action.Kind, "source.hledger")
 		}
 	}
 }
@@ -198,14 +202,16 @@ func TestGetCodeActions_EmbedsDocumentURI(t *testing.T) {
 	s := NewServer()
 	s.cliClient = &fakeCLIClient{available: true}
 
-	docURI := protocol.DocumentURI("file:///test.journal")
-	actions := s.getCodeActions(docURI)
+	docURI := uri.URI("file:///test.journal")
+	actions, err := s.getCodeActions(docURI)
+	require.NoError(t, err)
 
 	require.NotEmpty(t, actions)
 	for _, action := range actions {
-		require.NotNil(t, action.Command)
 		require.Len(t, action.Command.Arguments, 2, "command must carry the invoking document URI")
-		assert.Equal(t, string(docURI), action.Command.Arguments[1])
+		var argument string
+		require.NoError(t, protocol.Unmarshal(action.Command.Arguments[1], &argument))
+		assert.Equal(t, string(docURI), argument)
 	}
 }
 
@@ -214,14 +220,14 @@ func TestExecuteCommand_TargetsInvokingURI(t *testing.T) {
 	fake := &fakeCLIClient{available: true}
 	s.cliClient = fake
 
-	uriA := protocol.DocumentURI("file:///a.journal")
-	uriB := protocol.DocumentURI("file:///b.journal")
+	uriA := uri.URI("file:///a.journal")
+	uriB := uri.URI("file:///b.journal")
 	s.documents.Store(uriA, "2024-01-01 a\n    expenses  $1\n    assets\n")
 	s.documents.Store(uriB, "2024-01-01 b\n    expenses  $2\n    assets\n")
 
 	params := &protocol.ExecuteCommandParams{
 		Command:   "hledger.run",
-		Arguments: []any{"bal", string(uriB)},
+		Arguments: []protocol.LSPAny{mustMarshalLSPAny(t, "bal"), mustMarshalLSPAny(t, string(uriB))},
 	}
 
 	// The command must target the invoking document (B). Before the fix the
@@ -239,12 +245,12 @@ func TestExecuteCommand_FallbackWithoutURI(t *testing.T) {
 	fake := &fakeCLIClient{available: true}
 	s.cliClient = fake
 
-	uriA := protocol.DocumentURI("file:///a.journal")
+	uriA := uri.URI("file:///a.journal")
 	s.documents.Store(uriA, "2024-01-01 a\n    expenses  $1\n    assets\n")
 
 	params := &protocol.ExecuteCommandParams{
 		Command:   "hledger.run",
-		Arguments: []any{"bal"},
+		Arguments: []protocol.LSPAny{mustMarshalLSPAny(t, "bal")},
 	}
 
 	_, err := s.ExecuteCommand(context.Background(), params)
@@ -256,7 +262,7 @@ func TestExecuteCommand_FixUnbalancedAcceptsJSONRange(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 grocery
     expenses:food  $50
     assets:cash  $-40`
@@ -268,12 +274,12 @@ func TestExecuteCommand_FixUnbalancedAcceptsJSONRange(t *testing.T) {
 
 	_, err = ts.ExecuteCommand(context.Background(), &protocol.ExecuteCommandParams{
 		Command: "hledger.fixUnbalanced",
-		Arguments: []any{
-			string(uri),
-			map[string]any{
+		Arguments: []protocol.LSPAny{
+			mustMarshalLSPAny(t, string(uri)),
+			mustMarshalLSPAny(t, map[string]any{
 				"start": map[string]any{"line": float64(txRange.Start.Line), "character": float64(txRange.Start.Character)},
 				"end":   map[string]any{"line": float64(txRange.End.Line), "character": float64(txRange.End.Character)},
-			},
+			}),
 		},
 	})
 	require.NoError(t, err)
@@ -283,4 +289,11 @@ func TestExecuteCommand_FixUnbalancedAcceptsJSONRange(t *testing.T) {
 	edits := applied.Edit.Changes[uri]
 	require.Len(t, edits, 1)
 	assert.Contains(t, edits[0].NewText, "$-50")
+}
+
+func mustMarshalLSPAny(t *testing.T, value any) protocol.LSPAny {
+	t.Helper()
+	encoded, err := protocol.Marshal(value)
+	require.NoError(t, err)
+	return protocol.LSPAny(encoded)
 }

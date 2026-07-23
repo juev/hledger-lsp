@@ -42,9 +42,9 @@ func rulesFoldingRanges(doc string) []protocol.FoldingRange {
 	ruleRanges := rules.FoldingRanges(rf)
 	result := make([]protocol.FoldingRange, 0, len(ruleRanges))
 	for _, r := range ruleRanges {
-		kind := protocol.RegionFoldingRange
+		kind := protocol.FoldingRangeKindRegion
 		if r.Kind == rules.FoldingKindComment {
-			kind = protocol.CommentFoldingRange
+			kind = protocol.FoldingRangeKindComment
 		}
 		result = append(result, protocol.FoldingRange{
 			StartLine: r.StartLine,
@@ -75,7 +75,7 @@ func findTransactionFolds(journal *ast.Journal) []protocol.FoldingRange {
 			ranges = append(ranges, protocol.FoldingRange{
 				StartLine: startLine,
 				EndLine:   endLine,
-				Kind:      protocol.RegionFoldingRange,
+				Kind:      protocol.FoldingRangeKindRegion,
 			})
 		}
 	}
@@ -112,7 +112,7 @@ func findDirectiveFolds(content string) []protocol.FoldingRange {
 			ranges = append(ranges, protocol.FoldingRange{
 				StartLine: uint32(startLine),
 				EndLine:   uint32(endLine),
-				Kind:      protocol.RegionFoldingRange,
+				Kind:      protocol.FoldingRangeKindRegion,
 			})
 		}
 	}
@@ -167,7 +167,7 @@ func findCommentDirectiveFolds(content string) []protocol.FoldingRange {
 			ranges = append(ranges, protocol.FoldingRange{
 				StartLine: uint32(startLine),
 				EndLine:   uint32(endLine),
-				Kind:      protocol.CommentFoldingRange,
+				Kind:      protocol.FoldingRangeKindComment,
 			})
 		}
 
@@ -206,7 +206,7 @@ func findCommentBlockFolds(content string) []protocol.FoldingRange {
 			ranges = append(ranges, protocol.FoldingRange{
 				StartLine: uint32(startLine),
 				EndLine:   uint32(endLine),
-				Kind:      protocol.CommentFoldingRange,
+				Kind:      protocol.FoldingRangeKindComment,
 			})
 		}
 

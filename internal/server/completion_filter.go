@@ -3,7 +3,7 @@ package server
 import (
 	"maps"
 
-	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -38,7 +38,7 @@ func journalWithoutTransaction(journal *ast.Journal, txIndex int) *ast.Journal {
 	}
 }
 
-func resolvedWithoutTransaction(resolved *include.ResolvedJournal, cursorLine int, docURI protocol.DocumentURI) *include.ResolvedJournal {
+func resolvedWithoutTransaction(resolved *include.ResolvedJournal, cursorLine int, docURI uri.URI) *include.ResolvedJournal {
 	docPath := uriToPath(docURI)
 
 	// Occurrence-aware path: filter the transaction from the matching occurrence

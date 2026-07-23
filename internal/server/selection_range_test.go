@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestSelectionRange_AccountSegment(t *testing.T) {
@@ -16,7 +17,7 @@ func TestSelectionRange_AccountSegment(t *testing.T) {
     expenses:food:groceries  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -61,7 +62,7 @@ func TestSelectionRange_AmountWithCommodity(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -84,7 +85,7 @@ func TestSelectionRange_Date(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -110,7 +111,7 @@ func TestSelectionRange_AccountDirective(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -133,7 +134,7 @@ func TestSelectionRange_TopLevelComment(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -152,7 +153,7 @@ func TestSelectionRange_TopLevelComment(t *testing.T) {
 
 func TestSelectionRange_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, "")
 
 	params := &protocol.SelectionRangeParams{
@@ -171,7 +172,7 @@ func TestSelectionRange_MultiplePositions(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{
@@ -193,7 +194,7 @@ func TestSelectionRange_ParentChainContainment(t *testing.T) {
     expenses:food:groceries  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SelectionRangeParams{

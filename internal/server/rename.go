@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {
@@ -47,7 +48,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 		return nil, nil
 	}
 
-	changes := make(map[protocol.DocumentURI][]protocol.TextEdit)
+	changes := make(map[uri.URI][]protocol.TextEdit)
 	for _, loc := range locations {
 		changes[loc.URI] = append(changes[loc.URI], protocol.TextEdit{
 			Range:   loc.Range,

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/parser"
 )
@@ -21,7 +22,7 @@ func TestCodeLens_BalancedTransaction(t *testing.T) {
     expenses:food  $50
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.CodeLensParams{
@@ -45,7 +46,7 @@ func TestCodeLens_UnbalancedTransaction(t *testing.T) {
     expenses:food  $50
     assets:cash  $-40`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.CodeLensParams{
@@ -58,15 +59,18 @@ func TestCodeLens_UnbalancedTransaction(t *testing.T) {
 	assert.Contains(t, result[0].Command.Title, "unbalanced")
 	assert.Equal(t, "hledger.fixUnbalanced", result[0].Command.Command)
 	journal, _ := parser.Parse(content)
-	require.Equal(t, []any{
-		string(uri),
-		*astRangeToProtocol(journal.Transactions[0].Range),
-	}, result[0].Command.Arguments)
+	require.Len(t, result[0].Command.Arguments, 2)
+	commandURI, err := unmarshalLSPAny[string](result[0].Command.Arguments[0])
+	require.NoError(t, err)
+	assert.Equal(t, string(uri), commandURI)
+	commandRange, err := unmarshalLSPAny[protocol.Range](result[0].Command.Arguments[1])
+	require.NoError(t, err)
+	assert.Equal(t, *astRangeToProtocol(journal.Transactions[0].Range), commandRange)
 }
 
 func TestCodeLens_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, "")
 
 	params := &protocol.CodeLensParams{
@@ -88,7 +92,7 @@ func TestCodeLens_FeatureDisabled(t *testing.T) {
     expenses:food  $50
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.CodeLensParams{
@@ -112,7 +116,7 @@ func TestCodeLens_CostRounding_LocalPrecision(t *testing.T) {
     assets:stock  3 AAPL @ $33.337
     assets:cash  -$100`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.CodeLensParams{
@@ -140,7 +144,7 @@ func TestCodeLens_OneLensPerTransaction(t *testing.T) {
     expenses:clothing  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.CodeLensParams{

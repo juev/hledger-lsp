@@ -6,12 +6,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestAnalyze_ReusesCachedJournalAndPreservesDiagnostics(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 	path := uriToPath(uri)
 
 	// Content with an unterminated comment block: analyze must surface the
@@ -26,7 +26,7 @@ func TestAnalyze_ReusesCachedJournalAndPreservesDiagnostics(t *testing.T) {
 	require.NotEmpty(t, diags, "analyze must surface the parse-error diagnostic")
 	found := false
 	for _, d := range diags {
-		if d.Source == "hledger-lsp" && strings.Contains(d.Message, "unterminated") {
+		if optionalString(d.Source) == "hledger-lsp" && strings.Contains(tooltipString(d.Message), "unterminated") {
 			found = true
 			break
 		}

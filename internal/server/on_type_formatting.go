@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -135,7 +136,7 @@ func (s *Server) onTypeNewline(doc string, params *protocol.DocumentOnTypeFormat
 	return edits, nil
 }
 
-func (s *Server) formatPreviousPostingLine(doc string, uri protocol.DocumentURI, line int) *protocol.TextEdit {
+func (s *Server) formatPreviousPostingLine(doc string, uri uri.URI, line int) *protocol.TextEdit {
 	lines := splitLines(doc)
 	if line < 0 || line >= len(lines) || classifyLine(lines[line]) != linePosting {
 		return nil
@@ -204,7 +205,7 @@ func (s *Server) onTypeTab(doc string, params *protocol.DocumentOnTypeFormatting
 	}}, nil
 }
 
-func (s *Server) getAlignmentColumn(doc string, uri protocol.DocumentURI) int {
+func (s *Server) getAlignmentColumn(doc string, uri uri.URI) int {
 	if cached, ok := s.alignmentCache.Load(uri); ok {
 		if v, ok := cached.(int); ok {
 			return v

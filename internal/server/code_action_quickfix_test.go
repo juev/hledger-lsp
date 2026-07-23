@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestServer_Initialize_AdvertisesQuickFixCodeActions(t *testing.T) {
@@ -21,7 +22,7 @@ func TestServer_Initialize_AdvertisesQuickFixCodeActions(t *testing.T) {
 	opts, ok := result.Capabilities.CodeActionProvider.(*protocol.CodeActionOptions)
 	require.True(t, ok, "expected *protocol.CodeActionOptions, got %T", result.Capabilities.CodeActionProvider)
 
-	assert.Contains(t, opts.CodeActionKinds, protocol.QuickFix)
+	assert.Contains(t, opts.CodeActionKinds, protocol.CodeActionKindQuickFix)
 	assert.Contains(t, opts.CodeActionKinds, protocol.CodeActionKind("source.hledger"))
 }
 
@@ -29,7 +30,7 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 lunch
     expenses:food  $10.00
     assets:cash    $-9.00`
@@ -42,9 +43,10 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	require.NoError(t, err)
 
 	action := requireQuickFixAction(t, actions)
-	require.True(t, action.IsPreferred)
+	require.NotNil(t, action.IsPreferred)
+	require.True(t, *action.IsPreferred)
 	require.Len(t, action.Diagnostics, 1)
-	assert.Equal(t, "UNBALANCED", action.Diagnostics[0].Code)
+	assert.Equal(t, "UNBALANCED", diagnosticCodeString(action.Diagnostics[0].Code))
 
 	// Quick Fix is a local edit (issue #25). For commodity-left amounts
 	// (`$`) the `$` column is preserved, so `$-9.00` → `$-10.00` grows
@@ -65,7 +67,7 @@ func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 lunch
     expenses:food  $10.00
     assets:cash    $-9.00`
@@ -74,12 +76,13 @@ func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
 	require.NoError(t, err)
 	diag := requireDiagnosticByCode(t, diagnostics, "UNBALANCED")
 
-	actions, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
+	entries, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Range:        diag.Range,
 		Context:      protocol.CodeActionContext{},
 	})
 	require.NoError(t, err)
+	actions := codeActionEntries(entries)
 
 	action := requireQuickFixAction(t, actions)
 	fixed := applyWorkspaceEditToContent(t, content, uri, action.Edit)
@@ -203,7 +206,7 @@ func TestServer_CodeAction_QuickFix_IsLocalAndPreservesFormats(t *testing.T) {
 			ts.cliClient = nil
 			ts.setSettings(tt.configure(ts.getSettings()))
 
-			uri := protocol.DocumentURI("file:///formatting.journal")
+			uri := uri.URI("file:///formatting.journal")
 			diagnostics, err := ts.openAndWait(uri, tt.content)
 			require.NoError(t, err)
 
@@ -272,7 +275,7 @@ func TestServer_CodeAction_QuickFix_CommodityRight_PreservesLayout(t *testing.T)
 			ts := newTestServer()
 			ts.cliClient = nil
 
-			uri := protocol.DocumentURI("file:///issue25.journal")
+			uri := uri.URI("file:///issue25.journal")
 			diagnostics, err := ts.openAndWait(uri, tt.content)
 			require.NoError(t, err)
 
@@ -297,7 +300,7 @@ func TestServer_CodeAction_QuickFix_CommodityRight_AlignsWithSibling(t *testing.
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///start-aligned.journal")
+	uri := uri.URI("file:///start-aligned.journal")
 	content := "commodity RUB\n" +
 		"  format 1 000,00 RUB\n" +
 		"\n" +
@@ -363,7 +366,7 @@ func TestServer_CodeAction_QuickFix_CommodityLeft_PreservesStartColumn(t *testin
 			ts := newTestServer()
 			ts.cliClient = nil
 
-			uri := protocol.DocumentURI("file:///left.journal")
+			uri := uri.URI("file:///left.journal")
 			diagnostics, err := ts.openAndWait(uri, tt.content)
 			require.NoError(t, err)
 
@@ -385,7 +388,7 @@ func TestServer_CodeAction_QuickFix_EdgeCases(t *testing.T) {
 	t.Run("posting comment is preserved", func(t *testing.T) {
 		ts := newTestServer()
 		ts.cliClient = nil
-		uri := protocol.DocumentURI("file:///comment.journal")
+		uri := uri.URI("file:///comment.journal")
 		content := "2024-01-15 lunch\n" +
 			"    food      -12.60 USD\n" +
 			"    cash       12.00 USD  ; note: salary"
@@ -408,7 +411,7 @@ func TestServer_CodeAction_QuickFix_EdgeCases(t *testing.T) {
 	t.Run("CRLF line endings", func(t *testing.T) {
 		ts := newTestServer()
 		ts.cliClient = nil
-		uri := protocol.DocumentURI("file:///crlf.journal")
+		uri := uri.URI("file:///crlf.journal")
 		content := "2024-01-15 lunch\r\n" +
 			"    food      -12.60 USD\r\n" +
 			"    cash       12.00 USD"
@@ -436,7 +439,7 @@ func TestServer_CodeAction_QuickFix_EdgeCases(t *testing.T) {
 	t.Run("Cyrillic account names", func(t *testing.T) {
 		ts := newTestServer()
 		ts.cliClient = nil
-		uri := protocol.DocumentURI("file:///cyrillic.journal")
+		uri := uri.URI("file:///cyrillic.journal")
 		content := "2024-01-15 обед\n" +
 			"    расходы:еда      -12.60 USD\n" +
 			"    активы:наличные   12.00 USD"
@@ -460,13 +463,13 @@ func TestServer_CodeAction_QuickFix_EdgeCases(t *testing.T) {
 func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 	tests := []struct {
 		name           string
-		uri            protocol.DocumentURI
+		uri            uri.URI
 		content        string
 		diagnosticCode string
 	}{
 		{
 			name: "multiple inferred is ignored",
-			uri:  protocol.DocumentURI("file:///multiple-inferred.journal"),
+			uri:  uri.URI("file:///multiple-inferred.journal"),
 			content: `2024-01-15 groceries
     expenses:food
     assets:cash`,
@@ -474,7 +477,7 @@ func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 		},
 		{
 			name: "multi commodity imbalance is ignored",
-			uri:  protocol.DocumentURI("file:///multi-commodity.journal"),
+			uri:  uri.URI("file:///multi-commodity.journal"),
 			content: `2024-01-15 groceries
     assets:cash  $10
     equity:opening  5 EUR`,
@@ -482,7 +485,7 @@ func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 		},
 		{
 			name: "final posting with cost is ignored",
-			uri:  protocol.DocumentURI("file:///costed.journal"),
+			uri:  uri.URI("file:///costed.journal"),
 			content: `2024-01-15 buy
     equity:opening  $-1499
     assets:stocks   10 AAPL @ $150`,
@@ -490,7 +493,7 @@ func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 		},
 		{
 			name: "final posting with lot price is ignored",
-			uri:  protocol.DocumentURI("file:///lot-price.journal"),
+			uri:  uri.URI("file:///lot-price.journal"),
 			content: `2024-01-15 transfer
     assets:inventory  -9 AAPL
     assets:stocks     10 AAPL {$150}`,
@@ -498,7 +501,7 @@ func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 		},
 		{
 			name: "final posting with balance assertion is ignored",
-			uri:  protocol.DocumentURI("file:///balance-assertion.journal"),
+			uri:  uri.URI("file:///balance-assertion.journal"),
 			content: `2024-01-15 adjust
     assets:cash      $-9
     equity:opening   $10 = $10`,
@@ -506,7 +509,7 @@ func TestServer_CodeAction_QuickFixGuards(t *testing.T) {
 		},
 		{
 			name: "rules files never offer quickfix",
-			uri:  protocol.DocumentURI("file:///guard.rules"),
+			uri:  uri.URI("file:///guard.rules"),
 			content: `fields date,description,amount
 skip 1`,
 			diagnosticCode: "",
@@ -539,19 +542,35 @@ skip 1`,
 	}
 }
 
-func codeActionsForDiagnostics(ts *testServer, uri protocol.DocumentURI, diagnostics []protocol.Diagnostic) ([]protocol.CodeAction, error) {
+func codeActionsForDiagnostics(ts *testServer, uri uri.URI, diagnostics []protocol.Diagnostic) ([]protocol.CodeAction, error) {
 	rng := protocol.Range{}
 	if len(diagnostics) > 0 {
 		rng = diagnostics[0].Range
 	}
 
-	return ts.CodeAction(context.Background(), &protocol.CodeActionParams{
+	entries, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Range:        rng,
 		Context: protocol.CodeActionContext{
 			Diagnostics: diagnostics,
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	return codeActionEntries(entries), nil
+}
+
+func codeActionEntries(entries []protocol.CommandOrCodeAction) []protocol.CodeAction {
+	actions := make([]protocol.CodeAction, 0, len(entries))
+	for _, entry := range entries {
+		action, ok := entry.(*protocol.CodeAction)
+		if !ok {
+			continue
+		}
+		actions = append(actions, *action)
+	}
+	return actions
 }
 
 func requireDiagnosticByCode(t *testing.T, diagnostics []protocol.Diagnostic, code string) protocol.Diagnostic {
@@ -564,7 +583,7 @@ func requireDiagnosticByCode(t *testing.T, diagnostics []protocol.Diagnostic, co
 
 func findDiagnosticByCode(diagnostics []protocol.Diagnostic, code string) (protocol.Diagnostic, error) {
 	for _, diag := range diagnostics {
-		if diag.Code == code {
+		if diagnosticCodeString(diag.Code) == code {
 			return diag, nil
 		}
 	}
@@ -581,7 +600,7 @@ func requireQuickFixAction(t *testing.T, actions []protocol.CodeAction) protocol
 
 func findQuickFixAction(actions []protocol.CodeAction) (protocol.CodeAction, error) {
 	for _, action := range actions {
-		if action.Kind == protocol.QuickFix {
+		if action.Kind != nil && *action.Kind == protocol.CodeActionKindQuickFix {
 			return action, nil
 		}
 	}
@@ -592,7 +611,7 @@ func findQuickFixAction(actions []protocol.CodeAction) (protocol.CodeAction, err
 // matches the given code, or an error if none.
 func findQuickFixByDiagnosticCode(actions []protocol.CodeAction, code string) (protocol.CodeAction, error) {
 	for _, action := range actions {
-		if action.Kind != protocol.QuickFix {
+		if action.Kind == nil || *action.Kind != protocol.CodeActionKindQuickFix {
 			continue
 		}
 		if len(action.Diagnostics) == 0 {
@@ -605,7 +624,7 @@ func findQuickFixByDiagnosticCode(actions []protocol.CodeAction, code string) (p
 	return protocol.CodeAction{}, assert.AnError
 }
 
-func applyWorkspaceEditToContent(t *testing.T, content string, uri protocol.DocumentURI, edit *protocol.WorkspaceEdit) string {
+func applyWorkspaceEditToContent(t *testing.T, content string, uri uri.URI, edit *protocol.WorkspaceEdit) string {
 	t.Helper()
 
 	require.NotNil(t, edit)

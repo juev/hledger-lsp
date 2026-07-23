@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestReferences_AccountWithDirective_IncludeDeclaration(t *testing.T) {
@@ -21,7 +22,7 @@ func TestReferences_AccountWithDirective_IncludeDeclaration(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -49,7 +50,7 @@ func TestReferences_AccountWithDirective_ExcludeDeclaration(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -76,7 +77,7 @@ func TestReferences_AccountWithoutDirective(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -101,7 +102,7 @@ func TestReferences_CommodityWithDirective_IncludeDeclaration(t *testing.T) {
     expenses:food  $50
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -125,7 +126,7 @@ func TestReferences_CommodityOnRight(t *testing.T) {
     expenses:food  100.00 EUR
     assets:cash  -100.00 EUR`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -155,7 +156,7 @@ func TestReferences_Payee(t *testing.T) {
     expenses:dining  $40
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -181,7 +182,7 @@ func TestReferences_PayeeIncludeDeclarationIgnored(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	paramsInclude := &protocol.ReferenceParams{
@@ -212,7 +213,7 @@ func TestReferences_UnknownPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -253,7 +254,7 @@ func TestReferences_Deduplication(t *testing.T) {
     expenses:food  $20
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{
@@ -279,7 +280,7 @@ func TestReferences_DeterministicOrder(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.ReferenceParams{

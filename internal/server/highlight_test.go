@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestDocumentHighlight_Account(t *testing.T) {
@@ -21,7 +22,7 @@ func TestDocumentHighlight_Account(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentHighlightParams{
@@ -44,7 +45,7 @@ func TestDocumentHighlight_Commodity(t *testing.T) {
     expenses:food  $50
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentHighlightParams{
@@ -69,7 +70,7 @@ func TestDocumentHighlight_Payee(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentHighlightParams{
@@ -90,7 +91,7 @@ func TestDocumentHighlight_EmptyPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentHighlightParams{

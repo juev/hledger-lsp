@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -36,7 +37,7 @@ func TestSelectDeclarationInsertion_PrimaryAppendsAfterLastAccountDirective(t *t
 	resolved := include.NewResolvedJournal(primary)
 
 	target := selectDeclarationInsertion(resolved, "file:///main.journal", kindAccount)
-	assert.Equal(t, protocol.DocumentURI("file:///main.journal"), target.URI)
+	assert.Equal(t, uri.URI("file:///main.journal"), target.URI)
 	assert.Equal(t, uint32(3), target.Position.Line, "after the last account directive")
 	assert.Equal(t, uint32(0), target.Position.Character)
 }
@@ -63,14 +64,14 @@ func TestSelectDeclarationInsertion_NoDeclarationsAnywhere(t *testing.T) {
 	resolved := include.NewResolvedJournal(primary)
 
 	target := selectDeclarationInsertion(resolved, "file:///main.journal", kindAccount)
-	assert.Equal(t, protocol.DocumentURI("file:///main.journal"), target.URI)
+	assert.Equal(t, uri.URI("file:///main.journal"), target.URI)
 	assert.Equal(t, uint32(0), target.Position.Line)
 	assert.Equal(t, uint32(0), target.Position.Character)
 }
 
 func TestSelectDeclarationInsertion_NilResolved(t *testing.T) {
 	target := selectDeclarationInsertion(nil, "file:///main.journal", kindAccount)
-	assert.Equal(t, protocol.DocumentURI("file:///main.journal"), target.URI)
+	assert.Equal(t, uri.URI("file:///main.journal"), target.URI)
 	assert.Equal(t, uint32(0), target.Position.Line)
 }
 
@@ -82,7 +83,7 @@ func TestSelectDeclarationInsertion_KindCommodityMatchesCommodityDirective(t *te
 	resolved := include.NewResolvedJournal(primary)
 
 	target := selectDeclarationInsertion(resolved, "file:///main.journal", kindCommodity)
-	assert.Equal(t, protocol.DocumentURI("file:///main.journal"), target.URI)
+	assert.Equal(t, uri.URI("file:///main.journal"), target.URI)
 	assert.Equal(t, uint32(4), target.Position.Line, "after the commodity directive, skipping account directive")
 }
 
@@ -120,7 +121,7 @@ func TestServer_CodeAction_DeclareAccountQuickFix(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `account assets:cash
 
 2024-01-15 grocery
@@ -156,7 +157,7 @@ func TestServer_CodeAction_DeclareCommodityQuickFix(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `commodity EUR
 
 2024-01-15 grocery
@@ -191,7 +192,7 @@ func TestServer_CodeAction_DeclareAccount_CJKName(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `account assets:cash
 
 2024-01-15 покупка
@@ -221,7 +222,7 @@ func TestServer_CodeAction_DeclareAccount_CRLF(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "account assets:cash\r\n\r\n2024-01-15 grocery\r\n    custom:thing  $50\r\n    assets:cash"
 
 	diagnostics, err := ts.openAndWait(uri, content)
@@ -324,7 +325,7 @@ func TestServer_QuickFix_DeclareAccount_TargetsIncludedFile(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
 
-	uri := protocol.DocumentURI("file:///main.journal")
+	uri := uri.URI("file:///main.journal")
 	// Primary (the open document) declares no accounts; the included file does.
 	primary := &ast.Journal{}
 	included := &ast.Journal{Directives: []ast.Directive{accountDirectiveAt(2)}}
@@ -336,8 +337,8 @@ func TestServer_QuickFix_DeclareAccount_TargetsIncludedFile(t *testing.T) {
 	})
 
 	diag := protocol.Diagnostic{
-		Code:    "UNDECLARED_ACCOUNT",
-		Message: "account 'custom:thing' is not declared",
+		Code:    protocol.String("UNDECLARED_ACCOUNT"),
+		Message: protocol.String("account 'custom:thing' is not declared"),
 	}
 	action, ok := ts.quickFixForUndeclaredAccount(uri, diag)
 	require.True(t, ok)

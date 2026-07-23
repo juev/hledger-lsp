@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestDiagnostics_RapidEditsCoalesce(t *testing.T) {
@@ -18,7 +19,7 @@ func TestDiagnostics_RapidEditsCoalesce(t *testing.T) {
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 
-	docURI := protocol.DocumentURI("file:///test.journal")
+	docURI := uri.URI("file:///test.journal")
 
 	err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -37,7 +38,7 @@ func TestDiagnostics_RapidEditsCoalesce(t *testing.T) {
 				TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
 				Version:                int32(i),
 			},
-			ContentChanges: []protocol.TextDocumentContentChangeEvent{{Text: content}},
+			ContentChanges: []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{Text: content}},
 		})
 		require.NoError(t, err)
 		time.Sleep(2 * time.Millisecond)
@@ -52,7 +53,9 @@ func TestDiagnostics_RapidEditsCoalesce(t *testing.T) {
 	client.mu.Unlock()
 
 	assert.Equal(t, 1, count, "rapid edits should coalesce into a single publish")
-	assert.Equal(t, uint32(edits+1), last.Version, "published version should match the last edit")
+	version, ok := last.Version.Get()
+	require.True(t, ok)
+	assert.Equal(t, int32(edits+1), version, "published version should match the last edit")
 }
 
 func TestDiagnostics_SupersededComputationNeverPublishes(t *testing.T) {
@@ -61,7 +64,7 @@ func TestDiagnostics_SupersededComputationNeverPublishes(t *testing.T) {
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 
-	docURI := protocol.DocumentURI("file:///test.journal")
+	docURI := uri.URI("file:///test.journal")
 
 	err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -79,7 +82,7 @@ func TestDiagnostics_SupersededComputationNeverPublishes(t *testing.T) {
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
 			Version:                2,
 		},
-		ContentChanges: []protocol.TextDocumentContentChangeEvent{{
+		ContentChanges: []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{
 			Text: "2024-01-15 new\n    expenses:food  $50\n    assets:cash",
 		}},
 	})
@@ -94,7 +97,9 @@ func TestDiagnostics_SupersededComputationNeverPublishes(t *testing.T) {
 	client.mu.Unlock()
 
 	for _, pub := range all {
-		assert.Equal(t, uint32(2), pub.Version,
+		version, ok := pub.Version.Get()
+		require.True(t, ok)
+		assert.Equal(t, int32(2), version,
 			"stale version 1 must never be published after version 2 arrived")
 	}
 
@@ -108,7 +113,7 @@ func TestDiagnostics_PublishedVersionMatchesDocument(t *testing.T) {
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 
-	docURI := protocol.DocumentURI("file:///test.journal")
+	docURI := uri.URI("file:///test.journal")
 
 	err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -123,7 +128,9 @@ func TestDiagnostics_PublishedVersionMatchesDocument(t *testing.T) {
 
 	last := client.getLastDiagnostics()
 	require.NotNil(t, last)
-	assert.Equal(t, uint32(7), last.Version)
+	version, ok := last.Version.Get()
+	require.True(t, ok)
+	assert.Equal(t, int32(7), version)
 }
 
 func TestDiagnostics_DidCloseCancelsPending(t *testing.T) {
@@ -132,7 +139,7 @@ func TestDiagnostics_DidCloseCancelsPending(t *testing.T) {
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 
-	docURI := protocol.DocumentURI("file:///test.journal")
+	docURI := uri.URI("file:///test.journal")
 
 	err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -163,8 +170,8 @@ func TestDiagnostics_IndependentURIsDoNotInterfere(t *testing.T) {
 	client := newIntegrationMockClient()
 	srv.SetClient(client)
 
-	uriA := protocol.DocumentURI("file:///a.journal")
-	uriB := protocol.DocumentURI("file:///b.journal")
+	uriA := uri.URI("file:///a.journal")
+	uriB := uri.URI("file:///b.journal")
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -193,7 +200,7 @@ func TestDiagnostics_IndependentURIsDoNotInterfere(t *testing.T) {
 
 	client.mu.Lock()
 	count := len(client.diagnostics)
-	uris := map[protocol.DocumentURI]bool{}
+	uris := map[uri.URI]bool{}
 	for _, d := range client.diagnostics {
 		uris[d.URI] = true
 	}

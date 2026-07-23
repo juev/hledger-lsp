@@ -45,7 +45,7 @@ func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLink
 
 		links = append(links, protocol.DocumentLink{
 			Range:  *astRangeToProtocol(inc.Range),
-			Target: target,
+			Target: &target,
 		})
 	}
 
@@ -60,7 +60,7 @@ func rulesDocumentLinks(doc, currentDir string) []protocol.DocumentLink {
 		target := pathToURI(rl.Path)
 		result = append(result, protocol.DocumentLink{
 			Range:  *astRangeToProtocol(rl.Range),
-			Target: target,
+			Target: &target,
 		})
 	}
 	return result

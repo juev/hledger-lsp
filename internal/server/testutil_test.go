@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 const integrationTestTimeout = 500 * time.Millisecond
 
 type integrationMockClient struct {
+	protocol.UnimplementedClient
 	mu            sync.Mutex
 	diagnostics   []protocol.PublishDiagnosticsParams
 	diagnosticsCh chan struct{}
@@ -25,29 +27,17 @@ func newIntegrationMockClient() *integrationMockClient {
 	}
 }
 
-func (m *integrationMockClient) ApplyEdit(_ context.Context, params *protocol.ApplyWorkspaceEditParams) (bool, error) {
+func (m *integrationMockClient) ApplyEdit(_ context.Context, params *protocol.ApplyWorkspaceEditParams) (*protocol.ApplyWorkspaceEditResult, error) {
 	m.applyMu.Lock()
 	m.lastApply = params
 	m.applyMu.Unlock()
-	return true, nil
+	return &protocol.ApplyWorkspaceEditResult{Applied: true}, nil
 }
 
 func (m *integrationMockClient) lastApplyEdit() *protocol.ApplyWorkspaceEditParams {
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
 	return m.lastApply
-}
-
-func (m *integrationMockClient) Progress(_ context.Context, _ *protocol.ProgressParams) error {
-	return nil
-}
-
-func (m *integrationMockClient) WorkDoneProgressCreate(_ context.Context, _ *protocol.WorkDoneProgressCreateParams) error {
-	return nil
-}
-
-func (m *integrationMockClient) LogMessage(_ context.Context, _ *protocol.LogMessageParams) error {
-	return nil
 }
 
 func (m *integrationMockClient) PublishDiagnostics(_ context.Context, params *protocol.PublishDiagnosticsParams) error {
@@ -60,34 +50,6 @@ func (m *integrationMockClient) PublishDiagnostics(_ context.Context, params *pr
 	default:
 	}
 	return nil
-}
-
-func (m *integrationMockClient) ShowMessage(_ context.Context, _ *protocol.ShowMessageParams) error {
-	return nil
-}
-
-func (m *integrationMockClient) ShowMessageRequest(_ context.Context, _ *protocol.ShowMessageRequestParams) (*protocol.MessageActionItem, error) {
-	return nil, nil
-}
-
-func (m *integrationMockClient) Telemetry(_ context.Context, _ interface{}) error {
-	return nil
-}
-
-func (m *integrationMockClient) RegisterCapability(_ context.Context, _ *protocol.RegistrationParams) error {
-	return nil
-}
-
-func (m *integrationMockClient) UnregisterCapability(_ context.Context, _ *protocol.UnregistrationParams) error {
-	return nil
-}
-
-func (m *integrationMockClient) Configuration(_ context.Context, _ *protocol.ConfigurationParams) ([]interface{}, error) {
-	return nil, nil
-}
-
-func (m *integrationMockClient) WorkspaceFolders(_ context.Context) ([]protocol.WorkspaceFolder, error) {
-	return nil, nil
 }
 
 func (m *integrationMockClient) waitDiagnostics() bool {
@@ -125,7 +87,7 @@ func newTestServer() *testServer {
 	}
 }
 
-func (ts *testServer) openDocument(uri protocol.DocumentURI, content string) error {
+func (ts *testServer) openDocument(uri uri.URI, content string) error {
 	params := &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
 			URI:  uri,
@@ -135,7 +97,7 @@ func (ts *testServer) openDocument(uri protocol.DocumentURI, content string) err
 	return ts.DidOpen(context.Background(), params)
 }
 
-func (ts *testServer) openAndWait(uri protocol.DocumentURI, content string) ([]protocol.Diagnostic, error) {
+func (ts *testServer) openAndWait(uri uri.URI, content string) ([]protocol.Diagnostic, error) {
 	err := ts.openDocument(uri, content)
 	if err != nil {
 		return nil, err
@@ -152,7 +114,7 @@ func (ts *testServer) openAndWait(uri protocol.DocumentURI, content string) ([]p
 	return last.Diagnostics, nil
 }
 
-func (ts *testServer) changeDocument(uri protocol.DocumentURI, changes []protocol.TextDocumentContentChangeEvent) error {
+func (ts *testServer) changeDocument(uri uri.URI, changes []protocol.TextDocumentContentChangeEvent) error {
 	params := &protocol.DidChangeTextDocumentParams{
 		TextDocument: protocol.VersionedTextDocumentIdentifier{
 			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: uri},
@@ -162,7 +124,7 @@ func (ts *testServer) changeDocument(uri protocol.DocumentURI, changes []protoco
 	return ts.DidChange(context.Background(), params)
 }
 
-func (ts *testServer) changeAndWait(uri protocol.DocumentURI, changes []protocol.TextDocumentContentChangeEvent) ([]protocol.Diagnostic, error) {
+func (ts *testServer) changeAndWait(uri uri.URI, changes []protocol.TextDocumentContentChangeEvent) ([]protocol.Diagnostic, error) {
 	err := ts.changeDocument(uri, changes)
 	if err != nil {
 		return nil, err
@@ -180,13 +142,49 @@ func (ts *testServer) changeAndWait(uri protocol.DocumentURI, changes []protocol
 }
 
 //nolint:unparam // test helper keeps the URI explicit at call sites
-func (ts *testServer) replaceAndWait(uri protocol.DocumentURI, newContent string) ([]protocol.Diagnostic, error) {
+func (ts *testServer) replaceAndWait(uri uri.URI, newContent string) ([]protocol.Diagnostic, error) {
 	return ts.changeAndWait(uri, []protocol.TextDocumentContentChangeEvent{
-		{Text: newContent},
+		&protocol.TextDocumentContentChangeWholeDocument{Text: newContent},
 	})
 }
 
-func (ts *testServer) completion(uri protocol.DocumentURI, line, character uint32) (*protocol.CompletionList, error) {
+func optionalString(value protocol.Optional[string]) string {
+	result, _ := value.Get()
+	return result
+}
+
+func tooltipString(value protocol.InlayHintTooltip) string {
+	result, _ := value.(protocol.String)
+	return string(result)
+}
+
+func diagnosticCodeString(value protocol.ProgressToken) string {
+	result, _ := value.(protocol.String)
+	return string(result)
+}
+
+func completionDetail(item protocol.CompletionItem) string {
+	return optionalString(item.Detail)
+}
+
+func completionSortText(item protocol.CompletionItem) string {
+	return optionalString(item.SortText)
+}
+
+func completionTextEdit(item protocol.CompletionItem) *protocol.TextEdit {
+	result, _ := item.TextEdit.(*protocol.TextEdit)
+	return result
+}
+
+func hoverContent(hover *protocol.Hover) string {
+	markup, _ := hover.Contents.(*protocol.MarkupContent)
+	if markup == nil {
+		return ""
+	}
+	return markup.Value
+}
+
+func (ts *testServer) completion(uri uri.URI, line, character uint32) (*protocol.CompletionList, error) {
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -196,7 +194,7 @@ func (ts *testServer) completion(uri protocol.DocumentURI, line, character uint3
 	return ts.Completion(context.Background(), params)
 }
 
-func (ts *testServer) hover(uri protocol.DocumentURI, line uint32) (*protocol.Hover, error) {
+func (ts *testServer) hover(uri uri.URI, line uint32) (*protocol.Hover, error) {
 	params := &protocol.HoverParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -207,14 +205,14 @@ func (ts *testServer) hover(uri protocol.DocumentURI, line uint32) (*protocol.Ho
 }
 
 //nolint:unparam // test helper keeps the URI explicit at call sites
-func (ts *testServer) format(uri protocol.DocumentURI) ([]protocol.TextEdit, error) {
+func (ts *testServer) format(uri uri.URI) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
 	return ts.Format(context.Background(), params)
 }
 
-func (ts *testServer) definition(uri protocol.DocumentURI, line, character uint32) ([]protocol.Location, error) {
+func (ts *testServer) definition(uri uri.URI, line, character uint32) ([]protocol.Location, error) {
 	params := &protocol.DefinitionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -225,7 +223,7 @@ func (ts *testServer) definition(uri protocol.DocumentURI, line, character uint3
 }
 
 //nolint:unparam // test helper keeps the character explicit at call sites
-func (ts *testServer) references(uri protocol.DocumentURI, line, character uint32, includeDeclaration bool) ([]protocol.Location, error) {
+func (ts *testServer) references(uri uri.URI, line, character uint32, includeDeclaration bool) ([]protocol.Location, error) {
 	params := &protocol.ReferenceParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
