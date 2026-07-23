@@ -251,7 +251,16 @@ func buildAccountHoverWithTransactions(accountName string, balances analyzer.Acc
 	if commodityBalances, ok := balances[accountName]; ok && len(commodityBalances) > 0 {
 		displayFormats := make(map[string]formatter.CommodityFormat, len(commodityFormats))
 		maps.Copy(displayFormats, commodityFormats)
-		enrichCommodityFormatsFromTransactions(displayFormats, transactions)
+		inferredFormats := inferredCommodityFormatsFromTransactions(transactions)
+		for sym, inferred := range inferredFormats {
+			if _, hasSpecific := displayFormats[sym]; hasSpecific {
+				continue
+			}
+			if _, hasDefault := displayFormats[""]; hasDefault {
+				continue
+			}
+			displayFormats[sym] = inferred
+		}
 
 		displayBalances := make(map[string]decimal.Decimal, len(commodityBalances))
 		maps.Copy(displayBalances, commodityBalances)
@@ -273,6 +282,9 @@ func buildAccountHoverWithTransactions(accountName string, balances analyzer.Acc
 
 		for _, c := range commodities {
 			bal := displayBalances[c]
+			if format, ok := configuredCommodityFormat(c, commodityFormats); ok && format.DecimalPlaces > 0 {
+				bal = bal.Round(int32(format.DecimalPlaces))
+			}
 			fmt.Fprintf(&sb, "- %s\n", formatter.FormatBalance(bal, c, displayFormats))
 		}
 		sb.WriteString("\n")
@@ -285,6 +297,18 @@ func buildAccountHoverWithTransactions(accountName string, balances analyzer.Acc
 }
 
 func enrichCommodityFormatsFromTransactions(formats map[string]formatter.CommodityFormat, transactions []ast.Transaction) {
+	if _, hasDefault := formats[""]; hasDefault {
+		return
+	}
+	for sym, inferred := range inferredCommodityFormatsFromTransactions(transactions) {
+		if _, configured := formats[sym]; !configured {
+			formats[sym] = inferred
+		}
+	}
+}
+
+func inferredCommodityFormatsFromTransactions(transactions []ast.Transaction) map[string]formatter.CommodityFormat {
+	formats := make(map[string]formatter.CommodityFormat)
 	for i := range transactions {
 		for j := range transactions[i].Postings {
 			amt := transactions[i].Postings[j].Amount
@@ -308,6 +332,15 @@ func enrichCommodityFormatsFromTransactions(formats map[string]formatter.Commodi
 			formats[sym] = existing
 		}
 	}
+	return formats
+}
+
+func configuredCommodityFormat(symbol string, configured map[string]formatter.CommodityFormat) (formatter.CommodityFormat, bool) {
+	if format, ok := configured[symbol]; ok {
+		return format, true
+	}
+	format, ok := configured[""]
+	return format, ok
 }
 
 // decimalPlaces returns the number of decimal places in an amount,
