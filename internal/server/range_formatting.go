@@ -6,7 +6,6 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/formatter"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) RangeFormat(ctx context.Context, params *protocol.DocumentRangeFormattingParams) ([]protocol.TextEdit, error) {
@@ -15,7 +14,7 @@ func (s *Server) RangeFormat(ctx context.Context, params *protocol.DocumentRange
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()

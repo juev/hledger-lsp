@@ -7,7 +7,6 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/filetype"
-	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -28,7 +27,7 @@ func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLink
 		return rulesDocumentLinks(doc, currentDir), nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if journal == nil || len(journal.Includes) == 0 {
 		return []protocol.DocumentLink{}, nil
 	}

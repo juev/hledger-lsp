@@ -28,12 +28,14 @@ func normalizeLineEndings(s string) string {
 // Each root file (file with no incoming include edges) gets its own tree
 // with an independent ResolvedJournal and caches.
 type IncludeTree struct {
-	RootPath          string
-	Resolved          *include.ResolvedJournal
-	LoadErrors        []include.LoadError
-	cachedFormats     map[string]formatter.CommodityFormat
-	cachedCommodities map[string]bool
-	cachedAccounts    map[string]bool
+	RootPath                   string
+	Resolved                   *include.ResolvedJournal
+	LoadErrors                 []include.LoadError
+	rootContentSnapshot        string
+	rootContentSnapshotIsValid bool
+	cachedFormats              map[string]formatter.CommodityFormat
+	cachedCommodities          map[string]bool
+	cachedAccounts             map[string]bool
 }
 
 func (t *IncludeTree) clearCaches() {
@@ -262,11 +264,17 @@ func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 	return tree.Resolved
 }
 
-// RootForFile returns the root journal path for the tree containing the given file.
-func (w *Workspace) RootForFile(path string) string {
+// ResolvedForRootContent returns a root tree only when its resolved state was
+// built from content. The caller must pass CRLF-normalized content.
+func (w *Workspace) ResolvedForRootContent(path, content string) (*include.ResolvedJournal, []include.LoadError) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.primaryRootLocked(path)
+
+	tree := w.trees[path]
+	if tree == nil || !tree.rootContentSnapshotIsValid || tree.rootContentSnapshot != content {
+		return nil, nil
+	}
+	return tree.Resolved, tree.LoadErrors
 }
 
 // primaryRootLocked returns the lexicographically smallest owning root for path.
@@ -351,6 +359,18 @@ func (w *Workspace) UpdateFile(path, content string) {
 	if path == "" || !filetype.IsJournalPath(path) {
 		return
 	}
+	journal, _ := parser.Parse(normalizeLineEndings(content))
+	w.UpdateFileWithJournal(path, content, journal)
+}
+
+// UpdateFileWithJournal updates the workspace index and owning trees for path
+// using a pre-parsed journal, avoiding a redundant parse on the hot path
+// (DidChange parses once and reuses the cached journal). The journal must be
+// parsed from CRLF-normalized content.
+func (w *Workspace) UpdateFileWithJournal(path, content string, journal *ast.Journal) {
+	if path == "" || !filetype.IsJournalPath(path) {
+		return
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -367,7 +387,7 @@ func (w *Workspace) UpdateFile(path, content string) {
 		oldIncludes = append([]string(nil), oldIndex.Includes...)
 	}
 
-	fileIndex, _, _ := BuildFileIndexFromContent(path, content)
+	fileIndex := BuildFileIndexFromJournal(path, journal)
 	w.index.SetFileIndex(path, fileIndex)
 	w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
 
@@ -388,6 +408,10 @@ func (w *Workspace) UpdateFile(path, content string) {
 		resolved, errs := w.loader.LoadWithOptions(rootPath, opts)
 		tree.Resolved = resolved
 		tree.LoadErrors = errs
+		tree.rootContentSnapshotIsValid = rootPath == path
+		if tree.rootContentSnapshotIsValid {
+			tree.rootContentSnapshot = normalizeLineEndings(content)
+		}
 		tree.clearCaches()
 		w.syncOwnershipFromResolvedLocked(tree)
 	}

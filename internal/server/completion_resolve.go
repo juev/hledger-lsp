@@ -11,7 +11,6 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type completionResolveData struct {
@@ -79,7 +78,7 @@ func (s *Server) CompletionResolve(_ context.Context, item *protocol.CompletionI
 		if !ok {
 			return item, nil
 		}
-		journal, _ := parser.Parse(doc)
+		journal, _ := s.cachedJournal(data.DocURI, doc)
 		allTransactions = journal.Transactions
 	}
 

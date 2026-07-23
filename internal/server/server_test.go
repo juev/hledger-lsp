@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -405,6 +406,36 @@ func TestServer_DidClose(t *testing.T) {
 
 	_, ok = srv.GetDocument(uri)
 	assert.False(t, ok)
+}
+
+func TestServer_DidClose_RestoresWorkspaceIndexFromDisk(t *testing.T) {
+	tmpDir := t.TempDir()
+	journalPath := filepath.Join(tmpDir, "main.journal")
+	diskContent := "account assets:disk\n"
+	unsavedContent := "account assets:discarded\n"
+	require.NoError(t, os.WriteFile(journalPath, []byte(diskContent), 0644))
+
+	srv := NewServer()
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: uri.File(tmpDir)})
+	require.NoError(t, err)
+	require.NoError(t, srv.workspace.Initialize())
+
+	journalURI := uri.File(journalPath)
+	require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: journalURI, Text: unsavedContent},
+	}))
+
+	accounts := srv.workspace.GetDeclaredAccountsForFile(journalPath)
+	assert.Contains(t, accounts, "assets:discarded")
+	assert.NotContains(t, accounts, "assets:disk")
+
+	require.NoError(t, srv.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: journalURI},
+	}))
+
+	accounts = srv.workspace.GetDeclaredAccountsForFile(journalPath)
+	assert.Contains(t, accounts, "assets:disk")
+	assert.NotContains(t, accounts, "assets:discarded")
 }
 
 func TestServer_DidSave(t *testing.T) {

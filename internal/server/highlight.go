@@ -6,7 +6,6 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/ast"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) DocumentHighlight(_ context.Context, params *protocol.DocumentHighlightParams) ([]protocol.DocumentHighlight, error) {
@@ -15,7 +14,7 @@ func (s *Server) DocumentHighlight(_ context.Context, params *protocol.DocumentH
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
 	target := findDefinitionTarget(journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {

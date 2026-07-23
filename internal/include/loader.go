@@ -88,6 +88,17 @@ func (l *Loader) LoadFromContent(path, content string) (*ResolvedJournal, []Load
 	}})
 }
 
+// FileSizeError returns a file-too-large LoadError when content exceeds the
+// configured MaxFileSizeBytes, or nil when it fits. It lets callers guard the
+// analyze path before parsing.
+func (l *Loader) FileSizeError(content string) *LoadError {
+	limits := l.getLimits()
+	if int64(len(content)) > limits.MaxFileSizeBytes {
+		return &LoadError{Kind: ErrorFileTooLarge, Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), limits.MaxFileSizeBytes)}
+	}
+	return nil
+}
+
 func (l *Loader) load(path, content string, options LoadOptions) (*ResolvedJournal, []LoadError) {
 	result := NewResolvedJournal(nil)
 	result.Items = make([]ResolvedItem, 0)

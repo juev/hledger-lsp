@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"go.lsp.dev/protocol"
-
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {
@@ -16,7 +14,7 @@ func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRena
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	target := findDefinitionTarget(journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
@@ -35,7 +33,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 		return nil, nil
 	}
 
-	journal, _ := parser.Parse(doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	target := findDefinitionTarget(journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil

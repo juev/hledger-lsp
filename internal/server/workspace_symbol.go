@@ -7,7 +7,6 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/ast"
-	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
@@ -63,7 +62,7 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 			return true
 		}
 		content := value.(string)
-		journal, _ := parser.Parse(content)
+		journal, _ := s.cachedJournal(docURI, content)
 		if journal == nil {
 			return true
 		}
