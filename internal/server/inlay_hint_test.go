@@ -24,6 +24,8 @@ func TestInlayHint_LocalInferredAmount(t *testing.T) {
 	require.Len(t, hints, 1)
 	assert.Equal(t, protocol.String("= -50 $"), hints[0].Label)
 	assert.Equal(t, uint32(2), hints[0].Position.Line)
+	require.NotNil(t, hints[0].PaddingLeft)
+	assert.True(t, *hints[0].PaddingLeft)
 }
 
 func TestInlayHint_CostAndChronologicalRunningBalance(t *testing.T) {
@@ -101,4 +103,14 @@ func TestInlayHint_UsesUTF16PositionAndCRLF(t *testing.T) {
 	require.Len(t, hints, 1)
 	assert.Equal(t, uint32(2), hints[0].Position.Line)
 	assert.Equal(t, uint32(13), hints[0].Position.Character)
+}
+
+func TestInlayHint_InferFinalPostingAtEOF(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
+	srv.StoreDocument(docURI, "2024-07-23 Метрополитен\n    Расходы:Транспорт  71,00\n    Расходы:Транспорт  71,00\n    Активы:Сбербанк:Текущий")
+	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}, Range: protocol.Range{End: protocol.Position{Line: 10}}})
+	require.NoError(t, err)
+	require.Len(t, hints, 1)
+	assert.Equal(t, protocol.String("= -142"), hints[0].Label)
 }

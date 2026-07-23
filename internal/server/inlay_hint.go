@@ -62,16 +62,18 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		}
 		if settings.InlayHints.InferredAmounts && len(effect.InferredAmounts) > 0 {
 			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position: mapper.ByteToLSP(posting.Account.Range.End.Offset),
-				Label:    protocol.String("= " + formatAmounts(effect.InferredAmounts, formats)),
-				Kind:     protocol.InlayHintKindType,
+				Position:    mapper.ByteToLSP(posting.Account.Range.End.Offset),
+				Label:       protocol.String("= " + formatAmounts(effect.InferredAmounts, formats)),
+				Kind:        protocol.InlayHintKindType,
+				PaddingLeft: boolPtr(true),
 			})
 		}
 		if settings.InlayHints.CostExpansion && len(effect.CostContribution) > 0 && posting.Cost != nil {
 			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position: mapper.ByteToLSP(posting.Cost.Range.End.Offset),
-				Label:    protocol.String("cost: " + formatAmounts(effect.CostContribution, formats)),
-				Kind:     protocol.InlayHintKindType,
+				Position:    mapper.ByteToLSP(posting.Cost.Range.End.Offset),
+				Label:       protocol.String("cost: " + formatAmounts(effect.CostContribution, formats)),
+				Kind:        protocol.InlayHintKindType,
+				PaddingLeft: boolPtr(true),
 			})
 		}
 		if settings.InlayHints.RunningBalances && !transactionHasPostingDateOverride(transaction) {
@@ -82,9 +84,10 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 			if amounts := balances[postingKey{effect.TransactionIndex, effect.PostingIndex}][account]; len(amounts) > 0 {
 				hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-					Position: mapper.ByteToLSP(posting.Range.End.Offset),
-					Label:    protocol.String("balance: " + formatAmounts(amounts, formats)),
-					Kind:     protocol.InlayHintKindType,
+					Position:    mapper.ByteToLSP(posting.Range.End.Offset),
+					Label:       protocol.String("balance: " + formatAmounts(amounts, formats)),
+					Kind:        protocol.InlayHintKindType,
+					PaddingLeft: boolPtr(true),
 				})
 			}
 		}
