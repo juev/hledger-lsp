@@ -98,8 +98,16 @@ With hledger-vscode, use the `:hledger` suffix to apply colors only to hledger f
   "editor.semanticTokenColorCustomizations": {
     "rules": {
       "account:hledger": "#4EC9B0",
+      "namespace.undeclared:hledger": {
+        "foreground": "#F14C4C",
+        "fontStyle": "underline"
+      },
       "date:hledger": "#B5CEA8",
       "amount:hledger": "#B5CEA8",
+      "number.unbalanced:hledger": {
+        "foreground": "#F14C4C",
+        "fontStyle": "underline"
+      },
       "commodity:hledger": "#569CD6",
       "payee:hledger": "#DCDCAA",
       "directive:hledger": "#C586C0",
@@ -122,8 +130,16 @@ Without a registered language ID, colors apply globally:
   "editor.semanticTokenColorCustomizations": {
     "rules": {
       "account": "#4EC9B0",
+      "namespace.undeclared": {
+        "foreground": "#F14C4C",
+        "fontStyle": "underline"
+      },
       "date": "#B5CEA8",
       "amount": "#B5CEA8",
+      "number.unbalanced": {
+        "foreground": "#F14C4C",
+        "fontStyle": "underline"
+      },
       "commodity": "#569CD6",
       "payee": "#DCDCAA",
       "directive": "#C586C0",

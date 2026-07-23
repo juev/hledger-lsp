@@ -2,12 +2,17 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
 func TestSemanticTokens_Legend(t *testing.T) {
@@ -27,7 +32,9 @@ func TestSemanticTokens_Legend(t *testing.T) {
 	assert.Equal(t, string(protocol.SemanticTokenTypesRegexp), legend.TokenTypes[10])
 	assert.Equal(t, string(protocol.SemanticTokenTypesParameter), legend.TokenTypes[11])
 
-	assert.Contains(t, legend.TokenModifiers, string(protocol.SemanticTokenModifiersAbstract))
+	assert.Equal(t, "negative", legend.TokenModifiers[ModifierNegative])
+	assert.Equal(t, "undeclared", legend.TokenModifiers[ModifierUndeclared])
+	assert.Equal(t, "unbalanced", legend.TokenModifiers[ModifierUnbalanced])
 }
 
 func TestSemanticTokens_Encode(t *testing.T) {
@@ -293,6 +300,22 @@ func TestSemanticTokens_Range(t *testing.T) {
 
 	assert.Less(t, len(result.Data), len(fullResult.Data),
 		"range result should have fewer tokens than full result")
+}
+
+func TestSemanticTokens_RangeFiltersCharactersOnBoundaryLines(t *testing.T) {
+	tokens := []semanticToken{
+		{line: 2, col: 4, length: 5, tokenType: TokenTypeAccount},
+		{line: 2, col: 11, length: 2, tokenType: TokenTypeAmount},
+		{line: 2, col: 15, length: 3, tokenType: TokenTypeCommodity},
+	}
+
+	filtered := filterTokensByRange(tokens, protocol.Range{
+		Start: protocol.Position{Line: 2, Character: 10},
+		End:   protocol.Position{Line: 2, Character: 14},
+	})
+
+	require.Len(t, filtered, 1)
+	assert.Equal(t, uint32(TokenTypeAmount), filtered[0].tokenType)
 }
 
 func TestSemanticTokens_DeltaNotAdvertised(t *testing.T) {
@@ -1303,4 +1326,209 @@ func TestSemanticTokens_TaggedCommentMarkerIsComment(t *testing.T) {
 func TestSemanticTokens_Legend_NegativeModifier(t *testing.T) {
 	legend := GetSemanticTokensLegend()
 	assert.Contains(t, legend.TokenModifiers, string(protocol.SemanticTokenModifiers("negative")))
+}
+
+func TestSemanticTokens_DiagnosticModifiers_FullAndRange(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///diagnostics.journal")
+	content := `account assets:cash
+account expenses:food
+2024-01-01 unbalanced
+    custom:wallet  -10 USD
+    assets:cash  5 USD
+2024-01-02 balanced
+    expenses:food  10 USD
+    assets:cash  -10 USD
+2024-01-03 virtual
+    (custom:virtual)`
+	srv.documents.Store(docURI, content)
+
+	full, err := srv.SemanticTokensFull(context.Background(), &protocol.SemanticTokensParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+	fullTokens := decodeSemanticTokens(full.Data)
+
+	undeclared := semanticTokenAt(fullTokens, 3, TokenTypeAccount)
+	require.NotNil(t, undeclared)
+	assert.NotZero(t, undeclared.modifiers&(1<<ModifierUndeclared))
+
+	for _, line := range []uint32{3, 4} {
+		for _, token := range semanticAmountTokensOnLine(fullTokens, line) {
+			assert.NotZero(t, token.modifiers&(1<<ModifierUnbalanced), "line %d", line)
+		}
+	}
+	negative := semanticTokenAt(fullTokens, 3, TokenTypeAmount)
+	require.NotNil(t, negative)
+	assert.NotZero(t, negative.modifiers&(1<<ModifierNegative))
+	for _, line := range []uint32{6, 7} {
+		for _, token := range semanticAmountTokensOnLine(fullTokens, line) {
+			assert.Zero(t, token.modifiers&(1<<ModifierUnbalanced), "line %d", line)
+		}
+	}
+	virtual := semanticTokenAt(fullTokens, 9, TokenTypeAccount)
+	require.NotNil(t, virtual)
+	assert.NotZero(t, virtual.modifiers&(1<<ModifierAbstract))
+	assert.NotZero(t, virtual.modifiers&(1<<ModifierUndeclared))
+
+	rangeResult, err := srv.SemanticTokensRange(context.Background(), &protocol.SemanticTokensRangeParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 3},
+			End:   protocol.Position{Line: 4, Character: 100},
+		},
+	})
+	require.NoError(t, err)
+	rangeAmounts := semanticAmountTokensOnLine(decodeSemanticTokens(rangeResult.Data), 3)
+	require.NotEmpty(t, rangeAmounts)
+	for _, token := range rangeAmounts {
+		assert.NotZero(t, token.modifiers&(1<<ModifierUnbalanced))
+	}
+}
+
+func TestSemanticTokens_DiagnosticModifiers_RespectSettingsAndTolerance(t *testing.T) {
+	docURI := uri.URI("file:///settings.journal")
+	content := "account assets:cash\n2024-01-01 test\n    custom:wallet  10 USD\n    assets:cash  -9.995 USD"
+
+	t.Run("diagnostics feature disabled", func(t *testing.T) {
+		srv := NewServer()
+		settings := srv.getSettings()
+		settings.Features.Diagnostics = false
+		srv.setSettings(settings)
+		srv.documents.Store(docURI, content)
+		assertNoDiagnosticModifiers(t, semanticTokensForDocument(t, srv, docURI))
+	})
+
+	t.Run("individual diagnostic settings disabled", func(t *testing.T) {
+		srv := NewServer()
+		settings := srv.getSettings()
+		settings.Diagnostics.UndeclaredAccounts = false
+		settings.Diagnostics.UnbalancedTransactions = false
+		srv.setSettings(settings)
+		srv.documents.Store(docURI, content)
+		assertNoDiagnosticModifiers(t, semanticTokensForDocument(t, srv, docURI))
+	})
+
+	t.Run("balance tolerance", func(t *testing.T) {
+		srv := NewServer()
+		settings := srv.getSettings()
+		settings.Diagnostics.BalanceTolerance = 0.01
+		srv.setSettings(settings)
+		srv.documents.Store(docURI, content)
+		for _, token := range semanticAmountTokensOnLine(semanticTokensForDocument(t, srv, docURI), 2) {
+			assert.Zero(t, token.modifiers&(1<<ModifierUnbalanced))
+		}
+	})
+}
+
+func TestSemanticTokens_DiagnosticModifiers_SkipOversizedFile(t *testing.T) {
+	srv := NewServer()
+	srv.loader.SetLimits(include.Limits{MaxFileSizeBytes: 10, MaxIncludeDepth: 50})
+	docURI := uri.URI("file:///oversized.journal")
+	content := "2024-01-01 test\n    custom:wallet  10 USD\n"
+	srv.documents.Store(docURI, content)
+
+	assertNoDiagnosticModifiers(t, semanticTokensForDocument(t, srv, docURI))
+	_, cached := srv.parseCache.Load(docURI)
+	assert.False(t, cached, "oversized semantic request must not invoke analysis")
+}
+
+func TestSemanticTokens_DiagnosticModifiers_RulesStaySyntaxOnly(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///import.rules")
+	srv.documents.Store(docURI, "fields date\n")
+
+	assertNoDiagnosticModifiers(t, semanticTokensForDocument(t, srv, docURI))
+	_, cached := srv.parseCache.Load(docURI)
+	assert.False(t, cached, "rules semantic request must not invoke journal analysis")
+}
+
+func TestSemanticTokens_DiagnosticModifiers_UseWorkspaceDeclarationsAndNormalizedText(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.journal")
+	childPath := filepath.Join(dir, "accounts.journal")
+	content := "include accounts.journal\r\n2024-01-01 \U0001f600 test\r\n    custom:wallet  10 USD\r\n    expenses:food  -9 USD\r\n"
+	require.NoError(t, os.WriteFile(mainPath, []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(childPath, []byte("account expenses:food\n"), 0o600))
+
+	srv := NewServer()
+	srv.workspace = workspace.NewWorkspace(dir, srv.loader)
+	require.NoError(t, srv.workspace.Initialize())
+	docURI := uri.File(mainPath)
+	require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+		TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+	}))
+
+	tokens := semanticTokensForDocument(t, srv, docURI)
+	declared := semanticTokenAt(tokens, 3, TokenTypeAccount)
+	require.NotNil(t, declared)
+	assert.Zero(t, declared.modifiers&(1<<ModifierUndeclared))
+	undeclared := semanticTokenAt(tokens, 2, TokenTypeAccount)
+	require.NotNil(t, undeclared)
+	assert.NotZero(t, undeclared.modifiers&(1<<ModifierUndeclared))
+	emojiPayee := semanticTokenAt(tokens, 1, TokenTypePayee)
+	require.NotNil(t, emojiPayee)
+	assert.Equal(t, uint32(7), emojiPayee.length, "token length must use UTF-16 code units")
+	for _, line := range []uint32{2, 3} {
+		for _, token := range semanticAmountTokensOnLine(tokens, line) {
+			assert.NotZero(t, token.modifiers&(1<<ModifierUnbalanced), "line %d", line)
+		}
+	}
+}
+
+func semanticTokensForDocument(t *testing.T, srv *Server, docURI uri.URI) []semanticToken {
+	t.Helper()
+	result, err := srv.SemanticTokensFull(context.Background(), &protocol.SemanticTokensParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+	return decodeSemanticTokens(result.Data)
+}
+
+func decodeSemanticTokens(data []uint32) []semanticToken {
+	tokens := make([]semanticToken, 0, len(data)/5)
+	var line, col uint32
+	for index := 0; index+4 < len(data); index += 5 {
+		if data[index] != 0 {
+			line += data[index]
+			col = data[index+1]
+		} else {
+			col += data[index+1]
+		}
+		tokens = append(tokens, semanticToken{
+			line:      line,
+			col:       col,
+			length:    data[index+2],
+			tokenType: data[index+3],
+			modifiers: data[index+4],
+		})
+	}
+	return tokens
+}
+
+func semanticTokenAt(tokens []semanticToken, line, tokenType uint32) *semanticToken {
+	for index := range tokens {
+		if tokens[index].line == line && tokens[index].tokenType == tokenType {
+			return &tokens[index]
+		}
+	}
+	return nil
+}
+
+func semanticAmountTokensOnLine(tokens []semanticToken, line uint32) []semanticToken {
+	var result []semanticToken
+	for _, token := range tokens {
+		if token.line == line && token.tokenType == TokenTypeAmount {
+			result = append(result, token)
+		}
+	}
+	return result
+}
+
+func assertNoDiagnosticModifiers(t *testing.T, tokens []semanticToken) {
+	t.Helper()
+	for _, token := range tokens {
+		assert.Zero(t, token.modifiers&(1<<ModifierUndeclared))
+		assert.Zero(t, token.modifiers&(1<<ModifierUnbalanced))
+	}
 }
