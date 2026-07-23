@@ -1118,3 +1118,78 @@ func TestEnrichCommodityFormatsFromTransactions_DecimalPlaces(t *testing.T) {
 	assert.True(t, usdFormat.HasDecimal, "HasDecimal should be true")
 	assert.Equal(t, 2, usdFormat.DecimalPlaces, "DecimalPlaces should be 2")
 }
+
+func TestHover_AccountBalanceSpecificCommodityFormatRoundsAggregate(t *testing.T) {
+	srv := NewServer()
+	content := `commodity 1.000,00 RUB
+
+2024-01-15 grocery
+    expenses:food  1000,123 RUB
+    assets:cash`
+
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
+
+	result, err := srv.Hover(context.Background(), &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: "file:///test.journal"},
+			Position:     protocol.Position{Line: 3, Character: 10},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, hoverContent(result), "1.000,12 RUB")
+	assert.NotContains(t, hoverContent(result), "1.000,123 RUB")
+}
+
+func TestHover_AccountBalanceDefaultFormatRoundsOtherCommodityAggregate(t *testing.T) {
+	srv := NewServer()
+	content := `D 1.000,00 RUB
+
+2024-01-15 grocery
+    expenses:food  1000.123 EUR
+    assets:cash`
+
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
+
+	result, err := srv.Hover(context.Background(), &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: "file:///test.journal"},
+			Position:     protocol.Position{Line: 3, Character: 10},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, hoverContent(result), "1.000,12 EUR")
+	assert.NotContains(t, hoverContent(result), "1.000.123 EUR")
+}
+
+func TestEnrichCommodityFormatsFromTransactionsDoesNotMutateConfiguredFormat(t *testing.T) {
+	configured := map[string]formatter.CommodityFormat{
+		"RUB": {
+			NumberFormat: formatter.NumberFormat{
+				DecimalMark:   ',',
+				ThousandsSep:  ".",
+				DecimalPlaces: 2,
+				HasDecimal:    true,
+			},
+			Position:     ast.CommodityRight,
+			SpaceBetween: true,
+		},
+	}
+	want := configured["RUB"]
+	transactions := []ast.Transaction{{
+		Postings: []ast.Posting{{
+			Amount: &ast.Amount{
+				Quantity:    decimal.RequireFromString("1000.123"),
+				RawQuantity: "1000.123",
+				Commodity:   ast.Commodity{Symbol: "RUB", Position: ast.CommodityRight},
+			},
+		}},
+	}}
+
+	enrichCommodityFormatsFromTransactions(configured, transactions)
+
+	assert.Equal(t, want, configured["RUB"])
+}
