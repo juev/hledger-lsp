@@ -22,9 +22,9 @@ func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionPara
 }
 
 func (s *Server) DocumentSymbol(ctx context.Context, params *protocol.DocumentSymbolParams) (protocol.DocumentSymbolResult, error) {
-	symbols, err := s.documentSymbols(ctx, params)
-	if err != nil || len(symbols) == 0 {
-		return nil, err
+	symbols := s.documentSymbols(ctx, params)
+	if len(symbols) == 0 {
+		return nil, nil
 	}
 	return protocol.DocumentSymbolSlice(symbols), nil
 }

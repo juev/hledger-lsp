@@ -20,8 +20,7 @@ func TestDocumentSymbol_Empty(t *testing.T) {
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	assert.Empty(t, result)
 }
 
@@ -34,8 +33,7 @@ func TestDocumentSymbol_DocumentNotFound(t *testing.T) {
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	assert.Nil(t, result)
 }
 
@@ -57,8 +55,7 @@ func TestDocumentSymbol_Transactions(t *testing.T) {
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 1, "transactions grouped by month")
 
 	symbols := toDocumentSymbols(t, result)
@@ -90,8 +87,7 @@ account expenses:food`
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -119,8 +115,7 @@ commodity EUR`
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -146,8 +141,7 @@ include /path/to/other.journal`
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -179,8 +173,7 @@ include ./other.journal`
 		},
 	}
 
-	result, err := srv.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 4, "month group + account + commodity + include")
 
 	symbols := toDocumentSymbols(t, result)
@@ -247,8 +240,7 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 				},
 			}
 
-			result, err := srv.documentSymbols(context.Background(), params)
-			require.NoError(t, err)
+			result := srv.documentSymbols(context.Background(), params)
 			require.NotEmpty(t, result, "expected at least one symbol")
 
 			symbols := toDocumentSymbols(t, result)

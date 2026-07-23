@@ -311,8 +311,7 @@ func TestIntegration_DocumentSymbols(t *testing.T) {
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	symbols, err := ts.documentSymbols(context.Background(), params)
-	require.NoError(t, err)
+	symbols := ts.documentSymbols(context.Background(), params)
 	require.GreaterOrEqual(t, len(symbols), 2, "month group + account directive")
 }
 

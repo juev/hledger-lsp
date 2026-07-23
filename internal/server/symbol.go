@@ -13,21 +13,21 @@ import (
 )
 
 func (s *Server) documentSymbols(
-	ctx context.Context,
+	_ context.Context,
 	params *protocol.DocumentSymbolParams,
-) ([]protocol.DocumentSymbol, error) {
+) []protocol.DocumentSymbol {
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	if filetype.IsRules(string(params.TextDocument.URI)) {
-		return rulesDocumentSymbols(doc), nil
+		return rulesDocumentSymbols(doc)
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if journal == nil {
-		return nil, nil
+		return nil
 	}
 
 	symbols := make([]protocol.DocumentSymbol, 0, len(journal.Transactions)+len(journal.Directives)+len(journal.Includes))
@@ -42,7 +42,7 @@ func (s *Server) documentSymbols(
 		symbols = append(symbols, includeToSymbol(inc))
 	}
 
-	return symbols, nil
+	return symbols
 }
 
 func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.DocumentSymbol {

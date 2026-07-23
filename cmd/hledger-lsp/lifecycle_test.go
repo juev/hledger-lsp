@@ -123,18 +123,18 @@ func (s *lifecycleTestServer) snapshot() (initializeCount, initializedCount, did
 	return s.initializeCount, s.initializedCount, s.didOpenCount, s.completionCount, s.shutdownCount
 }
 
-func openLifecyclePair(t *testing.T, srv *lifecycleTestServer) (context.Context, jsonrpc2.Conn, jsonrpc2.Conn, protocol.Server, *lifecycleState, func()) {
+func openLifecyclePair(t *testing.T, srv *lifecycleTestServer) (jsonrpc2.Conn, jsonrpc2.Conn, protocol.Server, *lifecycleState, func()) {
 	t.Helper()
 
 	serverPipe, clientPipe := net.Pipe()
 	serverCtx, serverConn, _, state := newProtocolServerConnection(context.Background(), serverPipe, srv)
-	clientCtx, clientConn, client := protocol.NewClient(serverCtx, &testClient{}, jsonrpc2.NewStream(clientPipe))
+	_, clientConn, client := protocol.NewClient(serverCtx, &testClient{}, jsonrpc2.NewStream(clientPipe))
 	cleanup := func() {
 		_ = clientConn.Close()
 		_ = serverConn.Close()
 		<-serverConn.Done()
 	}
-	return clientCtx, serverConn, clientConn, client, state, cleanup
+	return serverConn, clientConn, client, state, cleanup
 }
 
 func assertRPCCode(t *testing.T, err error, code jsonrpc2.Code) {
@@ -159,7 +159,7 @@ func completionParams(uriString string) *protocol.CompletionParams {
 func TestLSPWire_LifecycleBasics(t *testing.T) {
 	ctx := context.Background()
 	srv := &lifecycleTestServer{}
-	_, serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
+	serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
 	defer cleanup()
 
 	exitCode := make(chan int, 1)
@@ -218,7 +218,7 @@ func TestLSPWire_InitializeInProgress(t *testing.T) {
 		initializeStarted: started,
 		initializeBlocker: block,
 	}
-	_, serverConn, _, client, _, cleanup := openLifecyclePair(t, srv)
+	serverConn, _, client, _, cleanup := openLifecyclePair(t, srv)
 	defer cleanup()
 
 	firstResult := make(chan error, 1)
@@ -263,7 +263,7 @@ func TestLSPWire_InitializeRetryPolicy(t *testing.T) {
 		srv := &lifecycleTestServer{
 			initializeErrors: []error{errors.New("fatal")},
 		}
-		_, serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
+		serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
 		defer cleanup()
 
 		_, err := client.Initialize(ctx, &protocol.InitializeParams{})
@@ -288,7 +288,7 @@ func TestLSPWire_InitializeRetryPolicy(t *testing.T) {
 		srv := &lifecycleTestServer{
 			initializeErrors: []error{retryErr},
 		}
-		_, serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
+		serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
 		defer cleanup()
 
 		_, firstInitErr := client.Initialize(ctx, &protocol.InitializeParams{})
@@ -312,7 +312,7 @@ func TestWaitForServerExit(t *testing.T) {
 		srv := &lifecycleTestServer{
 			shutdownErr: errors.New("shutdown failed"),
 		}
-		_, serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
+		serverConn, _, client, state, cleanup := openLifecyclePair(t, srv)
 		defer cleanup()
 
 		_, err := client.Initialize(ctx, &protocol.InitializeParams{})
@@ -331,7 +331,7 @@ func TestWaitForServerExit(t *testing.T) {
 
 	t.Run("shutdown then peer close keeps code 0", func(t *testing.T) {
 		srv := &lifecycleTestServer{}
-		_, serverConn, clientConn, client, state, cleanup := openLifecyclePair(t, srv)
+		serverConn, clientConn, client, state, cleanup := openLifecyclePair(t, srv)
 		defer cleanup()
 
 		_, err := client.Initialize(ctx, &protocol.InitializeParams{})
@@ -349,7 +349,7 @@ func TestWaitForServerExit(t *testing.T) {
 
 	t.Run("exit with peer close without shutdown gives 1", func(t *testing.T) {
 		srv := &lifecycleTestServer{}
-		_, serverConn, clientConn, client, state, cleanup := openLifecyclePair(t, srv)
+		serverConn, clientConn, client, state, cleanup := openLifecyclePair(t, srv)
 		defer cleanup()
 
 		_, err := client.Initialize(ctx, &protocol.InitializeParams{})
@@ -366,7 +366,7 @@ func TestWaitForServerExit(t *testing.T) {
 	})
 
 	t.Run("peer EOF without exit uses conn fallback code 0", func(t *testing.T) {
-		_, serverConn, clientConn, _, state, cleanup := openLifecyclePair(t, &lifecycleTestServer{})
+		serverConn, clientConn, _, state, cleanup := openLifecyclePair(t, &lifecycleTestServer{})
 		defer cleanup()
 
 		require.NoError(t, clientConn.Close())
@@ -386,7 +386,7 @@ func TestLSPWire_CancelThenNextRequest(t *testing.T) {
 	srv := &lifecycleTestServer{
 		completionUnblock: make(chan struct{}),
 	}
-	_, _, _, client, _, cleanup := openLifecyclePair(t, srv)
+	_, _, client, _, cleanup := openLifecyclePair(t, srv)
 	defer cleanup()
 
 	_, err := client.Initialize(ctx, &protocol.InitializeParams{})
