@@ -69,3 +69,36 @@ func TestInlayHint_PostingDateOverrideSuppressesOnlyRunningBalance(t *testing.T)
 	}
 	assert.Len(t, hints, 1)
 }
+
+func TestInlayHint_FeatureAndRangeGates(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
+	srv.StoreDocument(docURI, "2024-01-01 test\n    expenses:food  $10\n    assets:cash\n")
+	params := &protocol.InlayHintParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}, Range: protocol.Range{End: protocol.Position{Line: 10}}}
+
+	settings := srv.getSettings()
+	settings.Features.InlayHints = false
+	srv.setSettings(settings)
+	hints, err := srv.InlayHint(context.Background(), params)
+	require.NoError(t, err)
+	assert.Empty(t, hints)
+
+	settings.Features.InlayHints = true
+	srv.setSettings(settings)
+	params.Range = protocol.Range{End: protocol.Position{Line: 2}}
+	hints, err = srv.InlayHint(context.Background(), params)
+	require.NoError(t, err)
+	assert.Empty(t, hints, "end of requested range is exclusive")
+}
+
+func TestInlayHint_UsesUTF16PositionAndCRLF(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
+	content := "2024-01-01 🧾\r\n    расходы:еда  $10\r\n    assets:cash\r\n"
+	srv.StoreDocument(docURI, content)
+	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}, Range: protocol.Range{End: protocol.Position{Line: 10}}})
+	require.NoError(t, err)
+	require.Len(t, hints, 1)
+	assert.Equal(t, uint32(2), hints[0].Position.Line)
+	assert.Equal(t, uint32(13), hints[0].Position.Character)
+}

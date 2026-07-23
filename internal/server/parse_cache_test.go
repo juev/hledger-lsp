@@ -77,3 +77,18 @@ func TestCachedBalances_ComputedOnceAndCorrect(t *testing.T) {
 	again := srv.cachedBalances(uri, sampleJournal)
 	assert.Equal(t, balances, again)
 }
+
+func TestCachedPostingEffects_ReusesAndReplacesWithContent(t *testing.T) {
+	srv := NewServer()
+	uri := uri.URI("file:///a.journal")
+	content := "2024-01-01 test\n    expenses:food  $10\n    assets:cash\n"
+
+	first := srv.cachedPostingEffects(uri, content)
+	second := srv.cachedPostingEffects(uri, content)
+	require.Len(t, first, 2)
+	assert.Equal(t, first, second)
+
+	changed := srv.cachedPostingEffects(uri, "2024-01-01 test\n    expenses:food  $20\n    assets:cash\n")
+	require.Len(t, changed, 2)
+	assert.NotEqual(t, first[1].InferredAmounts, changed[1].InferredAmounts)
+}
