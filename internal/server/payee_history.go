@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 
 	"go.lsp.dev/protocol"
 )
@@ -16,13 +15,8 @@ type PayeeAccountHistoryResult struct {
 	PairUsage     map[string]int      `json:"pairUsage"`
 }
 
-func (s *Server) PayeeAccountHistory(_ context.Context, params json.RawMessage) (*PayeeAccountHistoryResult, error) {
-	var p PayeeAccountHistoryParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, err
-	}
-
-	content, ok := s.GetDocument(p.TextDocument.URI)
+func (s *Server) PayeeAccountHistory(_ context.Context, params *PayeeAccountHistoryParams) (*PayeeAccountHistoryResult, error) {
+	content, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return &PayeeAccountHistoryResult{
 			PayeeAccounts: make(map[string][]string),
@@ -30,7 +24,7 @@ func (s *Server) PayeeAccountHistory(_ context.Context, params json.RawMessage) 
 		}, nil
 	}
 
-	if resolved := s.getWorkspaceResolved(p.TextDocument.URI); resolved != nil {
+	if resolved := s.getWorkspaceResolved(params.TextDocument.URI); resolved != nil {
 		result := s.analyzer.AnalyzeResolved(resolved)
 		return &PayeeAccountHistoryResult{
 			PayeeAccounts: result.PayeeAccounts,
@@ -38,7 +32,7 @@ func (s *Server) PayeeAccountHistory(_ context.Context, params json.RawMessage) 
 		}, nil
 	}
 
-	journal, errs := s.cachedJournal(p.TextDocument.URI, content)
+	journal, errs := s.cachedJournal(params.TextDocument.URI, content)
 	if len(errs) > 0 || journal == nil {
 		return &PayeeAccountHistoryResult{
 			PayeeAccounts: make(map[string][]string),

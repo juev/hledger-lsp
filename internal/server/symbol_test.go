@@ -20,7 +20,7 @@ func TestDocumentSymbol_Empty(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -34,7 +34,7 @@ func TestDocumentSymbol_DocumentNotFound(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	assert.Nil(t, result)
 }
@@ -57,7 +57,7 @@ func TestDocumentSymbol_Transactions(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1, "transactions grouped by month")
 
@@ -90,7 +90,7 @@ account expenses:food`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 2)
 
@@ -119,7 +119,7 @@ commodity EUR`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 2)
 
@@ -146,7 +146,7 @@ include /path/to/other.journal`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 2)
 
@@ -179,7 +179,7 @@ include ./other.journal`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
+	result, err := srv.documentSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 4, "month group + account + commodity + include")
 
@@ -204,15 +204,9 @@ include ./other.journal`
 	}
 }
 
-func toDocumentSymbols(t *testing.T, result []any) []protocol.DocumentSymbol {
+func toDocumentSymbols(t *testing.T, result []protocol.DocumentSymbol) []protocol.DocumentSymbol {
 	t.Helper()
-	symbols := make([]protocol.DocumentSymbol, 0, len(result))
-	for _, item := range result {
-		sym, ok := item.(protocol.DocumentSymbol)
-		require.True(t, ok, "expected protocol.DocumentSymbol")
-		symbols = append(symbols, sym)
-	}
-	return symbols
+	return result
 }
 
 func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
@@ -253,7 +247,7 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 				},
 			}
 
-			result, err := srv.DocumentSymbol(context.Background(), params)
+			result, err := srv.documentSymbols(context.Background(), params)
 			require.NoError(t, err)
 			require.NotEmpty(t, result, "expected at least one symbol")
 

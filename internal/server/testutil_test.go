@@ -191,7 +191,7 @@ func (ts *testServer) completion(uri uri.URI, line, character uint32) (*protocol
 			Position:     protocol.Position{Line: line, Character: character},
 		},
 	}
-	return ts.Completion(context.Background(), params)
+	return ts.Server.completion(context.Background(), params)
 }
 
 func (ts *testServer) hover(uri uri.URI, line uint32) (*protocol.Hover, error) {
@@ -219,7 +219,7 @@ func (ts *testServer) definition(uri uri.URI, line, character uint32) ([]protoco
 			Position:     protocol.Position{Line: line, Character: character},
 		},
 	}
-	return ts.Definition(context.Background(), params)
+	return ts.Server.definition(context.Background(), params)
 }
 
 //nolint:unparam // test helper keeps the character explicit at call sites

@@ -58,7 +58,7 @@ var directiveCompletions = []directiveDef{
 	{"year", "year ", "Directive"},
 }
 
-func (s *Server) Completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
+func (s *Server) completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return &protocol.CompletionList{Items: []protocol.CompletionItem{}}, nil

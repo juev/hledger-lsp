@@ -25,7 +25,7 @@ func TestLSPWire(t *testing.T) {
 	serverPipe, clientPipe := net.Pipe()
 	srv := server.NewServer()
 	diagnostics := make(chan protocol.PublishDiagnosticsParams, 1)
-	_, serverConn, _ := newServerConnection(ctx, serverPipe, srv)
+	_, serverConn, _, _ := newServerConnection(ctx, serverPipe, srv)
 	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{diagnostics: diagnostics}, jsonrpc2.NewStream(clientPipe))
 	t.Cleanup(func() {
 		require.NoError(t, clientConn.Close())
@@ -144,7 +144,7 @@ func TestLSPWire_DidChangeCompletesBeforeInlineCompletion(t *testing.T) {
 		didChangeDone:    make(chan struct{}),
 		inlineStarted:    make(chan struct{}),
 	}
-	_, serverConn, _ := newProtocolServerConnection(ctx, serverPipe, server)
+	_, serverConn, _, _ := newProtocolServerConnection(ctx, serverPipe, server)
 	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{}, jsonrpc2.NewStream(clientPipe))
 	t.Cleanup(func() {
 		require.NoError(t, clientConn.Close())
@@ -152,6 +152,10 @@ func TestLSPWire_DidChangeCompletesBeforeInlineCompletion(t *testing.T) {
 		<-clientConn.Done()
 		<-serverConn.Done()
 	})
+
+	_, err := clientServer.Initialize(ctx, &protocol.InitializeParams{})
+	require.NoError(t, err)
+	require.NoError(t, clientServer.Initialized(ctx, &protocol.InitializedParams{}))
 
 	documentURI := uri.URI("file:///ordering.journal")
 	require.NoError(t, clientServer.DidChange(ctx, &protocol.DidChangeTextDocumentParams{
@@ -215,6 +219,14 @@ func (s *blockingDidChangeServer) DidChange(_ context.Context, _ *protocol.DidCh
 	return nil
 }
 
+func (s *blockingDidChangeServer) Initialize(_ context.Context, _ *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	return &protocol.InitializeResult{}, nil
+}
+
+func (s *blockingDidChangeServer) Initialized(_ context.Context, _ *protocol.InitializedParams) error {
+	return nil
+}
+
 func (s *blockingDidChangeServer) InlineCompletion(_ context.Context, _ *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
 	close(s.inlineStarted)
 	return &protocol.InlineCompletionList{}, nil
@@ -238,16 +250,15 @@ func (c *testClient) PublishDiagnostics(_ context.Context, params *protocol.Publ
 	return nil
 }
 
-func TestServerDispatcher_CodeAction_DelegatesToServer(t *testing.T) {
+func TestProtocolServer_CodeAction_DelegatesToServer(t *testing.T) {
 	srv := server.NewServer()
-	dispatcher := newServerDispatcher(srv)
 
 	documentURI := uri.URI("file:///test.journal")
 	srv.StoreDocument(documentURI, `2024-01-15 lunch
     expenses:food  $10.00
     assets:cash    $-9.00`)
 
-	actions, err := dispatcher.CodeAction(context.Background(), &protocol.CodeActionParams{
+	actions, err := srv.CodeAction(context.Background(), &protocol.CodeActionParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
 		Range: protocol.Range{
 			Start: protocol.Position{Line: 0, Character: 0},
@@ -269,27 +280,25 @@ func TestServerDispatcher_CodeAction_DelegatesToServer(t *testing.T) {
 	assert.True(t, foundQuickFix, "expected quickfix action in delegated response")
 }
 
-func TestServerDispatcher_ExecuteCommand_DelegatesToServer(t *testing.T) {
+func TestProtocolServer_ExecuteCommand_DelegatesToServer(t *testing.T) {
 	srv := server.NewServer()
-	dispatcher := newServerDispatcher(srv)
 
-	_, err := dispatcher.ExecuteCommand(context.Background(), &protocol.ExecuteCommandParams{
+	_, err := srv.ExecuteCommand(context.Background(), &protocol.ExecuteCommandParams{
 		Command: "unknown.command",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command")
 }
 
-func TestServerDispatcher_Request_PayeeAccountHistoryUsesLSPAny(t *testing.T) {
+func TestProtocolServer_Request_PayeeAccountHistoryUsesLSPAny(t *testing.T) {
 	srv := server.NewServer()
-	dispatcher := newServerDispatcher(srv)
 
 	documentURI := uri.URI("file:///payee-history.journal")
 	srv.StoreDocument(documentURI, `2024-01-15 lunch
     expenses:food  $10.00
     assets:cash`)
 
-	result, err := dispatcher.Request(context.Background(), "hledger/payeeAccountHistory", protocol.LSPAny(`{"textDocument":{"uri":"file:///payee-history.journal"}}`))
+	result, err := srv.Request(context.Background(), "hledger/payeeAccountHistory", protocol.LSPAny(`{"textDocument":{"uri":"file:///payee-history.journal"}}`))
 	require.NoError(t, err)
 
 	history, ok := result.(*server.PayeeAccountHistoryResult)

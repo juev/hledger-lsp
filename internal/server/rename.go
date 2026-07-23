@@ -9,7 +9,7 @@ import (
 	"go.lsp.dev/uri"
 )
 
-func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (*protocol.Range, error) {
+func (s *Server) prepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (protocol.PrepareRenameResult, error) {
 	doc, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil

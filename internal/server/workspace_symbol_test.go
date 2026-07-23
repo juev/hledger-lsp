@@ -32,7 +32,7 @@ account assets:cash
 		Query: "expenses",
 	}
 
-	result, err := srv.WorkspaceSymbol(context.Background(), params)
+	result, err := srv.workspaceSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(result), 2)
 
@@ -61,7 +61,7 @@ commodity EUR
 		Query: "USD",
 	}
 
-	result, err := srv.WorkspaceSymbol(context.Background(), params)
+	result, err := srv.workspaceSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.NotEmpty(t, result)
 
@@ -91,7 +91,7 @@ func TestWorkspaceSymbol_Payees(t *testing.T) {
 		Query: "grocery",
 	}
 
-	result, err := srv.WorkspaceSymbol(context.Background(), params)
+	result, err := srv.workspaceSymbols(context.Background(), params)
 	require.NoError(t, err)
 	require.NotEmpty(t, result)
 
@@ -120,7 +120,7 @@ func TestWorkspaceSymbol_EmptyQuery(t *testing.T) {
 		Query: "",
 	}
 
-	result, err := srv.WorkspaceSymbol(context.Background(), params)
+	result, err := srv.workspaceSymbols(context.Background(), params)
 	require.NoError(t, err)
 	assert.NotEmpty(t, result)
 }
@@ -138,7 +138,7 @@ func TestWorkspaceSymbol_NoMatches(t *testing.T) {
 		Query: "nonexistent_symbol_xyz",
 	}
 
-	result, err := srv.WorkspaceSymbol(context.Background(), params)
+	result, err := srv.workspaceSymbols(context.Background(), params)
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -162,7 +162,7 @@ func TestWorkspaceSymbol_NonOpenIncludeTreeFile(t *testing.T) {
 		"child.journal": "account expenses:food\ncommodity EUR\n\n2024-02-01 Child Payee\n    expenses:food  10 EUR\n    assets:cash\n",
 	})
 
-	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "child"})
+	result, err := srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "child"})
 	require.NoError(t, err)
 
 	var names []string
@@ -171,12 +171,12 @@ func TestWorkspaceSymbol_NonOpenIncludeTreeFile(t *testing.T) {
 	}
 	assert.Contains(t, names, "Child Payee", "payee from non-open included file")
 
-	result, err = srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "expenses:food"})
+	result, err = srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "expenses:food"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result, "account from non-open included file")
 	assert.Equal(t, protocol.SymbolKindClass, result[0].Kind)
 
-	result, err = srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "EUR"})
+	result, err = srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "EUR"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result, "commodity from non-open included file")
 	assert.Equal(t, protocol.SymbolKindEnum, result[0].Kind)
@@ -188,7 +188,7 @@ func TestWorkspaceSymbol_DeduplicatesRepeatedIncludes(t *testing.T) {
 		"shared.journal": "account expenses:shared\n\n2024-03-01 Shared Payee\n    expenses:shared  $5\n    assets:cash\n",
 	})
 
-	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "Shared Payee"})
+	result, err := srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "Shared Payee"})
 	require.NoError(t, err)
 
 	count := 0
@@ -206,7 +206,7 @@ func TestWorkspaceSymbol_FallbackWithoutWorkspace(t *testing.T) {
 	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "expenses"})
+	result, err := srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "expenses"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result)
 	assert.Equal(t, "expenses:food", result[0].Name)
@@ -220,7 +220,7 @@ func TestWorkspaceSymbol_OpenFileOutsideTree(t *testing.T) {
 	outsideURI := uri.URI("file:///tmp/outside.journal")
 	srv.documents.Store(outsideURI, "account expenses:outside\n\n2024-01-01 Outside Payee\n    expenses:outside  $1\n    assets:x\n")
 
-	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "outside"})
+	result, err := srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "outside"})
 	require.NoError(t, err)
 
 	var names []string
@@ -237,12 +237,12 @@ func TestWorkspaceSymbol_NonOpenFile_CRLF_Unicode(t *testing.T) {
 		"child.journal": "account расходы:еда\r\n\r\n2024-01-01 Магазин\r\n    расходы:еда  100 RUB\r\n    assets:cash\r\n",
 	})
 
-	result, err := srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "расходы"})
+	result, err := srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "расходы"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result, "CJK/Cyrillic account from non-open CRLF file")
 	assert.Equal(t, "расходы:еда", result[0].Name)
 
-	result, err = srv.WorkspaceSymbol(context.Background(), &protocol.WorkspaceSymbolParams{Query: "Магазин"})
+	result, err = srv.workspaceSymbols(context.Background(), &protocol.WorkspaceSymbolParams{Query: "Магазин"})
 	require.NoError(t, err)
 	require.NotEmpty(t, result, "Cyrillic payee from non-open CRLF file")
 }

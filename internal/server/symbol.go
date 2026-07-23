@@ -12,10 +12,10 @@ import (
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
-func (s *Server) DocumentSymbol(
+func (s *Server) documentSymbols(
 	ctx context.Context,
 	params *protocol.DocumentSymbolParams,
-) ([]any, error) {
+) ([]protocol.DocumentSymbol, error) {
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
@@ -27,10 +27,10 @@ func (s *Server) DocumentSymbol(
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if journal == nil {
-		return []any{}, nil
+		return nil, nil
 	}
 
-	var symbols []any
+	symbols := make([]protocol.DocumentSymbol, 0, len(journal.Transactions)+len(journal.Directives)+len(journal.Includes))
 
 	symbols = append(symbols, groupTransactionsByMonth(journal.Transactions)...)
 
@@ -45,7 +45,7 @@ func (s *Server) DocumentSymbol(
 	return symbols, nil
 }
 
-func groupTransactionsByMonth(transactions []ast.Transaction) []any {
+func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.DocumentSymbol {
 	if len(transactions) == 0 {
 		return nil
 	}
@@ -74,7 +74,7 @@ func groupTransactionsByMonth(transactions []ast.Transaction) []any {
 
 	sort.Strings(order)
 
-	result := make([]any, 0, len(order))
+	result := make([]protocol.DocumentSymbol, 0, len(order))
 	for _, key := range order {
 		g := groups[key]
 		rng := *astRangeToProtocol(ast.Range{
@@ -154,10 +154,10 @@ func directiveToSymbol(dir ast.Directive) protocol.DocumentSymbol {
 	}
 }
 
-func rulesDocumentSymbols(doc string) []any {
+func rulesDocumentSymbols(doc string) []protocol.DocumentSymbol {
 	rf, _ := rules.Parse(doc)
 	syms := rules.Symbols(rf)
-	result := make([]any, 0, len(syms))
+	result := make([]protocol.DocumentSymbol, 0, len(syms))
 	for _, sym := range syms {
 		rng := *astRangeToProtocol(sym.Range)
 		result = append(result, protocol.DocumentSymbol{

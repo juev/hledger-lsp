@@ -38,6 +38,9 @@ type diagEntry struct {
 }
 
 type Server struct {
+	protocol.UnimplementedServer
+
+	version               string
 	client                protocol.Client
 	documents             sync.Map
 	analyzer              *analyzer.Analyzer
@@ -63,7 +66,12 @@ type Server struct {
 }
 
 func NewServer() *Server {
+	return NewServerWithVersion("dev")
+}
+
+func NewServerWithVersion(version string) *Server {
 	srv := &Server{
+		version:      version,
 		analyzer:     analyzer.New(),
 		loader:       include.NewLoader(),
 		rulesLoader:  rules.NewLoader(),
@@ -106,6 +114,10 @@ func (s *Server) StoreDocument(uri uri.URI, content string) {
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	if client, ok := protocol.ClientFromContext(ctx); ok {
+		s.SetClient(client)
+	}
+
 	if params != nil && params.Capabilities.Workspace != nil {
 		if configuration := params.Capabilities.Workspace.Configuration; configuration != nil {
 			s.supportsConfiguration = *configuration

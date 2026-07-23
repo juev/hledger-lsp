@@ -85,7 +85,7 @@ func BenchmarkCompletion_Account_Small(b *testing.B) {
 
 	ctx := context.Background()
 	for b.Loop() {
-		_, _ = srv.Completion(ctx, params)
+		_, _ = srv.completion(ctx, params)
 	}
 }
 
@@ -103,7 +103,7 @@ func BenchmarkCompletion_Account_Medium(b *testing.B) {
 
 	ctx := context.Background()
 	for b.Loop() {
-		_, _ = srv.Completion(ctx, params)
+		_, _ = srv.completion(ctx, params)
 	}
 }
 
@@ -121,7 +121,7 @@ func BenchmarkCompletion_Account_Large(b *testing.B) {
 
 	ctx := context.Background()
 	for b.Loop() {
-		_, _ = srv.Completion(ctx, params)
+		_, _ = srv.completion(ctx, params)
 	}
 }
 
@@ -139,7 +139,7 @@ func BenchmarkCompletion_Payee(b *testing.B) {
 
 	ctx := context.Background()
 	for b.Loop() {
-		_, _ = srv.Completion(ctx, params)
+		_, _ = srv.completion(ctx, params)
 	}
 }
 
@@ -161,7 +161,7 @@ func BenchmarkCompletion_Commodity(b *testing.B) {
 
 	ctx := context.Background()
 	for b.Loop() {
-		_, _ = srv.Completion(ctx, params)
+		_, _ = srv.completion(ctx, params)
 	}
 }
 

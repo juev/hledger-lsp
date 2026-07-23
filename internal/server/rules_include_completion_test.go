@@ -41,7 +41,7 @@ func TestCompletion_RulesIncludedFields(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -89,7 +89,7 @@ func TestCompletion_RulesIncludedFields_InvalidationAfterDidChange(t *testing.T)
 	}
 
 	// First completion populates the loader cache with the v1 common.rules.
-	first, err := srv.Completion(context.Background(), params)
+	first, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	firstLabels := extractLabels(first.Items)
 	assert.Contains(t, firstLabels, "%date", "first completion should see %%date from v1")
@@ -108,7 +108,7 @@ func TestCompletion_RulesIncludedFields_InvalidationAfterDidChange(t *testing.T)
 		},
 	}))
 
-	second, err := srv.Completion(context.Background(), params)
+	second, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	secondLabels := extractLabels(second.Items)
 	assert.Contains(t, secondLabels, "%payee",
@@ -144,7 +144,7 @@ func TestCompletion_RulesIncludedFields_EditorContentPreferred(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
