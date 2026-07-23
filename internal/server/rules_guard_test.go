@@ -7,13 +7,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 // journalLikeContent mimics a hledger journal; handlers must not process it for .rules files.
 const journalLikeContent = "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash"
 
 // rulesFileURI is a .rules extension URI that should trigger early-return guards.
-const rulesFileURI = protocol.DocumentURI("file:///bank.rules")
+const rulesFileURI = uri.URI("file:///bank.rules")
 
 // hoverPos is over "expenses:food" in journalLikeContent (0-indexed line=1, char=4).
 var hoverPos = protocol.Position{Line: 1, Character: 4}

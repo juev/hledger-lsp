@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/include"
 )
@@ -30,7 +31,7 @@ func TestHover_ChildDecimalMark_DoesNotAffectParent(t *testing.T) {
 	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0644))
 
 	ts := newTestServer()
-	rootURI := protocol.DocumentURI(fmt.Sprintf("file://%s", rootPath))
+	rootURI := uri.URI(fmt.Sprintf("file://%s", rootPath))
 	_, err := ts.openAndWait(rootURI, rootContent)
 	require.NoError(t, err)
 
@@ -44,7 +45,7 @@ func TestHover_ChildDecimalMark_DoesNotAffectParent(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	content := hover.Contents.Value
+	content := hoverContent(hover)
 	// Root must not inherit child's comma decimal mark
 	assert.NotContains(t, content, "50,00", "root hover must not use child's comma decimal mark")
 }
@@ -63,7 +64,7 @@ func TestReferences_RepeatedInclude_Dedup(t *testing.T) {
 	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0644))
 
 	ts := newTestServer()
-	rootURI := protocol.DocumentURI(fmt.Sprintf("file://%s", rootPath))
+	rootURI := uri.URI(fmt.Sprintf("file://%s", rootPath))
 	_, err := ts.openAndWait(rootURI, rootContent)
 	require.NoError(t, err)
 
@@ -72,7 +73,7 @@ func TestReferences_RepeatedInclude_Dedup(t *testing.T) {
 	require.NoError(t, err)
 
 	// Count references in child.journal — must be exactly 1 (deduped)
-	childURI := protocol.DocumentURI(fmt.Sprintf("file://%s", childPath))
+	childURI := uri.URI(fmt.Sprintf("file://%s", childPath))
 	childRefCount := 0
 	for _, ref := range refs {
 		if ref.URI == childURI {
@@ -98,7 +99,7 @@ func TestRename_RepeatedInclude_NoDuplicateEdits(t *testing.T) {
 	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0644))
 
 	ts := newTestServer()
-	rootURI := protocol.DocumentURI(fmt.Sprintf("file://%s", rootPath))
+	rootURI := uri.URI(fmt.Sprintf("file://%s", rootPath))
 	_, err := ts.openAndWait(rootURI, rootContent)
 	require.NoError(t, err)
 
@@ -112,7 +113,7 @@ func TestRename_RepeatedInclude_NoDuplicateEdits(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	childURI := protocol.DocumentURI(fmt.Sprintf("file://%s", childPath))
+	childURI := uri.URI(fmt.Sprintf("file://%s", childPath))
 	childEdits := result.Changes[childURI]
 	// child.journal has one posting with expenses:child — must be exactly 1 edit
 	assert.Len(t, childEdits, 1,
@@ -139,7 +140,7 @@ func TestResolvedWithoutTransaction_PreservesOccurrences(t *testing.T) {
 	require.NotNil(t, resolved)
 	require.NotEmpty(t, resolved.Occurrences, "loader must populate occurrences")
 
-	rootURI := protocol.DocumentURI(fmt.Sprintf("file://%s", rootPath))
+	rootURI := uri.URI(fmt.Sprintf("file://%s", rootPath))
 	// Cursor inside the root transaction (line 5)
 	filtered := resolvedWithoutTransaction(resolved, 5, rootURI)
 

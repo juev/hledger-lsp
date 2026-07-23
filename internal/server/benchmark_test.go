@@ -73,7 +73,7 @@ var (
 
 func BenchmarkCompletion_Account_Small(b *testing.B) {
 	srv := NewServer()
-	docURI := protocol.DocumentURI("file:///bench.journal")
+	docURI := uri.URI("file:///bench.journal")
 	srv.documents.Store(docURI, smallContent)
 
 	params := &protocol.CompletionParams{
@@ -91,7 +91,7 @@ func BenchmarkCompletion_Account_Small(b *testing.B) {
 
 func BenchmarkCompletion_Account_Medium(b *testing.B) {
 	srv := NewServer()
-	docURI := protocol.DocumentURI("file:///bench.journal")
+	docURI := uri.URI("file:///bench.journal")
 	srv.documents.Store(docURI, mediumContent)
 
 	params := &protocol.CompletionParams{
@@ -109,7 +109,7 @@ func BenchmarkCompletion_Account_Medium(b *testing.B) {
 
 func BenchmarkCompletion_Account_Large(b *testing.B) {
 	srv := NewServer()
-	docURI := protocol.DocumentURI("file:///bench.journal")
+	docURI := uri.URI("file:///bench.journal")
 	srv.documents.Store(docURI, largeContent)
 
 	params := &protocol.CompletionParams{
@@ -127,7 +127,7 @@ func BenchmarkCompletion_Account_Large(b *testing.B) {
 
 func BenchmarkCompletion_Payee(b *testing.B) {
 	srv := NewServer()
-	docURI := protocol.DocumentURI("file:///bench.journal")
+	docURI := uri.URI("file:///bench.journal")
 	srv.documents.Store(docURI, largeContent)
 
 	params := &protocol.CompletionParams{
@@ -145,7 +145,7 @@ func BenchmarkCompletion_Payee(b *testing.B) {
 
 func BenchmarkCompletion_Commodity(b *testing.B) {
 	srv := NewServer()
-	docURI := protocol.DocumentURI("file:///bench.journal")
+	docURI := uri.URI("file:///bench.journal")
 	srv.documents.Store(docURI, largeContent)
 
 	params := &protocol.CompletionParams{
@@ -153,9 +153,9 @@ func BenchmarkCompletion_Commodity(b *testing.B) {
 			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
 			Position:     protocol.Position{Line: 1, Character: 35},
 		},
-		Context: &protocol.CompletionContext{
+		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-			TriggerCharacter: "@",
+			TriggerCharacter: stringPtr("@"),
 		},
 	}
 
@@ -205,36 +205,9 @@ func BenchmarkApplyChange_Large(b *testing.B) {
 	}
 }
 
-type noopClient struct{}
+type noopClient struct{ protocol.UnimplementedClient }
 
-func (noopClient) Progress(context.Context, *protocol.ProgressParams) error { return nil }
-func (noopClient) WorkDoneProgressCreate(context.Context, *protocol.WorkDoneProgressCreateParams) error {
-	return nil
-}
-func (noopClient) LogMessage(context.Context, *protocol.LogMessageParams) error { return nil }
-func (noopClient) PublishDiagnostics(context.Context, *protocol.PublishDiagnosticsParams) error {
-	return nil
-}
-func (noopClient) ShowMessage(context.Context, *protocol.ShowMessageParams) error { return nil }
-func (noopClient) ShowMessageRequest(context.Context, *protocol.ShowMessageRequestParams) (*protocol.MessageActionItem, error) {
-	return nil, nil
-}
-func (noopClient) Telemetry(context.Context, interface{}) error                           { return nil }
-func (noopClient) RegisterCapability(context.Context, *protocol.RegistrationParams) error { return nil }
-func (noopClient) UnregisterCapability(context.Context, *protocol.UnregistrationParams) error {
-	return nil
-}
-func (noopClient) ApplyEdit(context.Context, *protocol.ApplyWorkspaceEditParams) (bool, error) {
-	return false, nil
-}
-func (noopClient) Configuration(context.Context, *protocol.ConfigurationParams) ([]interface{}, error) {
-	return nil, nil
-}
-func (noopClient) WorkspaceFolders(context.Context) ([]protocol.WorkspaceFolder, error) {
-	return nil, nil
-}
-
-func setupBenchServer(b *testing.B, content string, withClient bool) (*Server, protocol.DocumentURI) {
+func setupBenchServer(b *testing.B, content string, withClient bool) (*Server, uri.URI) {
 	b.Helper()
 	tmpDir := b.TempDir()
 	mainPath := filepath.Join(tmpDir, "bench.journal")
@@ -262,7 +235,7 @@ func BenchmarkDidChange_Incremental_Small(b *testing.B) {
 	srv, docURI := setupBenchServer(b, smallContent, false)
 	ctx := context.Background()
 
-	change := protocol.TextDocumentContentChangeEvent{
+	change := &protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: 1, Character: 4},
 			End:   protocol.Position{Line: 1, Character: 10},
@@ -288,7 +261,7 @@ func BenchmarkDidChange_Incremental_Medium(b *testing.B) {
 	srv, docURI := setupBenchServer(b, mediumContent, false)
 	ctx := context.Background()
 
-	change := protocol.TextDocumentContentChangeEvent{
+	change := &protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: 50, Character: 4},
 			End:   protocol.Position{Line: 50, Character: 10},
@@ -314,7 +287,7 @@ func BenchmarkDidChange_Incremental_Large(b *testing.B) {
 	srv, docURI := setupBenchServer(b, largeContent, false)
 	ctx := context.Background()
 
-	change := protocol.TextDocumentContentChangeEvent{
+	change := &protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: 500, Character: 4},
 			End:   protocol.Position{Line: 500, Character: 10},

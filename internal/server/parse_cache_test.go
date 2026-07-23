@@ -7,14 +7,14 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 const sampleJournal = "2024-01-15 * store\n    expenses:food  $50\n    assets:cash  $-50\n"
 
 func TestCachedParse_ReusesJournalForSameContent(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 
 	first := srv.cachedParse(uri, sampleJournal)
 	second := srv.cachedParse(uri, sampleJournal)
@@ -26,7 +26,7 @@ func TestCachedParse_ReusesJournalForSameContent(t *testing.T) {
 
 func TestCachedParse_RebuildsOnContentChange(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 
 	first := srv.cachedParse(uri, sampleJournal)
 	changed := srv.cachedParse(uri, "2024-01-16 * other\n    expenses:y  $2\n    assets:cash  $-2\n")
@@ -36,7 +36,7 @@ func TestCachedParse_RebuildsOnContentChange(t *testing.T) {
 
 func TestCachedParse_RebuildsAfterInvalidate(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 
 	first := srv.cachedParse(uri, sampleJournal)
 	srv.invalidateParseCache(uri)
@@ -47,7 +47,7 @@ func TestCachedParse_RebuildsAfterInvalidate(t *testing.T) {
 
 func TestCachedParse_ConcurrentSafe(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 
 	var wg sync.WaitGroup
 	for i := 0; i < 32; i++ {
@@ -64,7 +64,7 @@ func TestCachedParse_ConcurrentSafe(t *testing.T) {
 
 func TestCachedBalances_ComputedOnceAndCorrect(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///a.journal")
+	uri := uri.URI("file:///a.journal")
 
 	balances := srv.cachedBalances(uri, sampleJournal)
 	require.NotNil(t, balances)

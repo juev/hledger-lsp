@@ -8,9 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
-func (ts *testServer) onTypeFormatting(uri protocol.DocumentURI, line uint32, ch string) ([]protocol.TextEdit, error) {
+func (ts *testServer) onTypeFormatting(uri uri.URI, line uint32, ch string) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentOnTypeFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: line, Character: 0},
@@ -21,7 +22,7 @@ func (ts *testServer) onTypeFormatting(uri protocol.DocumentURI, line uint32, ch
 
 func TestOnTypeFormatting_AfterTransactionHeader(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n"
 
 	ts.StoreDocument(uri, content)
@@ -36,7 +37,7 @@ func TestOnTypeFormatting_AfterTransactionHeader(t *testing.T) {
 
 func TestOnTypeFormatting_AfterPosting(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  $50.00\n"
 
 	ts.StoreDocument(uri, content)
@@ -54,7 +55,7 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingRightMode(t *testing.T) {
 	settings.Formatting.AmountAlignmentColumn = 40
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
 
 	ts.StoreDocument(uri, content)
@@ -77,7 +78,7 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingRightModeZeroNoCommodity(t 
 	settings.Formatting.AmountAlignmentColumn = 40
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2026-01-01 * Testpayee\n" +
 		"    Asset:Spending  -1,000. USD\n" +
 		"    Expenses:Services  1,000. USD\n" +
@@ -103,7 +104,7 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingDecimalMode(t *testing.T) {
 	settings.Formatting.AmountAlignmentColumn = 30
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
 
 	ts.StoreDocument(uri, content)
@@ -125,7 +126,7 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingLeftMode(t *testing.T) {
 	settings.Formatting.AmountAlignmentColumn = 30
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  12.00 USD\n"
 
 	ts.StoreDocument(uri, content)
@@ -143,7 +144,7 @@ func TestOnTypeFormatting_EnterFormatsPreviousPostingLeftMode(t *testing.T) {
 
 func TestOnTypeFormatting_AfterEmptyLine(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  $50.00\n    assets:cash\n\n"
 
 	ts.StoreDocument(uri, content)
@@ -155,7 +156,7 @@ func TestOnTypeFormatting_AfterEmptyLine(t *testing.T) {
 
 func TestOnTypeFormatting_AfterWhitespaceOnlyLine(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food  $50.00\n    assets:cash\n    \n"
 
 	ts.StoreDocument(uri, content)
@@ -167,7 +168,7 @@ func TestOnTypeFormatting_AfterWhitespaceOnlyLine(t *testing.T) {
 
 func TestOnTypeFormatting_FirstLine(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "\n2024-01-15 test"
 
 	ts.StoreDocument(uri, content)
@@ -179,7 +180,7 @@ func TestOnTypeFormatting_FirstLine(t *testing.T) {
 
 func TestOnTypeFormatting_AfterDirective(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "account expenses:food\n"
 
 	ts.StoreDocument(uri, content)
@@ -206,7 +207,7 @@ func TestOnTypeFormatting_CustomIndentSize(t *testing.T) {
 			settings.Formatting.IndentSize = tt.indentSize
 			ts.setSettings(settings)
 
-			uri := protocol.DocumentURI("file:///test.journal")
+			uri := uri.URI("file:///test.journal")
 			content := "2024-01-15 grocery store\n"
 
 			ts.StoreDocument(uri, content)
@@ -221,7 +222,7 @@ func TestOnTypeFormatting_CustomIndentSize(t *testing.T) {
 
 func TestOnTypeFormatting_NonNewlineTrigger(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n"
 
 	ts.StoreDocument(uri, content)
@@ -233,7 +234,7 @@ func TestOnTypeFormatting_NonNewlineTrigger(t *testing.T) {
 
 func TestOnTypeFormatting_DocumentNotFound(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	edits, err := ts.onTypeFormatting(uri, 1, "\n")
 	require.NoError(t, err)
@@ -242,7 +243,7 @@ func TestOnTypeFormatting_DocumentNotFound(t *testing.T) {
 
 func TestOnTypeFormatting_ReplacesEditorAutoIndent(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n        "
 
 	ts.StoreDocument(uri, content)
@@ -257,7 +258,7 @@ func TestOnTypeFormatting_ReplacesEditorAutoIndent(t *testing.T) {
 
 func TestOnTypeFormatting_SkipsNoopEdit(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    "
 
 	ts.StoreDocument(uri, content)
@@ -269,7 +270,7 @@ func TestOnTypeFormatting_SkipsNoopEdit(t *testing.T) {
 
 func TestOnTypeFormatting_SkipsNoopEdit_EmptyIndent(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "; this is a comment\n"
 
 	ts.StoreDocument(uri, content)
@@ -281,7 +282,7 @@ func TestOnTypeFormatting_SkipsNoopEdit_EmptyIndent(t *testing.T) {
 
 func TestOnTypeFormatting_AfterComment(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "; this is a comment\n"
 
 	ts.StoreDocument(uri, content)
@@ -293,7 +294,7 @@ func TestOnTypeFormatting_AfterComment(t *testing.T) {
 
 func TestOnTypeFormatting_AfterPeriodicTransaction(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "~ monthly\n"
 
 	ts.StoreDocument(uri, content)
@@ -306,7 +307,7 @@ func TestOnTypeFormatting_AfterPeriodicTransaction(t *testing.T) {
 
 func TestOnTypeFormatting_AfterAutoPostingRule(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "= expenses\n"
 
 	ts.StoreDocument(uri, content)
@@ -319,7 +320,7 @@ func TestOnTypeFormatting_AfterAutoPostingRule(t *testing.T) {
 
 func TestOnTypeFormatting_AfterIncludeDirective(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "include foo.journal\n"
 
 	ts.StoreDocument(uri, content)
@@ -331,7 +332,7 @@ func TestOnTypeFormatting_AfterIncludeDirective(t *testing.T) {
 
 func TestOnTypeFormatting_AfterCommodityDirective(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "commodity EUR\n"
 
 	ts.StoreDocument(uri, content)
@@ -341,7 +342,7 @@ func TestOnTypeFormatting_AfterCommodityDirective(t *testing.T) {
 	assert.Nil(t, edits)
 }
 
-func (ts *testServer) onTypeFormattingTab(uri protocol.DocumentURI, line, character uint32) ([]protocol.TextEdit, error) {
+func (ts *testServer) onTypeFormattingTab(uri uri.URI, line, character uint32) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentOnTypeFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Position:     protocol.Position{Line: line, Character: character},
@@ -352,7 +353,7 @@ func (ts *testServer) onTypeFormattingTab(uri protocol.DocumentURI, line, charac
 
 func TestOnTypeFormatting_Tab_OnPostingLine(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -370,7 +371,7 @@ func TestOnTypeFormatting_Tab_OnPostingLine(t *testing.T) {
 
 func TestOnTypeFormatting_Tab_NotOnPostingLine(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\t\n    expenses:food  $50.00\n"
 
 	ts.StoreDocument(uri, content)
@@ -382,7 +383,7 @@ func TestOnTypeFormatting_Tab_NotOnPostingLine(t *testing.T) {
 
 func TestOnTypeFormatting_Tab_PastAlignmentColumn(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food                                      \t\n"
 
 	ts.StoreDocument(uri, content)
@@ -398,7 +399,7 @@ func TestOnTypeFormatting_Tab_UsesGlobalAlignment(t *testing.T) {
 	settings.Formatting.MinAlignmentColumn = 0
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food:groceries:organic\t\n    assets:cash\n\n2024-01-16 restaurant\n    expenses:food\t\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -423,7 +424,7 @@ func TestOnTypeFormatting_Tab_UsesFixedLeftAlignmentColumn(t *testing.T) {
 	settings.Formatting.AmountAlignmentColumn = 30
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -446,7 +447,7 @@ func TestOnTypeFormatting_Tab_EmojiAccountAlignment(t *testing.T) {
 	settings.Formatting.MinAlignmentColumn = 30 // explicit floor so alignCol is high
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	// Posting line:    "    🍕:food"
 	// Runes:            4 + 1 + 1 + 4 = 10
 	// UTF-16 units:     4 + 2 + 1 + 4 = 11 (🍕 = surrogate pair)
@@ -473,7 +474,7 @@ func TestOnTypeFormatting_Tab_RespectsExistingAlignment(t *testing.T) {
 	ts := newTestServer()
 	// Default settings (MinAlignmentColumn=0, no setSettings).
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	lineAt33 := "    expenses:food" + strings.Repeat(" ", 16) + "$50.00"
 	lineAt40A := "    assets:cash" + strings.Repeat(" ", 25) + "$-50.00"
 	lineAt40B := "    liabilities:card" + strings.Repeat(" ", 20) + "$-5.00"
@@ -505,7 +506,7 @@ func TestOnTypeFormatting_Tab_FallbackToFormulaWithoutAmounts(t *testing.T) {
 	ts := newTestServer()
 	// Intentionally do NOT call setSettings — verify behavior with defaults.
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	// Longest account is "expenses:food:coffee" (20 chars).
 	// Natural alignment = indent(4) + maxAccount(20) + minSpaces(2) = 26.
 	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n\n2024-01-16 coffee shop\n    expenses:food:coffee\t\n    assets:cash\n"
@@ -528,7 +529,7 @@ func TestOnTypeFormatting_Tab_RespectsMinAlignment(t *testing.T) {
 	settings.Formatting.MinAlignmentColumn = 50
 	ts.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -543,7 +544,7 @@ func TestOnTypeFormatting_Tab_RespectsMinAlignment(t *testing.T) {
 
 func TestOnTypeFormatting_Tab_NoTransactions(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "    expenses:food\t\n"
 
 	ts.StoreDocument(uri, content)
@@ -555,7 +556,7 @@ func TestOnTypeFormatting_Tab_NoTransactions(t *testing.T) {
 
 func TestOnTypeFormatting_Tab_DocumentNotFound(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	edits, err := ts.onTypeFormattingTab(uri, 1, 10)
 	require.NoError(t, err)
@@ -564,7 +565,7 @@ func TestOnTypeFormatting_Tab_DocumentNotFound(t *testing.T) {
 
 func TestOnTypeFormatting_NewlineBeyondDocumentEnd(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n"
 
 	ts.StoreDocument(uri, content)
@@ -576,7 +577,7 @@ func TestOnTypeFormatting_NewlineBeyondDocumentEnd(t *testing.T) {
 
 func TestOnTypeFormatting_Tab_BeyondDocumentEnd(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery store\n    expenses:food\n"
 
 	ts.StoreDocument(uri, content)

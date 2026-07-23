@@ -169,13 +169,13 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 	}
 	result, err := s.client.Configuration(ctx, &protocol.ConfigurationParams{
 		Items: []protocol.ConfigurationItem{
-			{Section: "hledger"},
+			{Section: stringPtr("hledger")},
 		},
 	})
 	if err != nil || len(result) == 0 {
 		return
 	}
-	settings := parseSettingsFromRaw(s.getSettings(), result[0])
+	settings := parseSettingsFromLSPAny(s.getSettings(), result[0])
 	s.setSettings(settings)
 }
 
@@ -197,6 +197,17 @@ func parseSettingsFromRaw(base serverSettings, raw interface{}) serverSettings {
 	}
 	settings = applySettingsMap(settings, rawMap)
 	return normalizeServerSettings(settings)
+}
+
+func parseSettingsFromLSPAny(base serverSettings, raw protocol.LSPAny) serverSettings {
+	if len(raw) == 0 {
+		return normalizeServerSettings(base)
+	}
+	var decoded map[string]interface{}
+	if err := protocol.Unmarshal(raw, &decoded); err != nil {
+		return normalizeServerSettings(base)
+	}
+	return parseSettingsFromRaw(base, decoded)
 }
 
 func applySettingsMap(settings serverSettings, raw map[string]interface{}) serverSettings {

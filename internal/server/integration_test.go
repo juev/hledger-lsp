@@ -8,13 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func TestIntegration_OpenEditDiagnostics(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	validContent := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -40,7 +41,7 @@ func TestIntegration_OpenEditDiagnostics(t *testing.T) {
 
 func TestIntegration_IncrementalEditing(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery
     expenses:food  $50.00
@@ -50,7 +51,7 @@ func TestIntegration_IncrementalEditing(t *testing.T) {
 	require.NoError(t, err)
 
 	changes := []protocol.TextDocumentContentChangeEvent{
-		{
+		&protocol.TextDocumentContentChangePartial{
 			Range: protocol.Range{
 				Start: protocol.Position{Line: 0, Character: 11},
 				End:   protocol.Position{Line: 0, Character: 18},
@@ -70,7 +71,7 @@ func TestIntegration_IncrementalEditing(t *testing.T) {
 
 func TestIntegration_CompletionAfterEditing(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -93,7 +94,7 @@ func TestIntegration_CompletionAfterEditing(t *testing.T) {
 
 func TestIntegration_CompletionContextSwitch(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -114,7 +115,7 @@ func TestIntegration_CompletionContextSwitch(t *testing.T) {
 
 func TestIntegration_HoverShowsBalance(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -131,14 +132,14 @@ func TestIntegration_HoverShowsBalance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	hoverContent := hover.Contents.Value
-	assert.Contains(t, hoverContent, "expenses:food")
-	assert.Contains(t, hoverContent, "75")
+	contents := hoverContent(hover)
+	assert.Contains(t, contents, "expenses:food")
+	assert.Contains(t, contents, "75")
 }
 
 func TestIntegration_HoverUpdatesAfterEdit(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -150,8 +151,8 @@ func TestIntegration_HoverUpdatesAfterEdit(t *testing.T) {
 	hover, err := ts.hover(uri, 1)
 	require.NoError(t, err)
 	require.NotNil(t, hover)
-	hoverContent := hover.Contents.Value
-	assert.Contains(t, hoverContent, "50")
+	contents := hoverContent(hover)
+	assert.Contains(t, contents, "50")
 
 	updatedContent := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -167,13 +168,13 @@ func TestIntegration_HoverUpdatesAfterEdit(t *testing.T) {
 	hover, err = ts.hover(uri, 1)
 	require.NoError(t, err)
 	require.NotNil(t, hover)
-	hoverContent = hover.Contents.Value
-	assert.Contains(t, hoverContent, "80")
+	contents = hoverContent(hover)
+	assert.Contains(t, contents, "80")
 }
 
 func TestIntegration_FormatPreservesSemantics(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -197,7 +198,7 @@ func TestIntegration_FormatPreservesSemantics(t *testing.T) {
 
 func TestIntegration_FormatDocumentKeepsBalanceAssertionOnlyIndentation(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2026-05-02 balance check
     资产:微信wx  100 CNY = 100 CNY
@@ -229,7 +230,7 @@ func TestIntegration_FormatDocumentKeepsBalanceAssertionOnlyIndentation(t *testi
 
 func TestIntegration_ErrorRecovery(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 valid transaction
     expenses:food  $50.00
@@ -259,7 +260,7 @@ invalid line here
 
 func TestIntegration_MultipleErrorTypes(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `account expenses:declared
 account assets:declared
@@ -292,7 +293,7 @@ account assets:declared
 
 func TestIntegration_DocumentSymbols(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `account expenses:food
 
@@ -317,7 +318,7 @@ func TestIntegration_DocumentSymbols(t *testing.T) {
 
 func TestIntegration_SemanticTokens(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content := `2024-01-15 grocery store
     expenses:food  $50.00
@@ -397,7 +398,7 @@ func applyTextEdits(content string, edits []protocol.TextEdit) string {
 // which distinguishes our LSP from the hledger CLI's own check output.
 func TestIntegration_QuotedCommodityDiagnostics_Issue199(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///issue199.journal")
+	uri := uri.URI("file:///issue199.journal")
 
 	content := `account monies
 account assets:broker:TEST.A
@@ -420,17 +421,16 @@ commodity "TEST.A"
 
 	var testBDiag *protocol.Diagnostic
 	for i, d := range diagnostics {
-		assert.NotContains(t, d.Message, "TEST.A",
+		assert.NotContains(t, tooltipString(d.Message), "TEST.A",
 			"declared quoted commodity TEST.A must not be flagged")
-		if strings.Contains(d.Message, "TEST B") {
+		if strings.Contains(tooltipString(d.Message), "TEST B") {
 			testBDiag = &diagnostics[i]
 		}
 	}
 
 	require.NotNil(t, testBDiag, "undeclared quoted commodity TEST B must be reported")
-	assert.Equal(t, "commodity 'TEST B' has no directive", testBDiag.Message)
-	assert.Equal(t, "hledger-lsp", testBDiag.Source,
+	assert.Equal(t, "commodity 'TEST B' has no directive", tooltipString(testBDiag.Message))
+	assert.Equal(t, "hledger-lsp", optionalString(testBDiag.Source),
 		"diagnostic must originate from the LSP, not the hledger CLI")
-	code, _ := testBDiag.Code.(string)
-	assert.Equal(t, "UNDECLARED_COMMODITY", code)
+	assert.Equal(t, "UNDECLARED_COMMODITY", diagnosticCodeString(testBDiag.Code))
 }

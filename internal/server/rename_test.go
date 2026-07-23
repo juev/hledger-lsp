@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestPrepareRename_Account(t *testing.T) {
@@ -15,7 +16,7 @@ func TestPrepareRename_Account(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.PrepareRenameParams{
@@ -39,7 +40,7 @@ func TestPrepareRename_InvalidPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.PrepareRenameParams{
@@ -63,7 +64,7 @@ func TestRename_Account(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.RenameParams{
@@ -95,7 +96,7 @@ func TestRename_Commodity(t *testing.T) {
     expenses:rent  $100
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.RenameParams{
@@ -124,7 +125,7 @@ func TestRename_InvalidPosition(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.RenameParams{
@@ -149,7 +150,7 @@ func TestRename_Payee(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.RenameParams{
@@ -180,7 +181,7 @@ func TestRename_IncludesDeclaration(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.RenameParams{
@@ -208,7 +209,7 @@ func TestRename_InvalidNewName(t *testing.T) {
 	content := `2024-01-15 test
     expenses:food  $50
     assets:cash`
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	tests := []struct {

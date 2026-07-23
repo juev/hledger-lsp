@@ -12,14 +12,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func initWorkspaceTestServer(t *testing.T, tmpDir string) *testServer {
 	t.Helper()
 	ts := newTestServer()
 	_, err := ts.Initialize(context.Background(), &protocol.InitializeParams{
-		WorkspaceFolders: []protocol.WorkspaceFolder{
-			{URI: fmt.Sprintf("file://%s", tmpDir), Name: "test"},
+		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
+			WorkspaceFolders: protocol.NewNullable([]protocol.WorkspaceFolder{{URI: uri.URI(fmt.Sprintf("file://%s", tmpDir)), Name: "test"}}),
 		},
 	})
 	require.NoError(t, err)
@@ -48,14 +49,14 @@ func TestPublishDiagnostics_RootGetsTreeLoadErrors(t *testing.T) {
 
 	mainContent, err := os.ReadFile(mainPath)
 	require.NoError(t, err)
-	mainURI := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	mainURI := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	diags, err := ts.openAndWait(mainURI, string(mainContent))
 	require.NoError(t, err)
 
 	foundMissing := false
 	for _, d := range diags {
-		if strings.Contains(d.Message, "cannot read included file") || strings.Contains(d.Message, "missing.journal") {
+		if strings.Contains(tooltipString(d.Message), "cannot read included file") || strings.Contains(tooltipString(d.Message), "missing.journal") {
 			foundMissing = true
 			break
 		}
@@ -70,7 +71,7 @@ func TestPublishDiagnostics_DidOpenUsesBufferForRootLoadErrors(t *testing.T) {
 	require.NoError(t, os.WriteFile(mainPath, []byte(diskContent), 0o644))
 
 	ts := initWorkspaceTestServer(t, tmpDir)
-	mainURI := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	mainURI := uri.URI(fmt.Sprintf("file://%s", mainPath))
 	bufferContent := "include missing.journal\n\n" + diskContent
 
 	diags, err := ts.openAndWait(mainURI, bufferContent)
@@ -78,7 +79,7 @@ func TestPublishDiagnostics_DidOpenUsesBufferForRootLoadErrors(t *testing.T) {
 
 	foundMissing := false
 	for _, d := range diags {
-		if strings.Contains(d.Message, "missing.journal") {
+		if strings.Contains(tooltipString(d.Message), "missing.journal") {
 			foundMissing = true
 			break
 		}
@@ -97,8 +98,8 @@ func TestPublishDiagnostics_RootFallsBackAfterIncludedFileDidOpen(t *testing.T) 
 
 	ts := initWorkspaceTestServer(t, tmpDir)
 	ts.diagDebounce = time.Hour
-	mainURI := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
-	childURI := protocol.DocumentURI(fmt.Sprintf("file://%s", childPath))
+	mainURI := uri.URI(fmt.Sprintf("file://%s", mainPath))
+	childURI := uri.URI(fmt.Sprintf("file://%s", childPath))
 	bufferContent := "include missing.journal\n" + diskContent
 
 	require.NoError(t, ts.openDocument(mainURI, bufferContent))
@@ -113,7 +114,7 @@ func TestPublishDiagnostics_RootFallsBackAfterIncludedFileDidOpen(t *testing.T) 
 
 	foundMissing := false
 	for _, diagnostic := range diagnostics.Diagnostics {
-		if strings.Contains(diagnostic.Message, "missing.journal") {
+		if strings.Contains(tooltipString(diagnostic.Message), "missing.journal") {
 			foundMissing = true
 			break
 		}
@@ -131,7 +132,7 @@ func TestPublishDiagnostics_NonRootDoesNotInheritTreeErrors(t *testing.T) {
 
 	childContent, err := os.ReadFile(childPath)
 	require.NoError(t, err)
-	childURI := protocol.DocumentURI(fmt.Sprintf("file://%s", childPath))
+	childURI := uri.URI(fmt.Sprintf("file://%s", childPath))
 
 	diags, err := ts.openAndWait(childURI, string(childContent))
 	require.NoError(t, err)

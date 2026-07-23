@@ -2,12 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestCompletionResolve_Account(t *testing.T) {
@@ -22,7 +22,7 @@ func TestCompletionResolve_Account(t *testing.T) {
     expenses:food  $30
     assets:cash  $-30`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	data := completionResolveData{
@@ -30,8 +30,7 @@ func TestCompletionResolve_Account(t *testing.T) {
 		Label:  "expenses:food",
 		DocURI: uri,
 	}
-	dataJSON, _ := json.Marshal(data)
-	rawData := json.RawMessage(dataJSON)
+	rawData := mustMarshalLSPAny(t, data)
 
 	item := &protocol.CompletionItem{
 		Label: "expenses:food",
@@ -53,7 +52,7 @@ func TestCompletionResolve_Payee(t *testing.T) {
     expenses:food  $30
     assets:cash  $-30`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	data := completionResolveData{
@@ -61,8 +60,7 @@ func TestCompletionResolve_Payee(t *testing.T) {
 		Label:  "grocery",
 		DocURI: uri,
 	}
-	dataJSON, _ := json.Marshal(data)
-	rawData := json.RawMessage(dataJSON)
+	rawData := mustMarshalLSPAny(t, data)
 
 	item := &protocol.CompletionItem{
 		Label: "grocery",
@@ -80,7 +78,7 @@ func TestCompletionResolve_Commodity(t *testing.T) {
     expenses:food  $50
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	data := completionResolveData{
@@ -88,8 +86,7 @@ func TestCompletionResolve_Commodity(t *testing.T) {
 		Label:  "$",
 		DocURI: uri,
 	}
-	dataJSON, _ := json.Marshal(data)
-	rawData := json.RawMessage(dataJSON)
+	rawData := mustMarshalLSPAny(t, data)
 
 	item := &protocol.CompletionItem{
 		Label: "$",
@@ -107,7 +104,7 @@ func TestCompletionResolve_Tag(t *testing.T) {
     expenses:food  $50  ; project:home
     assets:cash  $-50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	data := completionResolveData{
@@ -115,8 +112,7 @@ func TestCompletionResolve_Tag(t *testing.T) {
 		Label:  "project",
 		DocURI: uri,
 	}
-	dataJSON, _ := json.Marshal(data)
-	rawData := json.RawMessage(dataJSON)
+	rawData := mustMarshalLSPAny(t, data)
 
 	item := &protocol.CompletionItem{
 		Label: "project",
@@ -143,7 +139,7 @@ func TestCompletionResolve_NilData(t *testing.T) {
 func TestCompletionResolve_InvalidData(t *testing.T) {
 	srv := NewServer()
 
-	rawData := json.RawMessage(`{"invalid": true}`)
+	rawData := protocol.LSPAny(`{"invalid": true}`)
 	item := &protocol.CompletionItem{
 		Label: "test",
 		Data:  rawData,

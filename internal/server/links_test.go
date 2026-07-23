@@ -19,7 +19,7 @@ include data/transactions.journal
     expenses:food  $50
     assets:cash`
 
-	docURI := protocol.DocumentURI("file:///home/user/main.journal")
+	docURI := uri.URI("file:///home/user/main.journal")
 	srv.documents.Store(docURI, content)
 
 	params := &protocol.DocumentLinkParams{
@@ -31,10 +31,12 @@ include data/transactions.journal
 	require.Len(t, result, 2)
 
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
-	assert.Equal(t, string(uri.File("/home/user/accounts.journal")), string(result[0].Target))
+	require.NotNil(t, result[0].Target)
+	assert.Equal(t, uri.File("/home/user/accounts.journal"), *result[0].Target)
 
 	assert.Equal(t, uint32(1), result[1].Range.Start.Line)
-	assert.Equal(t, string(uri.File("/home/user/data/transactions.journal")), string(result[1].Target))
+	require.NotNil(t, result[1].Target)
+	assert.Equal(t, uri.File("/home/user/data/transactions.journal"), *result[1].Target)
 }
 
 func TestDocumentLink_NoIncludes(t *testing.T) {
@@ -43,7 +45,7 @@ func TestDocumentLink_NoIncludes(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.DocumentLinkParams{
@@ -57,7 +59,7 @@ func TestDocumentLink_NoIncludes(t *testing.T) {
 
 func TestDocumentLink_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, "")
 
 	params := &protocol.DocumentLinkParams{
@@ -85,7 +87,7 @@ func TestDocumentLink_RulesIncludeWithSpaces(t *testing.T) {
 	srv := NewServer()
 	content := "include /path/with spaces/other.rules\n"
 
-	rulesURI := protocol.DocumentURI("file:///home/user/test.rules")
+	rulesURI := uri.URI("file:///home/user/test.rules")
 	srv.documents.Store(rulesURI, content)
 
 	params := &protocol.DocumentLinkParams{
@@ -96,6 +98,7 @@ func TestDocumentLink_RulesIncludeWithSpaces(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
-	expected := string(uri.File("/path/with spaces/other.rules"))
-	assert.Equal(t, expected, string(result[0].Target))
+	expected := uri.File("/path/with spaces/other.rules")
+	require.NotNil(t, result[0].Target)
+	assert.Equal(t, expected, *result[0].Target)
 }

@@ -3,7 +3,7 @@ package server
 import (
 	"sync"
 
-	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -27,7 +27,7 @@ type cachedDoc struct {
 // document's cached content differs. The cache is keyed by URI and validated by
 // content identity, so a caller always receives a journal parsed from exactly
 // the content it passed; invalidation is automatic on content change.
-func (s *Server) cachedParse(docURI protocol.DocumentURI, content string) *cachedDoc {
+func (s *Server) cachedParse(docURI uri.URI, content string) *cachedDoc {
 	if v, ok := s.parseCache.Load(docURI); ok {
 		if doc, ok := v.(*cachedDoc); ok && doc.content == content {
 			return doc
@@ -40,14 +40,14 @@ func (s *Server) cachedParse(docURI protocol.DocumentURI, content string) *cache
 }
 
 // cachedJournal returns the cached parsed journal and parse errors for content.
-func (s *Server) cachedJournal(docURI protocol.DocumentURI, content string) (*ast.Journal, []parser.ParseError) {
+func (s *Server) cachedJournal(docURI uri.URI, content string) (*ast.Journal, []parser.ParseError) {
 	doc := s.cachedParse(docURI, content)
 	return doc.journal, doc.parseErrs
 }
 
 // cachedBalances returns the account balances for content, computing them at
 // most once per document version.
-func (s *Server) cachedBalances(docURI protocol.DocumentURI, content string) analyzer.AccountBalances {
+func (s *Server) cachedBalances(docURI uri.URI, content string) analyzer.AccountBalances {
 	doc := s.cachedParse(docURI, content)
 	doc.balancesOnce.Do(func() {
 		doc.balances = analyzer.CalculateAccountBalances(doc.journal)
@@ -56,6 +56,6 @@ func (s *Server) cachedBalances(docURI protocol.DocumentURI, content string) ana
 }
 
 // invalidateParseCache drops the cached parse for a document (called on DidClose).
-func (s *Server) invalidateParseCache(docURI protocol.DocumentURI) {
+func (s *Server) invalidateParseCache(docURI uri.URI) {
 	s.parseCache.Delete(docURI)
 }

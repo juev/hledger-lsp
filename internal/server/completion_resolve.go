@@ -2,24 +2,24 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 )
 
 type completionResolveData struct {
-	Kind   string               `json:"kind"`
-	Label  string               `json:"label"`
-	DocURI protocol.DocumentURI `json:"docURI"`
+	Kind   string  `json:"kind"`
+	Label  string  `json:"label"`
+	DocURI uri.URI `json:"docURI"`
 }
 
-func attachResolveData(items []protocol.CompletionItem, ctxType CompletionContextType, docURI protocol.DocumentURI) {
+func attachResolveData(items []protocol.CompletionItem, ctxType CompletionContextType, docURI uri.URI) {
 	var kind string
 	switch ctxType {
 	case ContextAccount:
@@ -40,28 +40,19 @@ func attachResolveData(items []protocol.CompletionItem, ctxType CompletionContex
 			Label:  items[i].Label,
 			DocURI: docURI,
 		}
-		if raw, err := json.Marshal(data); err == nil {
-			items[i].Data = json.RawMessage(raw)
+		if raw, err := protocol.Marshal(data); err == nil {
+			items[i].Data = protocol.LSPAny(raw)
 		}
 	}
 }
 
 func (s *Server) CompletionResolve(_ context.Context, item *protocol.CompletionItem) (*protocol.CompletionItem, error) {
-	if item.Data == nil {
+	if len(item.Data) == 0 {
 		return item, nil
 	}
 
-	raw, ok := item.Data.(json.RawMessage)
-	if !ok {
-		rawBytes, err := json.Marshal(item.Data)
-		if err != nil {
-			return item, nil //nolint:nilerr // LSP: return unresolved item gracefully
-		}
-		raw = rawBytes
-	}
-
 	var data completionResolveData
-	if err := json.Unmarshal(raw, &data); err != nil {
+	if err := protocol.Unmarshal(item.Data, &data); err != nil {
 		return item, nil //nolint:nilerr // LSP: return unresolved item gracefully
 	}
 
@@ -98,7 +89,7 @@ func (s *Server) CompletionResolve(_ context.Context, item *protocol.CompletionI
 
 	if documentation != "" {
 		item.Documentation = &protocol.MarkupContent{
-			Kind:  protocol.Markdown,
+			Kind:  protocol.MarkupKindMarkdown,
 			Value: documentation,
 		}
 	}

@@ -8,11 +8,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestHover_UsesCachedBalances(t *testing.T) {
 	srv := NewServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 grocery\n    expenses:food  $50\n    assets:cash  $-50\n"
 	srv.documents.Store(uri, content)
 
@@ -30,7 +31,7 @@ func TestHover_UsesCachedBalances(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		return res.Contents.Value
+		return hoverContent(res)
 	}
 
 	first := hoverAt()

@@ -2,43 +2,16 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/formatter"
 )
-
-type InlineCompletionTriggerKind int
-
-const (
-	InlineCompletionTriggerInvoked   InlineCompletionTriggerKind = 1
-	InlineCompletionTriggerAutomatic InlineCompletionTriggerKind = 2
-)
-
-type InlineCompletionParams struct {
-	TextDocument protocol.TextDocumentIdentifier `json:"textDocument"`
-	Position     protocol.Position               `json:"position"`
-	Context      InlineCompletionContext         `json:"context"`
-}
-
-type InlineCompletionContext struct {
-	TriggerKind InlineCompletionTriggerKind `json:"triggerKind"`
-}
-
-type InlineCompletionItem struct {
-	InsertText string          `json:"insertText"`
-	FilterText string          `json:"filterText,omitempty"`
-	Range      *protocol.Range `json:"range,omitempty"`
-}
-
-type InlineCompletionList struct {
-	Items []InlineCompletionItem `json:"items"`
-}
 
 // dateRegex matches transaction dates:
 // - Full: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD (with or without leading zeros)
@@ -46,47 +19,42 @@ type InlineCompletionList struct {
 // - Secondary date after = is handled separately by space detection
 var dateRegex = regexp.MustCompile(`^(\d{4}[-/\.])?\d{1,2}[-/\.]\d{1,2}`)
 
-func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*InlineCompletionList, error) {
-	var p InlineCompletionParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		return nil, err
-	}
-
-	content, ok := s.GetDocument(p.TextDocument.URI)
+func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
+	content, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	settings := s.getSettings()
 	if !settings.Features.InlineCompletion {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	lines := strings.Split(content, "\n")
-	lineNum := int(p.Position.Line)
+	lineNum := int(params.Position.Line)
 
 	if lineNum >= len(lines) || strings.TrimSpace(lines[lineNum]) != "" {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	if lineNum == 0 {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	prevLine := lines[lineNum-1]
 	if !isTransactionHeaderLine(prevLine) {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	payee := extractPayeeFromHeader(prevLine)
 	if payee == "" {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
-	templates := s.getPayeeTemplates(p.TextDocument.URI, content)
+	templates := s.getPayeeTemplates(params.TextDocument.URI, content)
 	postings, ok := fuzzyMatchPayeeTemplate(templates, payee)
 	if !ok {
-		return &InlineCompletionList{Items: []InlineCompletionItem{}}, nil
+		return emptyInlineCompletionList(), nil
 	}
 
 	// Compute alignment columns from the current document so ghost text
@@ -94,24 +62,28 @@ func (s *Server) InlineCompletion(_ context.Context, params json.RawMessage) (*I
 	// here is independent of the payee-template path (which is cached and
 	// may not reflect the latest content); for inline completion latency,
 	// this is the same Parse cost as the cache-miss path of getPayeeTemplates.
-	journal, _ := s.cachedJournal(p.TextDocument.URI, content)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
 	commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
 	alignment := formatter.ComputeAlignment(journal, commodityFormats, formatterOptionsFrom(settings.Formatting))
 
 	insertText := buildInlinePostingsText(postings, settings.Formatting, alignment)
 
-	item := InlineCompletionItem{
-		InsertText: insertText,
+	item := protocol.InlineCompletionItem{
+		InsertText: protocol.String(insertText),
 		Range: &protocol.Range{
-			Start: protocol.Position{Line: p.Position.Line, Character: 0},
-			End:   protocol.Position{Line: p.Position.Line, Character: p.Position.Character},
+			Start: protocol.Position{Line: params.Position.Line, Character: 0},
+			End:   protocol.Position{Line: params.Position.Line, Character: params.Position.Character},
 		},
 	}
 
-	return &InlineCompletionList{Items: []InlineCompletionItem{item}}, nil
+	return &protocol.InlineCompletionList{Items: []protocol.InlineCompletionItem{item}}, nil
 }
 
-func (s *Server) getPayeeTemplates(uri protocol.DocumentURI, content string) map[string][]analyzer.PostingTemplate {
+func emptyInlineCompletionList() *protocol.InlineCompletionList {
+	return &protocol.InlineCompletionList{Items: []protocol.InlineCompletionItem{}}
+}
+
+func (s *Server) getPayeeTemplates(uri uri.URI, content string) map[string][]analyzer.PostingTemplate {
 	if cached, ok := s.payeeTemplatesCache.Load(uri); ok {
 		if templates, ok := cached.(map[string][]analyzer.PostingTemplate); ok {
 			return templates

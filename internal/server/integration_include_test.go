@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestIntegration_IncludeTransactionsInCompletion(t *testing.T) {
@@ -38,7 +39,7 @@ func TestIntegration_IncludeTransactionsInCompletion(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -65,7 +66,7 @@ func TestIntegration_IncludeFileNotFound(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	diagnostics, err := ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -103,7 +104,7 @@ func TestIntegration_IncludeHoverShowsAggregatedBalance(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -112,7 +113,7 @@ func TestIntegration_IncludeHoverShowsAggregatedBalance(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	hoverContent := hover.Contents.Value
+	hoverContent := hoverContent(hover)
 	assert.Contains(t, hoverContent, "expenses:food")
 	assert.Contains(t, hoverContent, "150")
 }
@@ -144,7 +145,7 @@ func TestIntegration_IncludeCycleDetection(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", file1Path))
+	uri := uri.URI(fmt.Sprintf("file://%s", file1Path))
 
 	_, err = ts.openAndWait(uri, file1Content)
 	require.NoError(t, err)
@@ -188,7 +189,7 @@ func TestIntegration_NestedIncludesWithTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -226,7 +227,7 @@ func TestIntegration_IncludeRelativePath(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -261,7 +262,7 @@ account assets:cash`
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -302,7 +303,7 @@ include transactions.journal
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -340,7 +341,7 @@ func TestIntegration_ReferencesDeclarationInIncludedFile(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -405,7 +406,7 @@ account Expenses:Occasions
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -415,7 +416,7 @@ account Expenses:Occasions
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	hoverContent := hover.Contents.Value
+	hoverContent := hoverContent(hover)
 	t.Logf("Hover content:\n%s", hoverContent)
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
@@ -455,7 +456,7 @@ account Expenses:Occasions
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -464,7 +465,7 @@ account Expenses:Occasions
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	hoverContent := hover.Contents.Value
+	hoverContent := hoverContent(hover)
 	t.Logf("Hover content:\n%s", hoverContent)
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
@@ -494,8 +495,8 @@ func TestIntegration_Issue18_WorkspaceFolderMode(t *testing.T) {
 	// Simulate workspace folder mode
 	ts := newTestServer()
 	_, err = ts.Initialize(context.Background(), &protocol.InitializeParams{
-		WorkspaceFolders: []protocol.WorkspaceFolder{
-			{URI: fmt.Sprintf("file://%s", tmpDir), Name: "test"},
+		WorkspaceFoldersInitializeParams: protocol.WorkspaceFoldersInitializeParams{
+			WorkspaceFolders: protocol.NewNullable([]protocol.WorkspaceFolder{{URI: uri.URI(fmt.Sprintf("file://%s", tmpDir)), Name: "test"}}),
 		},
 	})
 	require.NoError(t, err)
@@ -504,7 +505,7 @@ func TestIntegration_Issue18_WorkspaceFolderMode(t *testing.T) {
 	err = ts.Initialized(context.Background(), &protocol.InitializedParams{})
 	require.NoError(t, err)
 
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	// Normalize main content for DidOpen (as VS Code does)
 	mainContentLF := strings.ReplaceAll(mainContent, "\r\n", "\n")
@@ -515,7 +516,7 @@ func TestIntegration_Issue18_WorkspaceFolderMode(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hover, "hover should not be nil in workspace folder mode")
 
-	hoverContent := hover.Contents.Value
+	hoverContent := hoverContent(hover)
 	t.Logf("Hover content:\n%s", hoverContent)
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
@@ -568,7 +569,7 @@ func TestIntegration_Issue18_GlobIncludeWithSubdirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	_, err = ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
@@ -578,7 +579,7 @@ func TestIntegration_Issue18_GlobIncludeWithSubdirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, hover)
 
-	hoverContent := hover.Contents.Value
+	hoverContent := hoverContent(hover)
 	t.Logf("Hover content:\n%s", hoverContent)
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
@@ -606,15 +607,15 @@ fields date,description,amount
 	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	diags, err := ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
 
 	// Should NOT have "unexpected content" errors from journal parser
 	for _, d := range diags {
-		if strings.Contains(d.Message, "unexpected content") {
-			t.Errorf("unexpected journal parser error for included rules file: %s", d.Message)
+		if strings.Contains(tooltipString(d.Message), "unexpected content") {
+			t.Errorf("unexpected journal parser error for included rules file: %s", tooltipString(d.Message))
 		}
 	}
 
@@ -622,13 +623,13 @@ fields date,description,amount
 	var warnings []protocol.Diagnostic
 	for _, d := range diags {
 		if d.Severity == protocol.DiagnosticSeverityWarning &&
-			strings.Contains(d.Message, "not a journal file") {
+			strings.Contains(tooltipString(d.Message), "not a journal file") {
 			warnings = append(warnings, d)
 		}
 	}
 	assert.Len(t, warnings, 1, "expected one warning about non-journal include")
 	if len(warnings) > 0 {
-		assert.Contains(t, warnings[0].Message, "bank.rules")
+		assert.Contains(t, tooltipString(warnings[0].Message), "bank.rules")
 	}
 }
 
@@ -651,22 +652,22 @@ P 2024-01-02 EUR  0.85 GBP
 	require.NoError(t, os.WriteFile(mainPath, []byte(mainContent), 0644))
 
 	ts := newTestServer()
-	uri := protocol.DocumentURI(fmt.Sprintf("file://%s", mainPath))
+	uri := uri.URI(fmt.Sprintf("file://%s", mainPath))
 
 	diags, err := ts.openAndWait(uri, mainContent)
 	require.NoError(t, err)
 
 	// Should NOT have non-journal include warning
 	for _, d := range diags {
-		if d.Severity == protocol.DiagnosticSeverityWarning && strings.Contains(d.Message, "not a journal file") {
-			t.Errorf("unexpected non-journal warning: %s", d.Message)
+		if d.Severity == protocol.DiagnosticSeverityWarning && strings.Contains(tooltipString(d.Message), "not a journal file") {
+			t.Errorf("unexpected non-journal warning: %s", tooltipString(d.Message))
 		}
 	}
 
 	// Should NOT have unexpected parser errors from included prices directives
 	for _, d := range diags {
-		if strings.Contains(d.Message, "unexpected content") {
-			t.Errorf("unexpected content error from included prices file: %s", d.Message)
+		if strings.Contains(tooltipString(d.Message), "unexpected content") {
+			t.Errorf("unexpected content error from included prices file: %s", tooltipString(d.Message))
 		}
 	}
 }

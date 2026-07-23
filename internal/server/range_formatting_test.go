@@ -7,9 +7,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
-func (ts *testServer) rangeFormat(uri protocol.DocumentURI, startLine, endLine, endChar uint32) ([]protocol.TextEdit, error) {
+func (ts *testServer) rangeFormat(uri uri.URI, startLine, endLine, endChar uint32) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentRangeFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		Range: protocol.Range{
@@ -22,7 +23,7 @@ func (ts *testServer) rangeFormat(uri protocol.DocumentURI, startLine, endLine, 
 
 func TestRangeFormat_SingleTransaction(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 first\n  expenses:food  $50\n  assets:cash\n\n2024-01-16 second\n  expenses:rent  $100\n  assets:bank\n"
 
 	ts.StoreDocument(uri, content)
@@ -46,7 +47,7 @@ func TestRangeFormat_SingleTransaction(t *testing.T) {
 
 func TestRangeFormat_FullDocument(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 test\n    expenses:food  $50\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -63,7 +64,7 @@ func TestRangeFormat_FullDocument(t *testing.T) {
 
 func TestRangeFormat_NoTransactionsInRange(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 test\n    expenses:food  $50\n    assets:cash\n\n\n\n2024-01-16 second\n    expenses:rent  $100\n    assets:bank\n"
 
 	ts.StoreDocument(uri, content)
@@ -75,7 +76,7 @@ func TestRangeFormat_NoTransactionsInRange(t *testing.T) {
 
 func TestRangeFormat_TrailingSpaces(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 test   \n    expenses:food  $50   \n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
@@ -97,7 +98,7 @@ func TestRangeFormat_TrailingSpaces(t *testing.T) {
 
 func TestRangeFormat_DocumentNotFound(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///nonexistent.journal")
+	uri := uri.URI("file:///nonexistent.journal")
 
 	edits, err := ts.rangeFormat(uri, 0, 5, 0)
 	require.NoError(t, err)

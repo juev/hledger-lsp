@@ -7,26 +7,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestSemanticTokens_Legend(t *testing.T) {
 	legend := GetSemanticTokensLegend()
 
 	require.Len(t, legend.TokenTypes, 12)
-	assert.Equal(t, protocol.SemanticTokenNamespace, legend.TokenTypes[0])
-	assert.Equal(t, protocol.SemanticTokenType, legend.TokenTypes[1])
-	assert.Equal(t, protocol.SemanticTokenFunction, legend.TokenTypes[2])
-	assert.Equal(t, protocol.SemanticTokenNumber, legend.TokenTypes[3])
-	assert.Equal(t, protocol.SemanticTokenNumber, legend.TokenTypes[4])
-	assert.Equal(t, protocol.SemanticTokenTypes("decorator"), legend.TokenTypes[5])
-	assert.Equal(t, protocol.SemanticTokenKeyword, legend.TokenTypes[6])
-	assert.Equal(t, protocol.SemanticTokenString, legend.TokenTypes[7])
-	assert.Equal(t, protocol.SemanticTokenOperator, legend.TokenTypes[8])
-	assert.Equal(t, protocol.SemanticTokenComment, legend.TokenTypes[9])
-	assert.Equal(t, protocol.SemanticTokenRegexp, legend.TokenTypes[10])
-	assert.Equal(t, protocol.SemanticTokenParameter, legend.TokenTypes[11])
+	assert.Equal(t, string(protocol.SemanticTokenTypesNamespace), legend.TokenTypes[0])
+	assert.Equal(t, string(protocol.SemanticTokenTypesType), legend.TokenTypes[1])
+	assert.Equal(t, string(protocol.SemanticTokenTypesFunction), legend.TokenTypes[2])
+	assert.Equal(t, string(protocol.SemanticTokenTypesNumber), legend.TokenTypes[3])
+	assert.Equal(t, string(protocol.SemanticTokenTypesNumber), legend.TokenTypes[4])
+	assert.Equal(t, string(protocol.SemanticTokenTypesDecorator), legend.TokenTypes[5])
+	assert.Equal(t, string(protocol.SemanticTokenTypesKeyword), legend.TokenTypes[6])
+	assert.Equal(t, string(protocol.SemanticTokenTypesString), legend.TokenTypes[7])
+	assert.Equal(t, string(protocol.SemanticTokenTypesOperator), legend.TokenTypes[8])
+	assert.Equal(t, string(protocol.SemanticTokenTypesComment), legend.TokenTypes[9])
+	assert.Equal(t, string(protocol.SemanticTokenTypesRegexp), legend.TokenTypes[10])
+	assert.Equal(t, string(protocol.SemanticTokenTypesParameter), legend.TokenTypes[11])
 
-	assert.Contains(t, legend.TokenModifiers, protocol.SemanticTokenModifierAbstract)
+	assert.Contains(t, legend.TokenModifiers, string(protocol.SemanticTokenModifiersAbstract))
 }
 
 func TestSemanticTokens_Encode(t *testing.T) {
@@ -48,7 +49,7 @@ func TestSemanticTokens_SimpleTransaction(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.SemanticTokensParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -65,7 +66,7 @@ func TestSemanticTokens_SimpleTransaction(t *testing.T) {
 
 func TestSemanticTokens_EmptyDocument(t *testing.T) {
 	srv := NewServer()
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), "")
+	srv.documents.Store(uri.URI("file:///test.journal"), "")
 
 	params := &protocol.SemanticTokensParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -101,13 +102,15 @@ func TestSemanticTokens_CapabilityRegistration(t *testing.T) {
 	result, err := srv.Initialize(context.Background(), params)
 	require.NoError(t, err)
 
-	opts, ok := result.Capabilities.SemanticTokensProvider.(*SemanticTokensServerCapabilities)
-	require.True(t, ok, "SemanticTokensProvider should be *SemanticTokensServerCapabilities")
+	opts, ok := result.Capabilities.SemanticTokensProvider.(*protocol.SemanticTokensOptions)
+	require.True(t, ok, "SemanticTokensProvider should be *protocol.SemanticTokensOptions")
 
 	assert.NotEmpty(t, opts.Legend.TokenTypes)
 	assert.NotEmpty(t, opts.Legend.TokenModifiers)
 	assert.NotNil(t, opts.Full)
-	assert.True(t, opts.Range)
+	rangeEnabled, ok := opts.Range.(protocol.Boolean)
+	require.True(t, ok)
+	assert.True(t, bool(rangeEnabled))
 }
 
 func TestSemanticTokens_TokenTypes(t *testing.T) {
@@ -266,7 +269,7 @@ func TestSemanticTokens_Range(t *testing.T) {
 2024-01-03 tx3
     assets:cash  $50`
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
 	params := &protocol.SemanticTokensRangeParams{
@@ -984,10 +987,10 @@ func TestSemanticTokens_RulesLegendMapping(t *testing.T) {
 	require.True(t, int(TokenTypeRulesParameter) < len(tokenTypes),
 		"TokenTypeRulesParameter index %d out of legend bounds (%d)", TokenTypeRulesParameter, len(tokenTypes))
 
-	assert.Equal(t, protocol.SemanticTokenKeyword, tokenTypes[TokenTypeDirective])
-	assert.Equal(t, protocol.SemanticTokenKeyword, tokenTypes[TokenTypeRulesKeyword])
-	assert.Equal(t, protocol.SemanticTokenRegexp, tokenTypes[TokenTypeRulesRegexp])
-	assert.Equal(t, protocol.SemanticTokenParameter, tokenTypes[TokenTypeRulesParameter])
+	assert.Equal(t, string(protocol.SemanticTokenTypesKeyword), tokenTypes[TokenTypeDirective])
+	assert.Equal(t, string(protocol.SemanticTokenTypesKeyword), tokenTypes[TokenTypeRulesKeyword])
+	assert.Equal(t, string(protocol.SemanticTokenTypesRegexp), tokenTypes[TokenTypeRulesRegexp])
+	assert.Equal(t, string(protocol.SemanticTokenTypesParameter), tokenTypes[TokenTypeRulesParameter])
 }
 
 func TestSemanticTokens_QuotedCommodityLength(t *testing.T) {
@@ -1299,5 +1302,5 @@ func TestSemanticTokens_TaggedCommentMarkerIsComment(t *testing.T) {
 
 func TestSemanticTokens_Legend_NegativeModifier(t *testing.T) {
 	legend := GetSemanticTokensLegend()
-	assert.Contains(t, legend.TokenModifiers, protocol.SemanticTokenModifiers("negative"))
+	assert.Contains(t, legend.TokenModifiers, string(protocol.SemanticTokenModifiers("negative")))
 }

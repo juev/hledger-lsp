@@ -7,11 +7,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestDocumentSymbol_Empty(t *testing.T) {
 	srv := NewServer()
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), "")
+	srv.documents.Store(uri.URI("file:///test.journal"), "")
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -48,7 +49,7 @@ func TestDocumentSymbol_Transactions(t *testing.T) {
     expenses:food  $30
     assets:cash`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -81,7 +82,7 @@ func TestDocumentSymbol_AccountDirective(t *testing.T) {
 
 account expenses:food`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -110,7 +111,7 @@ func TestDocumentSymbol_CommodityDirective(t *testing.T) {
 
 commodity EUR`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -137,7 +138,7 @@ func TestDocumentSymbol_Include(t *testing.T) {
 
 include /path/to/other.journal`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -170,7 +171,7 @@ commodity $
 
 include ./other.journal`
 
-	srv.documents.Store(protocol.DocumentURI("file:///test.journal"), content)
+	srv.documents.Store(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.DocumentSymbolParams{
 		TextDocument: protocol.TextDocumentIdentifier{
@@ -244,7 +245,7 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := NewServer()
-			srv.documents.Store(protocol.DocumentURI("file:///test.journal"), tt.content)
+			srv.documents.Store(uri.URI("file:///test.journal"), tt.content)
 
 			params := &protocol.DocumentSymbolParams{
 				TextDocument: protocol.TextDocumentIdentifier{

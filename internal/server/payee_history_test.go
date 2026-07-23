@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 func TestPayeeAccountHistory_EmptyJournal(t *testing.T) {
@@ -15,7 +16,7 @@ func TestPayeeAccountHistory_EmptyJournal(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := ``
 
 	srv.documents.Store(uri, content)
@@ -39,7 +40,7 @@ func TestPayeeAccountHistory_SinglePayee(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 Grocery Store
     expenses:food  $50
     assets:cash`
@@ -71,7 +72,7 @@ func TestPayeeAccountHistory_MultiplePayees(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 Grocery Store
     expenses:food  $50
     assets:cash
@@ -105,7 +106,7 @@ func TestPayeeAccountHistory_FrequentAccounts(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 Grocery Store
     expenses:food  $50
     assets:cash
@@ -147,7 +148,7 @@ func TestPayeeAccountHistory_Unicode(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 Пятёрочка
     expenses:food  $50
     assets:cash`
@@ -185,7 +186,7 @@ func TestPayeeAccountHistory_UnknownDocument(t *testing.T) {
 	client := &mockClient{}
 	srv.SetClient(client)
 
-	uri := protocol.DocumentURI("file:///unknown.journal")
+	uri := uri.URI("file:///unknown.journal")
 	params := PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}

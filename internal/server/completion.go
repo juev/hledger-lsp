@@ -82,7 +82,7 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	}
 
 	settings := s.getSettings()
-	completionCtx := determineCompletionContext(doc, params.Position, params.Context)
+	completionCtx := determineCompletionContext(doc, params.Position, &params.Context)
 	counts := getCountsForContext(completionCtx, result, settings.Completion)
 
 	var recency map[string]string
@@ -100,8 +100,8 @@ func (s *Server) Completion(ctx context.Context, params *protocol.CompletionPara
 	if editRange != nil {
 		for i := range items {
 			text := items[i].Label
-			if items[i].InsertText != "" {
-				text = items[i].InsertText
+			if insertText, ok := items[i].InsertText.Get(); ok {
+				text = insertText
 			}
 			items[i].TextEdit = &protocol.TextEdit{
 				Range:   *editRange,
@@ -165,8 +165,8 @@ func rankCompletionItemsByScore(scored []scoredItem, counts map[string]int, quer
 	items := make([]protocol.CompletionItem, len(scored))
 	for i, s := range scored {
 		items[i] = s.item
-		items[i].SortText = fmt.Sprintf("%06d_%s", i, s.item.Label)
-		items[i].FilterText = query
+		items[i].SortText.Set(fmt.Sprintf("%06d_%s", i, s.item.Label))
+		items[i].FilterText.Set(query)
 	}
 	return items
 }
@@ -228,11 +228,11 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return tagCtx
 	}
 
-	if ctx != nil && ctx.TriggerCharacter == ":" {
+	if ctx != nil && ctx.TriggerCharacter != nil && *ctx.TriggerCharacter == ":" {
 		return ContextAccount
 	}
 
-	if ctx != nil && (ctx.TriggerCharacter == "@" || ctx.TriggerCharacter == "=") {
+	if ctx != nil && ctx.TriggerCharacter != nil && (*ctx.TriggerCharacter == "@" || *ctx.TriggerCharacter == "=") {
 		return ContextCommodity
 	}
 
@@ -453,7 +453,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: formatDetailWithCount("Account", acc, counts, settings.ShowCounts),
+				Detail: protocol.NewOptional(formatDetailWithCount("Account", acc, counts, settings.ShowCounts)),
 			})
 		}
 
@@ -466,7 +466,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  payee,
 				Kind:   protocol.CompletionItemKindClass,
-				Detail: formatPayeeDetailWithCount(payee, counts, settings.ShowCounts),
+				Detail: protocol.NewOptional(formatPayeeDetailWithCount(payee, counts, settings.ShowCounts)),
 			})
 		}
 
@@ -475,7 +475,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  commodity,
 				Kind:   protocol.CompletionItemKindEnum,
-				Detail: formatDetailWithCount("Commodity", commodity, counts, settings.ShowCounts),
+				Detail: protocol.NewOptional(formatDetailWithCount("Commodity", commodity, counts, settings.ShowCounts)),
 			})
 		}
 
@@ -484,8 +484,8 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:      tagName,
 				Kind:       protocol.CompletionItemKindProperty,
-				Detail:     formatDetailWithCount("Tag", tagName, counts, settings.ShowCounts),
-				InsertText: tagName + ":",
+				Detail:     protocol.NewOptional(formatDetailWithCount("Tag", tagName, counts, settings.ShowCounts)),
+				InsertText: protocol.NewOptional(tagName + ":"),
 			})
 		}
 
@@ -499,7 +499,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 					items = append(items, protocol.CompletionItem{
 						Label:  value,
 						Kind:   protocol.CompletionItemKindValue,
-						Detail: "Tag value for " + tagName,
+						Detail: protocol.NewOptional("Tag value for " + tagName),
 					})
 				}
 			}
@@ -514,8 +514,8 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:      d.label,
 				Kind:       protocol.CompletionItemKindKeyword,
-				Detail:     d.detail,
-				InsertText: d.insertText,
+				Detail:     protocol.NewOptional(d.detail),
+				InsertText: protocol.NewOptional(d.insertText),
 			})
 		}
 
@@ -524,7 +524,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 			items = append(items, protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
-				Detail: formatDetailWithCount("Account", acc, counts, settings.ShowCounts),
+				Detail: protocol.NewOptional(formatDetailWithCount("Account", acc, counts, settings.ShowCounts)),
 			})
 		}
 	}
@@ -624,20 +624,20 @@ func generateDateCompletionItems(historicalDates []string, content string, curso
 	items = append(items, protocol.CompletionItem{
 		Label:    today,
 		Kind:     protocol.CompletionItemKindConstant,
-		Detail:   "today",
-		SortText: "0001",
+		Detail:   protocol.NewOptional("today"),
+		SortText: protocol.NewOptional("0001"),
 	})
 	items = append(items, protocol.CompletionItem{
 		Label:    yesterday,
 		Kind:     protocol.CompletionItemKindConstant,
-		Detail:   "yesterday",
-		SortText: "0002",
+		Detail:   protocol.NewOptional("yesterday"),
+		SortText: protocol.NewOptional("0002"),
 	})
 	items = append(items, protocol.CompletionItem{
 		Label:    tomorrow,
 		Kind:     protocol.CompletionItemKindConstant,
-		Detail:   "tomorrow",
-		SortText: "0003",
+		Detail:   protocol.NewOptional("tomorrow"),
+		SortText: protocol.NewOptional("0003"),
 	})
 
 	sortedDates := make([]string, len(historicalDates))
@@ -654,8 +654,8 @@ func generateDateCompletionItems(historicalDates []string, content string, curso
 		items = append(items, protocol.CompletionItem{
 			Label:    reformatted,
 			Kind:     protocol.CompletionItemKindConstant,
-			Detail:   "from history",
-			SortText: fmt.Sprintf("%04d", 100+i),
+			Detail:   protocol.NewOptional("from history"),
+			SortText: protocol.NewOptional(fmt.Sprintf("%04d", 100+i)),
 		})
 	}
 
@@ -1230,7 +1230,7 @@ func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) 
 	for i, ri := range rulesItems {
 		items[i] = protocol.CompletionItem{
 			Label:  ri.Label,
-			Detail: ri.Detail,
+			Detail: protocol.NewOptional(ri.Detail),
 			Kind:   protocol.CompletionItemKind(ri.Kind),
 			TextEdit: &protocol.TextEdit{
 				Range:   *editRange,

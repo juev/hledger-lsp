@@ -2,14 +2,43 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
+
+func inlineCompletionParams(documentURI uri.URI, line, character uint32) *protocol.InlineCompletionParams {
+	return &protocol.InlineCompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+			Position:     protocol.Position{Line: line, Character: character},
+		},
+		Context: protocol.InlineCompletionContext{TriggerKind: protocol.InlineCompletionTriggerKindAutomatic},
+	}
+}
+
+type inlineCompletionItem struct {
+	InsertText string
+	Range      *protocol.Range
+}
+
+func inlineCompletionItems(t *testing.T, result protocol.InlineCompletionResult) []inlineCompletionItem {
+	t.Helper()
+	list, ok := result.(*protocol.InlineCompletionList)
+	require.Truef(t, ok, "result type = %T, want *protocol.InlineCompletionList", result)
+
+	items := make([]inlineCompletionItem, 0, len(list.Items))
+	for _, item := range list.Items {
+		insertText, ok := item.InsertText.(protocol.String)
+		require.Truef(t, ok, "insertText type = %T, want protocol.String", item.InsertText)
+		items = append(items, inlineCompletionItem{InsertText: string(insertText), Range: item.Range})
+	}
+	return items
+}
 
 func TestInlineCompletion_EnabledByDefault(t *testing.T) {
 	srv := NewServer()
@@ -19,25 +48,22 @@ func TestInlineCompletion_EnabledByDefault(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
+	params := &protocol.InlineCompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
+			Position:     protocol.Position{Line: 5, Character: 0},
 		},
+		Context: protocol.InlineCompletionContext{TriggerKind: protocol.InlineCompletionTriggerKindAutomatic},
 	}
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.NotEmpty(t, result.Items, "inline completion should be enabled by default")
+	assert.NotEmpty(t, inlineCompletionItems(t, result), "inline completion should be enabled by default")
 }
 
 func TestInlineCompletion_EnabledOnEmptyLineAfterPayee(t *testing.T) {
@@ -53,27 +79,18 @@ func TestInlineCompletion_EnabledOnEmptyLineAfterPayee(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	require.Len(t, result.Items, 1, "should return one inline completion item")
+	require.Len(t, inlineCompletionItems(t, result), 1, "should return one inline completion item")
 
-	item := result.Items[0]
+	item := inlineCompletionItems(t, result)[0]
 	assert.Contains(t, item.InsertText, "expenses:food")
 	assert.Contains(t, item.InsertText, "assets:cash")
 	assert.Contains(t, item.InsertText, "$50.00")
@@ -94,24 +111,16 @@ func TestInlineCompletion_AlignedGhostTextRightMode(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.Len(t, lines, 2)
 	assert.Equal(t, 40, len(lines[0]))
 	assert.Contains(t, lines[0], "12.00 USD")
@@ -132,32 +141,24 @@ func TestInlineCompletion_AlignedGhostTextDecimalModeDeterministic(t *testing.T)
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
 	var first string
 	for i := range 5 {
-		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		result, err := srv.InlineCompletion(context.Background(), params)
 		require.NoError(t, err)
-		require.Len(t, result.Items, 1, "iteration %d", i)
+		require.Len(t, inlineCompletionItems(t, result), 1, "iteration %d", i)
 
 		if i == 0 {
-			first = result.Items[0].InsertText
+			first = inlineCompletionItems(t, result)[0].InsertText
 			lines := strings.Split(first, "\n")
 			require.Len(t, lines, 2)
 			assert.Equal(t, 30, strings.Index(lines[0], "."))
 		} else {
-			assert.Equal(t, first, result.Items[0].InsertText, "iteration %d", i)
+			assert.Equal(t, first, inlineCompletionItems(t, result)[0].InsertText, "iteration %d", i)
 		}
 	}
 }
@@ -177,24 +178,16 @@ func TestInlineCompletion_AlignedGhostTextLeftMode(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.Len(t, lines, 2)
 	assert.Equal(t, 30, strings.Index(lines[0], "12.00 USD"))
 	assert.NotEqual(t, 30, len(lines[0]))
@@ -218,22 +211,16 @@ func TestInlineCompletion_AutoDetectColumn_RightMode(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.Len(t, lines, 2)
 	assert.Equal(t, 42, len(lines[0]),
 		"ghost text should follow auto-detected end column 42, got: %q", lines[0])
@@ -258,22 +245,16 @@ func TestInlineCompletion_AutoDetectColumn_DecimalMode(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.Len(t, lines, 2)
 	dotIdx := strings.Index(lines[0], ".")
 	assert.Equal(t, 37, dotIdx,
@@ -296,22 +277,16 @@ func TestInlineCompletion_AutoDetectColumn_LeftMode(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.Len(t, lines, 2)
 	startIdx := strings.Index(lines[0], "12.00 USD")
 	assert.Equal(t, 30, startIdx,
@@ -336,22 +311,16 @@ func TestInlineCompletion_MixedCommoditiesFallback(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.GreaterOrEqual(t, len(lines), 1)
 	assert.Less(t, len(lines[0]), 80,
 		"with mixed commodities formatter falls back to start-col; ghost text must not pad to 80, got: %q", lines[0])
@@ -373,22 +342,16 @@ func TestInlineCompletion_NonASCIIAccount(t *testing.T) {
 
 2024-01-15 Магазин
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	lines := strings.Split(result.Items[0].InsertText, "\n")
+	lines := strings.Split(inlineCompletionItems(t, result)[0].InsertText, "\n")
 	require.GreaterOrEqual(t, len(lines), 1)
 	// Account "расходы:еда" = 11 runes. Amount "12.00 USD" = 9 runes.
 	// At column=40 right mode → end at rune column 40.
@@ -418,25 +381,16 @@ func TestInlineCompletion_NotOnNonEmptyLine(t *testing.T) {
 
 2024-01-15 Grocery Store
     exp`
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 7},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 5, 7)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "should not show ghost text on non-empty line")
+	assert.Empty(t, inlineCompletionItems(t, result), "should not show ghost text on non-empty line")
 }
 
 func TestInlineCompletion_NotAfterNonTransactionLine(t *testing.T) {
@@ -449,25 +403,16 @@ func TestInlineCompletion_NotAfterNonTransactionLine(t *testing.T) {
 	content := `account expenses:food
 
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 2, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 2, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "should not show ghost text after non-transaction line")
+	assert.Empty(t, inlineCompletionItems(t, result), "should not show ghost text after non-transaction line")
 }
 
 func TestInlineCompletion_NoTemplateForPayee(t *testing.T) {
@@ -479,25 +424,16 @@ func TestInlineCompletion_NoTemplateForPayee(t *testing.T) {
 
 	content := `2024-01-15 New Unknown Payee
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 1, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 1, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "should not show ghost text when no template exists for payee")
+	assert.Empty(t, inlineCompletionItems(t, result), "should not show ghost text when no template exists for payee")
 }
 
 func TestInlineCompletion_CorrectInsertText(t *testing.T) {
@@ -513,26 +449,17 @@ func TestInlineCompletion_CorrectInsertText(t *testing.T) {
 
 2024-01-15 Coffee Shop
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	item := result.Items[0]
+	item := inlineCompletionItems(t, result)[0]
 
 	assert.Contains(t, item.InsertText, "    expenses:food:coffee", "should have proper indentation")
 	assert.Contains(t, item.InsertText, "$5.00", "should include amount")
@@ -542,31 +469,13 @@ func TestInlineCompletion_CorrectInsertText(t *testing.T) {
 func TestInlineCompletion_DocumentNotFound(t *testing.T) {
 	srv := NewServer()
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: "file:///nonexistent.journal"},
-		Position:     protocol.Position{Line: 0, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams("file:///nonexistent.journal", 0, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "should return empty for nonexistent document")
-}
-
-func TestInlineCompletion_InvalidParams(t *testing.T) {
-	srv := NewServer()
-
-	result, err := srv.InlineCompletion(context.Background(), []byte("invalid json"))
-
-	assert.Error(t, err)
-	assert.Nil(t, result)
+	assert.Empty(t, inlineCompletionItems(t, result), "should return empty for nonexistent document")
 }
 
 func TestInlineCompletion_WithStatusMarker(t *testing.T) {
@@ -582,26 +491,17 @@ func TestInlineCompletion_WithStatusMarker(t *testing.T) {
 
 2024-01-15 * Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	require.Len(t, result.Items, 1, "should work with status marker (*)")
-	assert.Contains(t, result.Items[0].InsertText, "expenses:food")
+	require.Len(t, inlineCompletionItems(t, result), 1, "should work with status marker (*)")
+	assert.Contains(t, inlineCompletionItems(t, result)[0].InsertText, "expenses:food")
 }
 
 func TestInlineCompletion_RangeCoversEmptyLine(t *testing.T) {
@@ -617,26 +517,17 @@ func TestInlineCompletion_RangeCoversEmptyLine(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, result.Items, 1)
+	require.Len(t, inlineCompletionItems(t, result), 1)
 
-	item := result.Items[0]
+	item := inlineCompletionItems(t, result)[0]
 	require.NotNil(t, item.Range, "should have a range")
 	assert.Equal(t, uint32(5), item.Range.Start.Line)
 	assert.Equal(t, uint32(0), item.Range.Start.Character)
@@ -714,7 +605,7 @@ func TestInlineCompletion_CacheInvalidatedOnSave(t *testing.T) {
 	settings.Features.InlineCompletion = true
 	srv.setSettings(settings)
 
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 
 	content1 := `2024-01-10 Grocery Store
     expenses:food:groceries  $50.00
@@ -724,20 +615,12 @@ func TestInlineCompletion_CacheInvalidatedOnSave(t *testing.T) {
 `
 	srv.documents.Store(uri, content1)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
-	result1, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result1, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result1.Items, 1)
-	assert.Contains(t, result1.Items[0].InsertText, "expenses:food:groceries")
+	require.Len(t, inlineCompletionItems(t, result1), 1)
+	assert.Contains(t, inlineCompletionItems(t, result1)[0].InsertText, "expenses:food:groceries")
 
 	content2 := `2024-01-10 Grocery Store
     expenses:food:supermarket  $100.00
@@ -752,12 +635,12 @@ func TestInlineCompletion_CacheInvalidatedOnSave(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result2, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result2, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
-	require.Len(t, result2.Items, 1)
-	assert.Contains(t, result2.Items[0].InsertText, "expenses:food:supermarket",
+	require.Len(t, inlineCompletionItems(t, result2), 1)
+	assert.Contains(t, inlineCompletionItems(t, result2)[0].InsertText, "expenses:food:supermarket",
 		"should return updated template after DidSave invalidates cache")
-	assert.Contains(t, result2.Items[0].InsertText, "assets:bank",
+	assert.Contains(t, inlineCompletionItems(t, result2)[0].InsertText, "assets:bank",
 		"should return updated second posting after DidSave invalidates cache")
 }
 
@@ -774,29 +657,21 @@ func TestInlineCompletion_DeterministicResults(t *testing.T) {
 
 2024-01-15 Grocery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 5, 0)
 
 	var firstResult string
 	for i := range 10 {
-		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		result, err := srv.InlineCompletion(context.Background(), params)
 		require.NoError(t, err)
-		require.Len(t, result.Items, 1)
+		require.Len(t, inlineCompletionItems(t, result), 1)
 
 		if i == 0 {
-			firstResult = result.Items[0].InsertText
+			firstResult = inlineCompletionItems(t, result)[0].InsertText
 		} else {
-			assert.Equal(t, firstResult, result.Items[0].InsertText,
+			assert.Equal(t, firstResult, inlineCompletionItems(t, result)[0].InsertText,
 				"iteration %d: inline completion should return deterministic results", i)
 		}
 	}
@@ -825,29 +700,21 @@ func TestInlineCompletion_DeterministicWithMultiplePatterns(t *testing.T) {
 
 2024-01-20 Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 13, Character: 0},
-		Context: InlineCompletionContext{
-			TriggerKind: InlineCompletionTriggerAutomatic,
-		},
-	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
+	params := inlineCompletionParams(uri, 13, 0)
 
 	var firstResult string
 	for i := range 10 {
-		result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+		result, err := srv.InlineCompletion(context.Background(), params)
 		require.NoError(t, err)
-		require.Len(t, result.Items, 1, "iteration %d: should return one completion item", i)
+		require.Len(t, inlineCompletionItems(t, result), 1, "iteration %d: should return one completion item", i)
 
 		if i == 0 {
-			firstResult = result.Items[0].InsertText
+			firstResult = inlineCompletionItems(t, result)[0].InsertText
 		} else {
-			assert.Equal(t, firstResult, result.Items[0].InsertText,
+			assert.Equal(t, firstResult, inlineCompletionItems(t, result)[0].InsertText,
 				"iteration %d: inline completion should return deterministic results with multiple patterns", i)
 		}
 	}
@@ -872,25 +739,18 @@ func TestInlineCompletion_FuzzyPayeeMatch(t *testing.T) {
 
 2024-01-15 Grcery Store
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, result.Items, 1, "fuzzy match should find template for misspelled payee")
+	require.Len(t, inlineCompletionItems(t, result), 1, "fuzzy match should find template for misspelled payee")
 
-	assert.Contains(t, result.Items[0].InsertText, "expenses:food")
-	assert.Contains(t, result.Items[0].InsertText, "assets:cash")
+	assert.Contains(t, inlineCompletionItems(t, result)[0].InsertText, "expenses:food")
+	assert.Contains(t, inlineCompletionItems(t, result)[0].InsertText, "assets:cash")
 }
 
 func TestInlineCompletion_FuzzyPayeeMatch_NoMatchForUnrelated(t *testing.T) {
@@ -906,23 +766,16 @@ func TestInlineCompletion_FuzzyPayeeMatch_NoMatchForUnrelated(t *testing.T) {
 
 2024-01-15 xyz
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Empty(t, result.Items, "should not match unrelated short payee")
+	assert.Empty(t, inlineCompletionItems(t, result), "should not match unrelated short payee")
 }
 
 func TestInlineCompletion_FuzzyPayeeMatch_Unicode(t *testing.T) {
@@ -938,22 +791,15 @@ func TestInlineCompletion_FuzzyPayeeMatch_Unicode(t *testing.T) {
 
 2024-01-15 Пятёрочка
 `
-	uri := protocol.DocumentURI("file:///test.journal")
+	uri := uri.URI("file:///test.journal")
 	srv.documents.Store(uri, content)
 
-	params := InlineCompletionParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		Position:     protocol.Position{Line: 5, Character: 0},
-		Context:      InlineCompletionContext{TriggerKind: InlineCompletionTriggerAutomatic},
-	}
+	params := inlineCompletionParams(uri, 5, 0)
 
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.InlineCompletion(context.Background(), paramsJSON)
+	result, err := srv.InlineCompletion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, result.Items, 1, "exact unicode payee match should work")
+	require.Len(t, inlineCompletionItems(t, result), 1, "exact unicode payee match should work")
 
-	assert.Contains(t, result.Items[0].InsertText, "expenses:food")
+	assert.Contains(t, inlineCompletionItems(t, result)[0].InsertText, "expenses:food")
 }

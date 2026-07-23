@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 )
 
 // TestDidChange_RopeIncrementalAndFullChange verifies the rope-backed applyChange
@@ -14,7 +15,7 @@ import (
 // incremental edit starts from the new content.
 func TestDidChange_RopeIncrementalAndFullChange(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///rope.journal")
+	uri := uri.URI("file:///rope.journal")
 	base := "2024-01-01 * store\n    expenses:food  $50\n    assets:cash\n"
 	require.NoError(t, ts.openDocument(uri, base))
 
@@ -22,7 +23,7 @@ func TestDidChange_RopeIncrementalAndFullChange(t *testing.T) {
 		return protocol.Position{Line: line, Character: char}
 	}
 	apply := func(r protocol.Range, text string) string {
-		require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{{Range: r, Text: text}}))
+		require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangePartial{Range: r, Text: text}}))
 		got, ok := ts.GetDocument(uri)
 		require.True(t, ok)
 		return got
@@ -37,7 +38,8 @@ func TestDidChange_RopeIncrementalAndFullChange(t *testing.T) {
 	assert.Equal(t, "2024-X01-01 * store\n    расходы:еда  $1\n    expenses:food  $50\n    assets:cash\n", got)
 
 	// Full-document change replaces the content and resets the rope.
-	got = apply(protocol.Range{}, "2025-05-05 * fresh\n    assets:bank  $1\n    income:x\n")
+	require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangeWholeDocument{Text: "2025-05-05 * fresh\n    assets:bank  $1\n    income:x\n"}}))
+	got, _ = ts.GetDocument(uri)
 	assert.Equal(t, "2025-05-05 * fresh\n    assets:bank  $1\n    income:x\n", got)
 
 	// An incremental edit after a full change builds from the new content.

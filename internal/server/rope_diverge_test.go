@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/document"
 )
@@ -17,7 +18,7 @@ import (
 // authoritative content before applying the edit.
 func TestDidChange_RebuildsDivergedRope(t *testing.T) {
 	ts := newTestServer()
-	uri := protocol.DocumentURI("file:///diverge.journal")
+	uri := uri.URI("file:///diverge.journal")
 	full := "2024-01-01 one\n    expenses:a  $1\n    assets:cash\n\n2024-01-02 two\n    expenses:b  $2\n    assets:cash\n"
 	require.NoError(t, ts.openDocument(uri, full))
 
@@ -26,7 +27,7 @@ func TestDidChange_RebuildsDivergedRope(t *testing.T) {
 	ts.docTexts.Store(uri, document.NewText("2024-01-01 one\n    expenses:a  $1\n    assets:cash\n"))
 
 	// Incremental insert at line 4 (the second transaction) of the FULL document.
-	require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{{
+	require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{
 			Start: protocol.Position{Line: 4, Character: 0},
 			End:   protocol.Position{Line: 4, Character: 0},

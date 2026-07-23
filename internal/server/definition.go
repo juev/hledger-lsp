@@ -288,7 +288,7 @@ func allJournalsWithPaths(resolved *include.ResolvedJournal, currentPath string,
 	return result
 }
 
-func pathToURI(path string) protocol.DocumentURI {
+func pathToURI(path string) uri.URI {
 	return uri.File(path)
 }
 
