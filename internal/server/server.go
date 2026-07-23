@@ -199,6 +199,9 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 	if settings.Features.CodeLens {
 		caps.CodeLensProvider = &protocol.CodeLensOptions{}
 	}
+	if settings.Features.InlayHints {
+		caps.InlayHintProvider = protocol.Boolean(true)
+	}
 	commands := make([]string, 0, 2)
 	if settings.Features.CodeActions {
 		commands = append(commands, "hledger.run")

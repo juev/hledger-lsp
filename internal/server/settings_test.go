@@ -343,6 +343,35 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 	}
 }
 
+func TestParseSettingsFromRaw_InlayHints(t *testing.T) {
+	base := defaultServerSettings()
+	if !base.Features.InlayHints || !base.InlayHints.InferredAmounts || base.InlayHints.RunningBalances || base.InlayHints.CostExpansion {
+		t.Fatal("unexpected inlay hint defaults")
+	}
+
+	result := parseSettingsFromRaw(base, map[string]interface{}{
+		"features": map[string]interface{}{"inlayHints": false},
+		"inlayHints": map[string]interface{}{
+			"inferredAmounts": false,
+			"runningBalances": true,
+			"costExpansion":   true,
+		},
+	})
+	if result.Features.InlayHints || result.InlayHints.InferredAmounts || !result.InlayHints.RunningBalances || !result.InlayHints.CostExpansion {
+		t.Fatal("nested inlay hint settings were not applied")
+	}
+
+	result = parseSettingsFromRaw(base, map[string]interface{}{
+		"features.inlayHints":        false,
+		"inlayHints.inferredAmounts": false,
+		"inlayHints.runningBalances": true,
+		"inlayHints.costExpansion":   true,
+	})
+	if result.Features.InlayHints || result.InlayHints.InferredAmounts || !result.InlayHints.RunningBalances || !result.InlayHints.CostExpansion {
+		t.Fatal("dotted inlay hint settings were not applied")
+	}
+}
+
 func TestToBool(t *testing.T) {
 	tests := []struct {
 		input interface{}

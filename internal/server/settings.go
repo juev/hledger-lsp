@@ -24,6 +24,13 @@ type featureSettings struct {
 	WorkspaceSymbol  bool
 	InlineCompletion bool
 	CodeLens         bool
+	InlayHints       bool
+}
+
+type inlayHintSettings struct {
+	InferredAmounts bool
+	RunningBalances bool
+	CostExpansion   bool
 }
 
 type completionSettings struct {
@@ -60,6 +67,7 @@ type serverSettings struct {
 	Completion  completionSettings
 	Diagnostics diagnosticsSettings
 	Formatting  formattingSettings
+	InlayHints  inlayHintSettings
 	CLI         cliSettings
 	Limits      include.Limits
 }
@@ -78,7 +86,9 @@ func defaultServerSettings() serverSettings {
 			WorkspaceSymbol:  true,
 			InlineCompletion: true,
 			CodeLens:         false,
+			InlayHints:       true,
 		},
+		InlayHints: inlayHintSettings{InferredAmounts: true},
 		Completion: completionSettings{
 			MaxResults:    50,
 			FuzzyMatching: true,
@@ -246,6 +256,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(featuresRaw["codeLens"]); ok {
 			settings.Features.CodeLens = value
 		}
+		if value, ok := toBool(featuresRaw["inlayHints"]); ok {
+			settings.Features.InlayHints = value
+		}
 	}
 	if value, ok := toBool(raw["features.hover"]); ok {
 		settings.Features.Hover = value
@@ -279,6 +292,31 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["features.codeLens"]); ok {
 		settings.Features.CodeLens = value
+	}
+	if value, ok := toBool(raw["features.inlayHints"]); ok {
+		settings.Features.InlayHints = value
+	}
+
+	// Inlay hints
+	if inlayHintsRaw, ok := raw["inlayHints"].(map[string]interface{}); ok {
+		if value, ok := toBool(inlayHintsRaw["inferredAmounts"]); ok {
+			settings.InlayHints.InferredAmounts = value
+		}
+		if value, ok := toBool(inlayHintsRaw["runningBalances"]); ok {
+			settings.InlayHints.RunningBalances = value
+		}
+		if value, ok := toBool(inlayHintsRaw["costExpansion"]); ok {
+			settings.InlayHints.CostExpansion = value
+		}
+	}
+	if value, ok := toBool(raw["inlayHints.inferredAmounts"]); ok {
+		settings.InlayHints.InferredAmounts = value
+	}
+	if value, ok := toBool(raw["inlayHints.runningBalances"]); ok {
+		settings.InlayHints.RunningBalances = value
+	}
+	if value, ok := toBool(raw["inlayHints.costExpansion"]); ok {
+		settings.InlayHints.CostExpansion = value
 	}
 
 	// Completion

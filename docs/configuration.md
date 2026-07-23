@@ -19,6 +19,18 @@ Enable or disable specific LSP features.
 | `hledger.features.workspaceSymbol` | `true` | Workspace symbol search |
 | `hledger.features.inlineCompletion` | `true` | Ghost text completions for transaction templates |
 | `hledger.features.codeLens` | `false` | Balance check indicators on transactions |
+| `hledger.features.inlayHints` | `true` | Inlay hints for inferred amounts and optional balance facts |
+
+## Inlay hints
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `hledger.inlayHints.inferredAmounts` | `true` | Show the inferred amount for a single elided posting |
+| `hledger.inlayHints.runningBalances` | `false` | Show the account balance after each posting |
+| `hledger.inlayHints.costExpansion` | `false` | Show the signed balancing contribution of `@` and `@@` costs |
+
+Running balances are omitted when include ownership or occurrence is ambiguous,
+or a transaction contains a posting-level `date:` or `date2:` tag.
 
 ## Completion
 
@@ -155,6 +167,10 @@ The same alignment settings are used by document/range formatting, format-on-typ
   "hledger.features.workspaceSymbol": true,
   "hledger.features.inlineCompletion": true,
   "hledger.features.codeLens": false,
+  "hledger.features.inlayHints": true,
+  "hledger.inlayHints.inferredAmounts": true,
+  "hledger.inlayHints.runningBalances": false,
+  "hledger.inlayHints.costExpansion": false,
   "hledger.completion.maxResults": 100,
   "hledger.completion.fuzzyMatching": true,
   "hledger.completion.includeNotes": true,
@@ -191,6 +207,12 @@ lspconfig.hledger_lsp.setup({
         workspaceSymbol = true,
         inlineCompletion = true,
         codeLens = false,
+        inlayHints = true,
+      },
+      inlayHints = {
+        inferredAmounts = true,
+        runningBalances = false,
+        costExpansion = false,
       },
       completion = {
         maxResults = 100,
@@ -233,7 +255,8 @@ lspconfig.hledger_lsp.setup({
     (:features (:hover t :completion t :formatting t :diagnostics t
                 :semanticTokens t :codeActions t :foldingRanges t
                 :documentLinks t :workspaceSymbol t :inlineCompletion t
-                :codeLens nil)
+                :codeLens nil :inlayHints t)
+     :inlayHints (:inferredAmounts t :runningBalances nil :costExpansion nil)
      :completion (:maxResults 100 :fuzzyMatching t :showCounts t :includeNotes t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)

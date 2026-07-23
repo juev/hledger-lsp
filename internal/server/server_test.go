@@ -1119,6 +1119,9 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 				assert.True(t, bool(formatEnabled))
 				assert.NotNil(t, caps.SemanticTokensProvider)
 				assert.NotNil(t, caps.CodeActionProvider)
+				inlayHintsEnabled, ok := caps.InlayHintProvider.(protocol.Boolean)
+				require.True(t, ok)
+				assert.True(t, bool(inlayHintsEnabled))
 			},
 		},
 		{

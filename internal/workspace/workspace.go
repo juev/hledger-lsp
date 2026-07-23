@@ -264,6 +264,25 @@ func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 	return tree.Resolved
 }
 
+// GetUniqueResolvedForFile returns the resolved journal only when exactly one
+// include-tree root owns path. Callers that need an unambiguous transaction
+// context, such as running balance calculations, must use this method instead
+// of the deterministic primary-root fallback.
+func (w *Workspace) GetUniqueResolvedForFile(path string) (*include.ResolvedJournal, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	roots := w.fileTree[path]
+	if len(roots) != 1 {
+		return nil, false
+	}
+	tree := w.trees[roots[0]]
+	if tree == nil || tree.Resolved == nil {
+		return nil, false
+	}
+	return tree.Resolved, true
+}
+
 // ResolvedForRootContent returns a root tree only when its resolved state was
 // built from content. The caller must pass CRLF-normalized content.
 func (w *Workspace) ResolvedForRootContent(path, content string) (*include.ResolvedJournal, []include.LoadError) {

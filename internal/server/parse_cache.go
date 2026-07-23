@@ -21,6 +21,16 @@ type cachedDoc struct {
 	parseErrs    []parser.ParseError
 	balancesOnce sync.Once
 	balances     analyzer.AccountBalances
+	effectsOnce  sync.Once
+	effects      []analyzer.PostingEffect
+}
+
+func (s *Server) cachedPostingEffects(docURI uri.URI, content string) []analyzer.PostingEffect {
+	doc := s.cachedParse(docURI, content)
+	doc.effectsOnce.Do(func() {
+		doc.effects = analyzer.CalculatePostingEffects(doc.journal)
+	})
+	return doc.effects
 }
 
 // cachedParse returns the parse result for content, reparsing only when the

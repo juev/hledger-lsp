@@ -1270,6 +1270,34 @@ func TestWorkspace_GetResolvedForFile_RepeatedInclude(t *testing.T) {
 	assert.Len(t, allTx, 3, "child tx counted twice + root tx once")
 }
 
+func TestWorkspace_GetUniqueResolvedForFile(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+	childPath := filepath.Join(tmpDir, "child.journal")
+	rootOnePath := filepath.Join(tmpDir, "one.journal")
+	rootTwoPath := filepath.Join(tmpDir, "two.journal")
+	require.NoError(t, os.WriteFile(childPath, []byte("account assets:cash\n"), 0644))
+	require.NoError(t, os.WriteFile(rootOnePath, []byte("include child.journal\n"), 0644))
+	require.NoError(t, os.WriteFile(rootTwoPath, []byte("include child.journal\n"), 0644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	resolved, ok := ws.GetUniqueResolvedForFile(rootOnePath)
+	require.True(t, ok)
+	assert.NotNil(t, resolved)
+
+	resolved, ok = ws.GetUniqueResolvedForFile(childPath)
+	assert.False(t, ok)
+	assert.Nil(t, resolved)
+
+	resolved, ok = ws.GetUniqueResolvedForFile(filepath.Join(tmpDir, "missing.journal"))
+	assert.False(t, ok)
+	assert.Nil(t, resolved)
+}
+
 func TestWorkspace_AllTrees(t *testing.T) {
 	t.Setenv("LEDGER_FILE", "")
 	t.Setenv("HLEDGER_JOURNAL", "")

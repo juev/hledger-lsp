@@ -135,6 +135,18 @@ func TestCalculateAccountBalances_InferredWithinRealGroup(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(50), balances["budget:available"]["$"])
 }
 
+func TestCalculateAccountBalances_IncludesUnbalancedVirtualPostings(t *testing.T) {
+	journal, errs := parser.Parse(`2024-01-15 test
+    assets:cash  $10
+    equity:opening  $-10
+    (memo:adjustment)  $3
+`)
+	require.Empty(t, errs)
+
+	balances := CalculateAccountBalances(journal)
+	assert.Equal(t, decimal.NewFromInt(3), balances["memo:adjustment"]["$"])
+}
+
 func TestCalculateAccountBalances_EmptyJournal(t *testing.T) {
 	input := ``
 

@@ -261,6 +261,10 @@ func (d *serverDispatcher) Hover(ctx context.Context, params *protocol.HoverPara
 	return d.srv.Hover(ctx, params)
 }
 
+func (d *serverDispatcher) InlayHint(ctx context.Context, params *protocol.InlayHintParams) ([]protocol.InlayHint, error) {
+	return d.srv.InlayHint(ctx, params)
+}
+
 func (d *serverDispatcher) Implementation(ctx context.Context, params *protocol.ImplementationParams) (protocol.DefinitionResult, error) {
 	return nil, nil
 }
