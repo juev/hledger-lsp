@@ -43,6 +43,8 @@ const (
 	ModifierDefinition  = 1
 	ModifierAbstract    = 5
 	ModifierNegative    = 6 // custom: amounts with a leading minus sign
+	ModifierUndeclared  = 7 // custom: accounts with an UNDECLARED_ACCOUNT diagnostic
+	ModifierUnbalanced  = 8 // custom: amounts in an UNBALANCED transaction
 )
 
 type SemanticTokensFullOptions struct {
@@ -78,7 +80,9 @@ func GetSemanticTokensLegend() protocol.SemanticTokensLegend {
 			string(protocol.SemanticTokenModifiersStatic),      // 3
 			string(protocol.SemanticTokenModifiersDeprecated),  // 4
 			string(protocol.SemanticTokenModifiersAbstract),    // 5: virtual accounts
-			"negative", // 6: negative amounts
+			"negative",   // 6: negative amounts
+			"undeclared", // 7: accounts with an UNDECLARED_ACCOUNT diagnostic
+			"unbalanced", // 8: amounts in an UNBALANCED transaction
 		},
 	}
 }
@@ -165,7 +169,7 @@ func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.Semant
 		return &protocol.SemanticTokens{Data: []uint32{}}, nil
 	}
 
-	tokens := tokenizeDoc(params.TextDocument.URI, doc)
+	tokens := s.semanticTokensForDocument(params.TextDocument.URI, doc)
 	data := encodeTokens(tokens)
 	resultID := s.tokenCache.set(params.TextDocument.URI, tokens, data)
 
@@ -185,7 +189,7 @@ func (s *Server) SemanticTokensRange(ctx context.Context, params *protocol.Seman
 		return &protocol.SemanticTokens{Data: []uint32{}}, nil
 	}
 
-	allTokens := tokenizeDoc(params.TextDocument.URI, doc)
+	allTokens := s.semanticTokensForDocument(params.TextDocument.URI, doc)
 	filteredTokens := filterTokensByRange(allTokens, params.Range)
 	data := encodeTokens(filteredTokens)
 
@@ -200,6 +204,84 @@ func tokenizeDoc(uri uri.URI, doc string) []semanticToken {
 		return tokenizeRulesForSemantics(doc)
 	}
 	return tokenizeForSemantics(doc)
+}
+
+// semanticTokensForDocument adds diagnostic modifiers to journal tokens. Rules
+// files and documents that cannot enter the diagnostics path remain syntax-only.
+func (s *Server) semanticTokensForDocument(docURI uri.URI, doc string) []semanticToken {
+	tokens := tokenizeDoc(docURI, doc)
+	if filetype.IsRules(string(docURI)) {
+		return tokens
+	}
+
+	settings := s.getSettings()
+	if !settings.Features.Diagnostics || s.loader.FileSizeError(doc) != nil {
+		return tokens
+	}
+
+	path := uriToPath(docURI)
+	if path == "" {
+		return tokens
+	}
+
+	undeclaredByLine := make(map[uint32][]protocol.Range)
+	unbalancedByLine := make(map[uint32][]protocol.Range)
+	for _, diagnostic := range s.analyze(docURI, path, doc) {
+		code, ok := diagnostic.Code.(protocol.String)
+		if !ok {
+			continue
+		}
+		switch string(code) {
+		case "UNDECLARED_ACCOUNT":
+			indexDiagnosticRangeByLine(undeclaredByLine, diagnostic.Range)
+		case "UNBALANCED":
+			indexDiagnosticRangeByLine(unbalancedByLine, diagnostic.Range)
+		}
+	}
+
+	for index := range tokens {
+		switch tokens[index].tokenType {
+		case TokenTypeAccount:
+			for _, diagnosticRange := range undeclaredByLine[tokens[index].line] {
+				if semanticTokenOverlapsRange(tokens[index], diagnosticRange) {
+					tokens[index].modifiers |= 1 << ModifierUndeclared
+					break
+				}
+			}
+		case TokenTypeAmount:
+			for _, diagnosticRange := range unbalancedByLine[tokens[index].line] {
+				if semanticRangeContainsToken(diagnosticRange, tokens[index]) {
+					tokens[index].modifiers |= 1 << ModifierUnbalanced
+					break
+				}
+			}
+		}
+	}
+
+	return tokens
+}
+
+func indexDiagnosticRangeByLine(index map[uint32][]protocol.Range, diagnosticRange protocol.Range) {
+	for line := diagnosticRange.Start.Line; ; line++ {
+		index[line] = append(index[line], diagnosticRange)
+		if line == diagnosticRange.End.Line {
+			break
+		}
+	}
+}
+
+func semanticTokenOverlapsRange(token semanticToken, diagnosticRange protocol.Range) bool {
+	tokenRange := protocol.Range{
+		Start: protocol.Position{Line: token.line, Character: token.col},
+		End:   protocol.Position{Line: token.line, Character: token.col + token.length},
+	}
+	return positionBefore(tokenRange.Start, diagnosticRange.End) && positionBefore(diagnosticRange.Start, tokenRange.End)
+}
+
+func semanticRangeContainsToken(diagnosticRange protocol.Range, token semanticToken) bool {
+	start := protocol.Position{Line: token.line, Character: token.col}
+	end := protocol.Position{Line: token.line, Character: token.col + token.length}
+	return !positionBefore(start, diagnosticRange.Start) && !positionBefore(diagnosticRange.End, end)
 }
 
 // tokenizeRulesForSemantics converts rules semantic tokens to the server's token format.
@@ -240,7 +322,7 @@ func rulesTokenTypeToServer(t rules.SemTokenType) uint32 {
 func filterTokensByRange(tokens []semanticToken, r protocol.Range) []semanticToken {
 	var filtered []semanticToken
 	for _, tok := range tokens {
-		if tok.line >= r.Start.Line && tok.line <= r.End.Line {
+		if semanticTokenOverlapsRange(tok, r) {
 			filtered = append(filtered, tok)
 		}
 	}
