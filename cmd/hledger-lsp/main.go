@@ -37,7 +37,52 @@ func main() {
 }
 
 func newServerConnection(ctx context.Context, rwc io.ReadWriteCloser, srv *server.Server) (context.Context, jsonrpc2.Conn, protocol.Client) {
-	return protocol.NewServer(ctx, newServerDispatcher(srv), jsonrpc2.NewStream(rwc))
+	return newProtocolServerConnection(ctx, rwc, newServerDispatcher(srv))
+}
+
+func newProtocolServerConnection(ctx context.Context, rwc io.ReadWriteCloser, srv protocol.Server) (context.Context, jsonrpc2.Conn, protocol.Client) {
+	conn := jsonrpc2.NewConn(jsonrpc2.NewStream(rwc), jsonrpc2.WithCodec(lspCodec{}))
+	client := protocol.ClientDispatcher(conn)
+	ctx = protocol.WithClient(ctx, client)
+
+	serverHandler := protocol.ServerHandler(srv, jsonrpc2.MethodNotFoundHandler)
+	handler := protocol.CancelHandler(func(ctx context.Context, req *jsonrpc2.Request) (any, error) {
+		if req.IsCall() {
+			jsonrpc2.Async(ctx)
+		}
+		return serverHandler(ctx, req)
+	})
+	conn.Go(ctx, handler)
+
+	return ctx, conn, client
+}
+
+type lspCodec struct{}
+
+func (lspCodec) Marshal(v any) ([]byte, error) {
+	switch m := v.(type) {
+	case jsonrpc2.RawMessage:
+		if m == nil {
+			return []byte("null"), nil
+		}
+		return m, nil
+	case *jsonrpc2.RawMessage:
+		if m == nil || *m == nil {
+			return []byte("null"), nil
+		}
+		return *m, nil
+	}
+	return protocol.Marshal(v)
+}
+
+func (lspCodec) Unmarshal(data []byte, v any) error {
+	if p, ok := v.(*jsonrpc2.RawMessage); ok {
+		b := make(jsonrpc2.RawMessage, len(data))
+		copy(b, data)
+		*p = b
+		return nil
+	}
+	return protocol.Unmarshal(data, v)
 }
 
 func exitCodeForConnErr(err error) int {

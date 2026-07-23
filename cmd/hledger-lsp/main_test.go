@@ -133,6 +133,93 @@ func TestLSPWire(t *testing.T) {
 	}
 }
 
+func TestLSPWire_DidChangeCompletesBeforeInlineCompletion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	serverPipe, clientPipe := net.Pipe()
+	server := &blockingDidChangeServer{
+		didChangeStarted: make(chan struct{}),
+		unblockDidChange: make(chan struct{}),
+		didChangeDone:    make(chan struct{}),
+		inlineStarted:    make(chan struct{}),
+	}
+	_, serverConn, _ := newProtocolServerConnection(ctx, serverPipe, server)
+	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{}, jsonrpc2.NewStream(clientPipe))
+	t.Cleanup(func() {
+		require.NoError(t, clientConn.Close())
+		require.NoError(t, serverConn.Close())
+		<-clientConn.Done()
+		<-serverConn.Done()
+	})
+
+	documentURI := uri.URI("file:///ordering.journal")
+	require.NoError(t, clientServer.DidChange(ctx, &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: documentURI},
+			Version:                1,
+		},
+	}))
+	require.Eventually(t, func() bool {
+		select {
+		case <-server.didChangeStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	inlineResult := make(chan error, 1)
+	go func() {
+		_, err := clientServer.InlineCompletion(ctx, &protocol.InlineCompletionParams{
+			TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+			},
+		})
+		inlineResult <- err
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case <-server.inlineStarted:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, time.Millisecond)
+
+	close(server.unblockDidChange)
+	require.Eventually(t, func() bool {
+		select {
+		case <-server.didChangeDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.NoError(t, <-inlineResult)
+}
+
+type blockingDidChangeServer struct {
+	protocol.UnimplementedServer
+	didChangeStarted chan struct{}
+	unblockDidChange chan struct{}
+	didChangeDone    chan struct{}
+	inlineStarted    chan struct{}
+}
+
+func (s *blockingDidChangeServer) DidChange(_ context.Context, _ *protocol.DidChangeTextDocumentParams) error {
+	close(s.didChangeStarted)
+	<-s.unblockDidChange
+	close(s.didChangeDone)
+	return nil
+}
+
+func (s *blockingDidChangeServer) InlineCompletion(_ context.Context, _ *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
+	close(s.inlineStarted)
+	return &protocol.InlineCompletionList{}, nil
+}
+
 type testClient struct {
 	protocol.UnimplementedClient
 	diagnostics chan<- protocol.PublishDiagnosticsParams
