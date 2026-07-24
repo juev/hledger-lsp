@@ -52,6 +52,18 @@ func (s *Server) Symbols(ctx context.Context, params *protocol.WorkspaceSymbolPa
 	return protocol.SymbolInformationSlice(symbols), nil
 }
 
+func (s *Server) PrepareTypeHierarchy(ctx context.Context, params *protocol.TypeHierarchyPrepareParams) ([]protocol.TypeHierarchyItem, error) {
+	return s.prepareTypeHierarchy(ctx, params)
+}
+
+func (s *Server) Supertypes(ctx context.Context, params *protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
+	return s.typeHierarchySupertypes(ctx, params)
+}
+
+func (s *Server) Subtypes(ctx context.Context, params *protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
+	return s.typeHierarchySubtypes(ctx, params)
+}
+
 func (s *Server) Request(ctx context.Context, method string, params any) (any, error) {
 	if method != "hledger/payeeAccountHistory" {
 		return s.UnimplementedServer.Request(ctx, method, params)
