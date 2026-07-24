@@ -160,6 +160,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		DefinitionProvider:        protocol.Boolean(true),
 		ReferencesProvider:        protocol.Boolean(true),
 		RenameProvider:            protocol.Boolean(true),
+		TypeHierarchyProvider:     protocol.Boolean(true),
 	}
 	if s.clientCapabilities.supportsRenamePrepare {
 		caps.RenameProvider = &protocol.RenameOptions{PrepareProvider: boolPtr(true)}

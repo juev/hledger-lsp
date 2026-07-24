@@ -92,6 +92,13 @@ func TestServer_Initialized_NonBlocking(t *testing.T) {
 	}
 }
 
+func TestServer_Initialize_AdvertisesTypeHierarchy(t *testing.T) {
+	srv := NewServer()
+	result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{})
+	require.NoError(t, err)
+	assert.Equal(t, protocol.Boolean(true), result.Capabilities.TypeHierarchyProvider)
+}
+
 func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
 	srv := NewServer()
 	srv.diagDebounce = 0
