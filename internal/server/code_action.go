@@ -51,17 +51,33 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 	}
 	quickFixes := s.getQuickFixCodeActions(params)
 
-	result := make([]protocol.CommandOrCodeAction, 0, len(actions)+len(quickFixes))
-	for i := range quickFixes {
-		result = append(result, &quickFixes[i])
-	}
-	for _, action := range actions {
-		a := action
-		a.Diagnostics = nil
-		result = append(result, &a)
+	generated := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes))
+	generated = append(generated, quickFixes...)
+	generated = append(generated, actions...)
+	return s.codeActionResult(generated), nil
+}
+
+func (s *Server) codeActionResult(actions []protocol.CodeAction) []protocol.CommandOrCodeAction {
+	result := make([]protocol.CommandOrCodeAction, 0, len(actions))
+	if s.clientCapabilities.supportsCodeActionLiterals {
+		for _, action := range actions {
+			if !s.clientCapabilities.supportsCodeActionIsPreferred {
+				action.IsPreferred = nil
+			}
+			result = append(result, &action)
+		}
+		return result
 	}
 
-	return result, nil
+	for _, action := range actions {
+		if action.Command.Command == "" {
+			continue
+		}
+		command := action.Command
+		result = append(result, &command)
+	}
+
+	return result
 }
 
 func (s *Server) getQuickFixCodeActions(params *protocol.CodeActionParams) []protocol.CodeAction {

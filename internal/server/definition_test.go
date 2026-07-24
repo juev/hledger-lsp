@@ -30,7 +30,7 @@ func TestDefinition_AccountDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
@@ -60,7 +60,7 @@ func TestDefinition_AccountFallback(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
@@ -89,7 +89,7 @@ func TestDefinition_CommodityDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
@@ -119,7 +119,7 @@ func TestDefinition_Payee(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
@@ -145,7 +145,7 @@ func TestDefinition_UnknownPosition(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	assert.Empty(t, result) // empty response, no error
 }
@@ -162,7 +162,7 @@ func TestDefinition_DocumentNotFound(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	assert.Empty(t, result)
 }
@@ -188,7 +188,7 @@ func TestDefinition_CommodityOnRight(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 
@@ -214,7 +214,7 @@ func TestDefinition_CursorOnAccountDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
@@ -239,7 +239,7 @@ func TestDefinition_CursorOnCommodityDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
@@ -263,7 +263,7 @@ func TestDefinition_CursorOnPayeeDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, uint32(2), result[0].Range.Start.Line) // first transaction usage
@@ -290,14 +290,14 @@ func TestDefinition_AccountBoundary(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Definition(context.Background(), params)
+	result, err := srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)
 
 	// Test cursor at end of account name
 	params.Position = protocol.Position{Line: 3, Character: 16} // at end of "expenses:food"
-	result, err = srv.Definition(context.Background(), params)
+	result, err = srv.definition(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	assert.Equal(t, uint32(0), result[0].Range.Start.Line)

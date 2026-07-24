@@ -42,6 +42,27 @@ func TestCompletionResolve_Account(t *testing.T) {
 	assert.NotNil(t, result.Documentation)
 }
 
+func TestCompletionResolve_UsesClientPreferredMarkup(t *testing.T) {
+	srv := NewServer()
+	srv.clientCapabilities.completionDocumentationFormats = []protocol.MarkupKind{protocol.MarkupKindPlainText, protocol.MarkupKindMarkdown}
+	content := `account expenses:food
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash  $-50`
+	uri := uri.URI("file:///test.journal")
+	srv.documents.Store(uri, content)
+
+	data := completionResolveData{Kind: "account", Label: "expenses:food", DocURI: uri}
+	item := &protocol.CompletionItem{Label: "expenses:food", Data: mustMarshalLSPAny(t, data)}
+
+	result, err := srv.CompletionResolve(context.Background(), item)
+	require.NoError(t, err)
+	contentResult := result.Documentation.(*protocol.MarkupContent)
+	assert.Equal(t, protocol.MarkupKindPlainText, contentResult.Kind)
+	assert.NotContains(t, contentResult.Value, "**")
+}
+
 func TestCompletionResolve_Payee(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-15 grocery

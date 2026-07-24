@@ -26,7 +26,7 @@ type definitionTarget struct {
 	symbolRange *protocol.Range
 }
 
-func (s *Server) Definition(ctx context.Context, params *protocol.DefinitionParams) ([]protocol.Location, error) {
+func (s *Server) definition(_ context.Context, params *protocol.DefinitionParams) ([]protocol.Location, error) {
 	doc, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil

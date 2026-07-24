@@ -38,6 +38,9 @@ type diagEntry struct {
 }
 
 type Server struct {
+	protocol.UnimplementedServer
+
+	version               string
 	client                protocol.Client
 	documents             sync.Map
 	analyzer              *analyzer.Analyzer
@@ -49,6 +52,7 @@ type Server struct {
 	workspace             *workspace.Workspace
 	settings              serverSettings
 	settingsMu            sync.RWMutex
+	clientCapabilities    clientCapabilities
 	supportsConfiguration bool
 	payeeTemplatesCache   sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
 	alignmentCache        sync.Map // map[uri.URI]int
@@ -63,7 +67,12 @@ type Server struct {
 }
 
 func NewServer() *Server {
+	return NewServerWithVersion("dev")
+}
+
+func NewServerWithVersion(version string) *Server {
 	srv := &Server{
+		version:      version,
 		analyzer:     analyzer.New(),
 		loader:       include.NewLoader(),
 		rulesLoader:  rules.NewLoader(),
@@ -106,12 +115,13 @@ func (s *Server) StoreDocument(uri uri.URI, content string) {
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
-	if params != nil && params.Capabilities.Workspace != nil {
-		if configuration := params.Capabilities.Workspace.Configuration; configuration != nil {
-			s.supportsConfiguration = *configuration
-		}
+	if client, ok := protocol.ClientFromContext(ctx); ok {
+		s.SetClient(client)
 	}
+
 	if params != nil {
+		s.clientCapabilities = newClientCapabilities(params.Capabilities)
+		s.supportsConfiguration = s.clientCapabilities.supportsConfiguration
 		settings := parseSettingsFromLSPAny(s.getSettings(), params.InitializationOptions)
 		s.setSettings(settings)
 
@@ -149,9 +159,10 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		SelectionRangeProvider:    protocol.Boolean(true),
 		DefinitionProvider:        protocol.Boolean(true),
 		ReferencesProvider:        protocol.Boolean(true),
-		RenameProvider: &protocol.RenameOptions{
-			PrepareProvider: boolPtr(true),
-		},
+		RenameProvider:            protocol.Boolean(true),
+	}
+	if s.clientCapabilities.supportsRenamePrepare {
+		caps.RenameProvider = &protocol.RenameOptions{PrepareProvider: boolPtr(true)}
 	}
 
 	if settings.Features.Completion {
@@ -188,11 +199,14 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		caps.WorkspaceSymbolProvider = protocol.Boolean(true)
 	}
 	if settings.Features.CodeActions {
-		caps.CodeActionProvider = &protocol.CodeActionOptions{
-			CodeActionKinds: []protocol.CodeActionKind{
-				protocol.CodeActionKindQuickFix,
-				"source.hledger",
-			},
+		caps.CodeActionProvider = protocol.Boolean(true)
+		if s.clientCapabilities.supportsCodeActionLiterals {
+			caps.CodeActionProvider = &protocol.CodeActionOptions{
+				CodeActionKinds: []protocol.CodeActionKind{
+					protocol.CodeActionKindQuickFix,
+					"source.hledger",
+				},
+			}
 		}
 	}
 
@@ -213,20 +227,14 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		caps.ExecuteCommandProvider = protocol.ExecuteCommandOptions{Commands: commands}
 	}
 	if settings.Features.InlineCompletion {
-		experimental, err := protocol.Marshal(map[string]any{
-			"inlineCompletionProvider": true,
-		})
-		if err != nil {
-			return nil, err
-		}
-		caps.Experimental = protocol.LSPAny(experimental)
+		caps.InlineCompletionProvider = &protocol.InlineCompletionOptions{}
 	}
 
 	return &protocol.InitializeResult{
 		Capabilities: caps,
 		ServerInfo: protocol.ServerInfo{
 			Name:    "hledger-lsp",
-			Version: protocol.NewOptional("0.1.0"),
+			Version: protocol.NewOptional(s.version),
 		},
 	}, nil
 }
@@ -241,7 +249,9 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 		}
 	}
 	go s.refreshConfiguration(context.Background())
-	go s.registerFileWatchers()
+	if s.clientCapabilities.supportsDynamicFileWatchers {
+		go s.registerFileWatchers()
+	}
 	return nil
 }
 

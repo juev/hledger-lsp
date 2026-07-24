@@ -26,12 +26,15 @@ func TestPrepareRename_Account(t *testing.T) {
 		},
 	}
 
-	result, err := srv.PrepareRename(context.Background(), params)
+	result, err := srv.prepareRename(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Equal(t, uint32(1), result.Start.Line)
-	assert.Equal(t, uint32(4), result.Start.Character)
+	renameRange, ok := result.(*protocol.Range)
+	require.True(t, ok)
+
+	assert.Equal(t, uint32(1), renameRange.Start.Line)
+	assert.Equal(t, uint32(4), renameRange.Start.Character)
 }
 
 func TestPrepareRename_InvalidPosition(t *testing.T) {
@@ -50,7 +53,7 @@ func TestPrepareRename_InvalidPosition(t *testing.T) {
 		},
 	}
 
-	result, err := srv.PrepareRename(context.Background(), params)
+	result, err := srv.prepareRename(context.Background(), params)
 	require.NoError(t, err)
 	assert.Nil(t, result)
 }

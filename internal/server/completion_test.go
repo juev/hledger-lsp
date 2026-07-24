@@ -36,7 +36,7 @@ account expenses:food
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -73,7 +73,7 @@ func TestCompletion_AccountsShowUsageCount(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -121,7 +121,7 @@ func TestCompletion_PayeesShowUsageCount(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -165,7 +165,7 @@ account assets:cash
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -197,7 +197,7 @@ func TestCompletion_Payees(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -233,7 +233,7 @@ func TestCompletion_Commodities(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -255,7 +255,7 @@ func TestCompletion_EmptyDocument(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -277,7 +277,7 @@ func TestCompletion_DocumentNotFound(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Empty(t, result.Items)
@@ -306,7 +306,7 @@ account expenses:food
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Items, 1)
@@ -416,7 +416,7 @@ func TestCompletion_TagNames(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -449,7 +449,7 @@ func TestCompletion_TagNames_NoDuplicates(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -486,7 +486,7 @@ func TestCompletion_TagValues(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -518,7 +518,7 @@ func TestCompletion_TagValues_OnlyForCurrentTag(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -584,7 +584,7 @@ func TestCompletion_Date_BuiltIn(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -620,7 +620,7 @@ func TestCompletion_Date_Historical(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -648,7 +648,7 @@ func TestCompletion_Date_UsesFileFormat(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -683,7 +683,7 @@ func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -716,7 +716,7 @@ account expenses:food
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -751,7 +751,7 @@ func TestCompletion_Date_UsesDotSeparator(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -786,7 +786,7 @@ func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -825,7 +825,7 @@ func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -869,7 +869,7 @@ func TestCompletion_PayeeInsertsOnlyPayeeName(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -913,7 +913,7 @@ func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -973,7 +973,7 @@ func TestCompletion_RankingByFrequency(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1029,7 +1029,7 @@ func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1101,7 +1101,7 @@ func TestCompletion_MaxResultsPreservesFrequent(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1149,7 +1149,7 @@ func TestCompletion_MaxResultsAccountsPreservesFrequent(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1218,7 +1218,7 @@ include transactions.journal`
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1251,7 +1251,7 @@ func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1279,7 +1279,7 @@ func TestCompletion_FilterTextSameForAllItems(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) >= 2, "should have multiple completion items matching 'exp'")
@@ -1502,7 +1502,7 @@ func TestCompletion_FiltersAndSortsByFrequency(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1558,7 +1558,7 @@ func TestCompletion_ConsecutiveMatchBeforeSparse(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1672,7 +1672,7 @@ commodity RUB
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1702,7 +1702,7 @@ account `
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1730,7 +1730,7 @@ commodity U`
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -1790,7 +1790,7 @@ account expenses:food
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "should have completion items")
@@ -1833,7 +1833,7 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2027,7 +2027,7 @@ func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2065,7 +2065,7 @@ account expenses:food:groceries
 	uri := uri.URI("file:///test.journal")
 	srv.StoreDocument(uri, content)
 
-	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
+	result, err := srv.completion(context.Background(), &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 			Position:     protocol.Position{Line: 4, Character: 7},
@@ -2102,7 +2102,7 @@ func TestCompletion_ShowCountsDisabled(t *testing.T) {
 	uri := uri.URI("file:///test.journal")
 	srv.StoreDocument(uri, content)
 
-	result, err := srv.Completion(context.Background(), &protocol.CompletionParams{
+	result, err := srv.completion(context.Background(), &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 			Position:     protocol.Position{Line: 9, Character: 4},
@@ -2145,7 +2145,7 @@ func TestCompletion_Date_UsesNearbyFormat(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2278,7 +2278,7 @@ func TestCompletion_PartialDateReturnsDates(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "should have completion items for partial date")
@@ -2322,7 +2322,7 @@ func TestCompletion_PartialDateOverridesFileFormat(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "should have completion items when typing year prefix")
@@ -2362,7 +2362,7 @@ func TestCompletion_ShortDateKeepsShortFormat(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "should have completion items for short date prefix")
@@ -2429,7 +2429,7 @@ commodity RUB
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2628,7 +2628,7 @@ func TestCompletion_PayeeWithTab(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2861,7 +2861,7 @@ func TestCompletion_IncludeNotes_True_ShowsFullDescription(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2895,7 +2895,7 @@ func TestCompletion_IncludeNotes_False_ShowsPayeeOnly(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2926,7 +2926,7 @@ func TestCompletion_IncludeNotes_DefaultTrue(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2955,7 +2955,7 @@ func TestCompletion_ExcludesCurrentTransactionAccounts(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -2983,7 +2983,7 @@ func TestCompletion_ExcludesCurrentTransactionPayee(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3014,7 +3014,7 @@ func TestCompletion_CursorBetweenTransactions(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3049,7 +3049,7 @@ account assets:cash
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3115,7 +3115,7 @@ func TestRulesCompletion_HasTextEdit(t *testing.T) {
 			Position:     protocol.Position{Line: 0, Character: 6},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3136,7 +3136,7 @@ func TestRulesCompletion_TextEditRange(t *testing.T) {
 			Position:     protocol.Position{Line: 0, Character: 6},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3158,7 +3158,7 @@ func TestRulesCompletion_TextEditRange_TopLevel(t *testing.T) {
 			Position:     protocol.Position{Line: 0, Character: 3},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3183,7 +3183,7 @@ func TestRulesCompletion_InsideIfBlock_FieldReferences(t *testing.T) {
 			Position:     protocol.Position{Line: 2, Character: 2},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3221,7 +3221,7 @@ func TestRulesCompletion_InsideIfBlock_NoFieldsDeclared(t *testing.T) {
 			Position:     protocol.Position{Line: 1, Character: 2},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3249,7 +3249,7 @@ func TestRulesCompletion_TopLevelStillOffersDirectives(t *testing.T) {
 			Position:     protocol.Position{Line: 0, Character: 3},
 		},
 	}
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotEmpty(t, result.Items)
@@ -3284,7 +3284,7 @@ func TestCompletion_DigitTriggerOnEmptyLine(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "digit trigger should produce date completions")
@@ -3318,7 +3318,7 @@ func TestCompletion_DigitTriggerPartialYear(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "digit trigger on partial year should produce date completions")
@@ -3353,7 +3353,7 @@ func TestCompletion_DigitTriggerInPostingDoesNotReturnDates(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3380,7 +3380,7 @@ func TestCompletion_DigitTriggerInPayeeArea(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3407,7 +3407,7 @@ func TestCompletion_DigitTriggerOnEmptyDocument(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.True(t, len(result.Items) > 0, "digit trigger on empty document should produce date completions")
@@ -3503,7 +3503,7 @@ func TestCompletion_Directive_TypingAccProducesAccount(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3536,7 +3536,7 @@ func TestCompletion_Directive_InsertTextHasTrailingSpace(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3564,7 +3564,7 @@ func TestCompletion_Directive_TextEditFromColumnZero(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3594,7 +3594,7 @@ func TestCompletion_Directive_FuzzyFiltering(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3620,7 +3620,7 @@ func TestCompletion_Directive_AllDirectivesShownOnSingleLetter(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3645,7 +3645,7 @@ func TestCompletion_Directive_MultiWordDirective(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3704,7 +3704,7 @@ func TestCompletion_Directive_CRLF(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3727,7 +3727,7 @@ func TestCompletion_Directive_BlockDirectiveNewlineInsertText(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3755,7 +3755,7 @@ func TestCompletion_Directive_TextEditCoversFullLine(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3798,7 +3798,7 @@ func TestCompletion_TagName_TextEditRange(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3839,7 +3839,7 @@ func TestCompletion_TagValue_TextEditRange(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3874,7 +3874,7 @@ func TestCompletion_TagName_FuzzyMatch(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3966,7 +3966,7 @@ func TestCompletion_TagName_CRLF(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3989,7 +3989,7 @@ func TestCompletion_TagValue_CRLF(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -4017,7 +4017,7 @@ func TestCompletion_TagName_PostingComment(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -4048,7 +4048,7 @@ func TestCompletion_TagValue_PostingComment(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -4112,7 +4112,7 @@ func TestCompletion_PayeeAwareAccountRanking(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -4162,7 +4162,7 @@ func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -4216,7 +4216,7 @@ func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
 		},
 	}
 
-	result, err := srv.Completion(context.Background(), params)
+	result, err := srv.completion(context.Background(), params)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 

@@ -6,31 +6,32 @@ import (
 	"sort"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
-func (s *Server) DocumentSymbol(
-	ctx context.Context,
+func (s *Server) documentSymbols(
+	_ context.Context,
 	params *protocol.DocumentSymbolParams,
-) ([]any, error) {
+) []protocol.DocumentSymbol {
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	if filetype.IsRules(string(params.TextDocument.URI)) {
-		return rulesDocumentSymbols(doc), nil
+		return rulesDocumentSymbols(doc)
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	if journal == nil {
-		return []any{}, nil
+		return nil
 	}
 
-	var symbols []any
+	symbols := make([]protocol.DocumentSymbol, 0, len(journal.Transactions)+len(journal.Directives)+len(journal.Includes))
 
 	symbols = append(symbols, groupTransactionsByMonth(journal.Transactions)...)
 
@@ -42,10 +43,10 @@ func (s *Server) DocumentSymbol(
 		symbols = append(symbols, includeToSymbol(inc))
 	}
 
-	return symbols, nil
+	return symbols
 }
 
-func groupTransactionsByMonth(transactions []ast.Transaction) []any {
+func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.DocumentSymbol {
 	if len(transactions) == 0 {
 		return nil
 	}
@@ -74,7 +75,7 @@ func groupTransactionsByMonth(transactions []ast.Transaction) []any {
 
 	sort.Strings(order)
 
-	result := make([]any, 0, len(order))
+	result := make([]protocol.DocumentSymbol, 0, len(order))
 	for _, key := range order {
 		g := groups[key]
 		rng := *astRangeToProtocol(ast.Range{
@@ -154,10 +155,10 @@ func directiveToSymbol(dir ast.Directive) protocol.DocumentSymbol {
 	}
 }
 
-func rulesDocumentSymbols(doc string) []any {
+func rulesDocumentSymbols(doc string) []protocol.DocumentSymbol {
 	rf, _ := rules.Parse(doc)
 	syms := rules.Symbols(rf)
-	result := make([]any, 0, len(syms))
+	result := make([]protocol.DocumentSymbol, 0, len(syms))
 	for _, sym := range syms {
 		rng := *astRangeToProtocol(sym.Range)
 		result = append(result, protocol.DocumentSymbol{
@@ -168,4 +169,28 @@ func rulesDocumentSymbols(doc string) []any {
 		})
 	}
 	return result
+}
+
+func flattenDocumentSymbols(documentURI uri.URI, symbols []protocol.DocumentSymbol) []protocol.SymbolInformation {
+	result := make([]protocol.SymbolInformation, 0, len(symbols))
+	for _, symbol := range symbols {
+		flattenDocumentSymbol(documentURI, symbol, nil, &result)
+	}
+	return result
+}
+
+func flattenDocumentSymbol(documentURI uri.URI, symbol protocol.DocumentSymbol, containerName *string, result *[]protocol.SymbolInformation) {
+	*result = append(*result, protocol.SymbolInformation{
+		BaseSymbolInformation: protocol.BaseSymbolInformation{
+			Name:          symbol.Name,
+			Kind:          symbol.Kind,
+			Tags:          symbol.Tags,
+			ContainerName: containerName,
+		},
+		Location: protocol.Location{URI: documentURI, Range: symbol.Range},
+	})
+
+	for _, child := range symbol.Children {
+		flattenDocumentSymbol(documentURI, child, &symbol.Name, result)
+	}
 }

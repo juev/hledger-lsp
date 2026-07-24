@@ -20,8 +20,7 @@ func TestDocumentSymbol_Empty(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	assert.Empty(t, result)
 }
 
@@ -34,8 +33,7 @@ func TestDocumentSymbol_DocumentNotFound(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	assert.Nil(t, result)
 }
 
@@ -57,8 +55,7 @@ func TestDocumentSymbol_Transactions(t *testing.T) {
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 1, "transactions grouped by month")
 
 	symbols := toDocumentSymbols(t, result)
@@ -90,8 +87,7 @@ account expenses:food`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -119,8 +115,7 @@ commodity EUR`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -146,8 +141,7 @@ include /path/to/other.journal`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 2)
 
 	symbols := toDocumentSymbols(t, result)
@@ -179,8 +173,7 @@ include ./other.journal`
 		},
 	}
 
-	result, err := srv.DocumentSymbol(context.Background(), params)
-	require.NoError(t, err)
+	result := srv.documentSymbols(context.Background(), params)
 	require.Len(t, result, 4, "month group + account + commodity + include")
 
 	symbols := toDocumentSymbols(t, result)
@@ -204,15 +197,9 @@ include ./other.journal`
 	}
 }
 
-func toDocumentSymbols(t *testing.T, result []any) []protocol.DocumentSymbol {
+func toDocumentSymbols(t *testing.T, result []protocol.DocumentSymbol) []protocol.DocumentSymbol {
 	t.Helper()
-	symbols := make([]protocol.DocumentSymbol, 0, len(result))
-	for _, item := range result {
-		sym, ok := item.(protocol.DocumentSymbol)
-		require.True(t, ok, "expected protocol.DocumentSymbol")
-		symbols = append(symbols, sym)
-	}
-	return symbols
+	return result
 }
 
 func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
@@ -253,8 +240,7 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 				},
 			}
 
-			result, err := srv.DocumentSymbol(context.Background(), params)
-			require.NoError(t, err)
+			result := srv.documentSymbols(context.Background(), params)
 			require.NotEmpty(t, result, "expected at least one symbol")
 
 			symbols := toDocumentSymbols(t, result)
@@ -266,4 +252,63 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 				"Range.End.Character should be a reasonable value (not overflow), got %d", sym.Range.End.Character)
 		})
 	}
+}
+
+func TestDocumentSymbol_ProtocolResultMatchesClientHierarchySupport(t *testing.T) {
+	const documentURI = uri.URI("file:///test.journal")
+	params := &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+	}
+
+	newServerWithDocument := func() *Server {
+		srv := NewServer()
+		srv.documents.Store(documentURI, `2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`)
+		return srv
+	}
+
+	t.Run("hierarchical client", func(t *testing.T) {
+		srv := newServerWithDocument()
+		srv.clientCapabilities.supportsHierarchicalDocumentSymbols = true
+
+		result, err := srv.DocumentSymbol(context.Background(), params)
+		require.NoError(t, err)
+		symbols, ok := result.(protocol.DocumentSymbolSlice)
+		require.True(t, ok)
+		require.Len(t, symbols, 1)
+		require.Len(t, symbols[0].Children, 1)
+	})
+
+	t.Run("minimal client", func(t *testing.T) {
+		srv := newServerWithDocument()
+		hierarchical := srv.documentSymbols(context.Background(), params)
+		require.Len(t, hierarchical, 1)
+		require.Len(t, hierarchical[0].Children, 1)
+
+		result, err := srv.DocumentSymbol(context.Background(), params)
+		require.NoError(t, err)
+		symbols, ok := result.(protocol.SymbolInformationSlice)
+		require.True(t, ok)
+		require.Len(t, symbols, 2)
+		assert.Equal(t, documentURI, symbols[0].Location.URI)
+		assert.Equal(t, hierarchical[0].Range, symbols[0].Location.Range)
+		assert.Nil(t, symbols[0].ContainerName)
+		assert.Equal(t, "2024-01", *symbols[1].ContainerName)
+		assert.Equal(t, documentURI, symbols[1].Location.URI)
+		assert.Equal(t, hierarchical[0].Children[0].Range, symbols[1].Location.Range)
+	})
+}
+
+func TestFlattenDocumentSymbols_PreservesMetadata(t *testing.T) {
+	symbols := flattenDocumentSymbols("file:///test.journal", []protocol.DocumentSymbol{
+		{
+			Name: "account assets",
+			Kind: protocol.SymbolKindClass,
+			Tags: []protocol.SymbolTag{protocol.SymbolTagDeprecated},
+		},
+	})
+
+	require.Len(t, symbols, 1)
+	assert.Equal(t, []protocol.SymbolTag{protocol.SymbolTagDeprecated}, symbols[0].Tags)
 }

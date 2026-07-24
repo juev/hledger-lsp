@@ -118,6 +118,59 @@ func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
 	assert.True(t, gotPricesPattern, "expected .prices watcher pattern to be registered")
 }
 
+func TestServer_Initialized_MinimalClientDoesNotRegisterFileWatchers(t *testing.T) {
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{})
+	require.NoError(t, err)
+	require.NoError(t, srv.Initialized(context.Background(), &protocol.InitializedParams{}))
+
+	assert.Never(t, func() bool {
+		return len(client.getRegistrations()) > 0
+	}, 100*time.Millisecond, 10*time.Millisecond)
+}
+
+func TestServer_Initialized_DynamicFileWatcherClientRegistersExistingPatternsOnce(t *testing.T) {
+	trueValue := true
+	srv := NewServer()
+	client := &mockClient{}
+	srv.SetClient(client)
+
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
+		Capabilities: protocol.ClientCapabilities{
+			Workspace: &protocol.WorkspaceClientCapabilities{
+				DidChangeWatchedFiles: &protocol.DidChangeWatchedFilesClientCapabilities{
+					DynamicRegistration: &trueValue,
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, srv.Initialized(context.Background(), &protocol.InitializedParams{}))
+
+	require.Eventually(t, func() bool {
+		return len(client.getRegistrations()) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	registrations := client.getRegistrations()
+	require.Len(t, registrations, 1)
+	assert.Equal(t, "workspace/didChangeWatchedFiles", registrations[0].Method)
+
+	watchedOptions, err := unmarshalLSPAny[protocol.DidChangeWatchedFilesRegistrationOptions](registrations[0].RegisterOptions)
+	require.NoError(t, err)
+
+	assert.Equal(t, []protocol.FileSystemWatcher{
+		{GlobPattern: protocol.Pattern("**/*.journal")},
+		{GlobPattern: protocol.Pattern("**/*.hledger")},
+		{GlobPattern: protocol.Pattern("**/*.j")},
+		{GlobPattern: protocol.Pattern("**/*.ledger")},
+		{GlobPattern: protocol.Pattern("**/*.prices")},
+		{GlobPattern: protocol.Pattern("**/*.rules")},
+	}, watchedOptions.Watchers)
+}
+
 // TestServer_DidChangeConfiguration_NonBlocking verifies that DidChangeConfiguration
 // returns immediately without blocking. Uses same timing assumptions as above.
 func TestServer_DidChangeConfiguration_NonBlocking(t *testing.T) {
@@ -180,7 +233,16 @@ func TestServer_Initialize(t *testing.T) {
 
 	require.NotNil(t, result.ServerInfo)
 	assert.Equal(t, "hledger-lsp", result.ServerInfo.Name)
-	assert.Equal(t, "0.1.0", optionalString(result.ServerInfo.Version))
+	assert.Equal(t, "dev", optionalString(result.ServerInfo.Version))
+}
+
+func TestNewServerWithVersion_InitializeReportsVersion(t *testing.T) {
+	srv := NewServerWithVersion("test-version")
+
+	result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "test-version", optionalString(result.ServerInfo.Version))
 }
 
 func TestServer_Initialized(t *testing.T) {

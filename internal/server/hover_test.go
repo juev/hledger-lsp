@@ -15,6 +15,12 @@ import (
 	"github.com/juev/hledger-lsp/internal/formatter"
 )
 
+func newMarkdownHoverServer() *Server {
+	srv := NewServer()
+	srv.clientCapabilities.hoverContentFormats = []protocol.MarkupKind{protocol.MarkupKindMarkdown}
+	return srv
+}
+
 func TestPositionInRange(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -122,6 +128,26 @@ func TestHover_Account(t *testing.T) {
 
 	assert.Contains(t, hoverContent(result), "expenses:food")
 	assert.Contains(t, hoverContent(result), "80")
+}
+
+func TestHover_UsesClientPreferredMarkup(t *testing.T) {
+	srv := NewServer()
+	srv.clientCapabilities.hoverContentFormats = []protocol.MarkupKind{protocol.MarkupKindPlainText, protocol.MarkupKindMarkdown}
+	srv.documents.Store(uri.URI("file:///test.journal"), `2024-01-15 grocery
+    expenses:food  $50
+    assets:cash  $-50`)
+
+	result, err := srv.Hover(context.Background(), &protocol.HoverParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: "file:///test.journal"},
+			Position:     protocol.Position{Line: 1, Character: 10},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	content := result.Contents.(*protocol.MarkupContent)
+	assert.Equal(t, protocol.MarkupKindPlainText, content.Kind)
+	assert.NotContains(t, content.Value, "**")
 }
 
 func TestHover_Amount(t *testing.T) {
@@ -399,7 +425,7 @@ func TestHover_TagWithValuesListed(t *testing.T) {
 }
 
 func TestHover_TagWithEmptyValue(t *testing.T) {
-	srv := NewServer()
+	srv := newMarkdownHoverServer()
 	content := `2024-01-15 grocery ; completed:
     expenses:food  $50
     assets:cash`
@@ -426,7 +452,7 @@ func TestHover_TagWithEmptyValue(t *testing.T) {
 }
 
 func TestHover_TagValueEmpty(t *testing.T) {
-	srv := NewServer()
+	srv := newMarkdownHoverServer()
 	content := `2024-01-15 grocery ; done:
     expenses:food  $50
     assets:cash`
@@ -1059,7 +1085,7 @@ func TestHover_AccountBalanceNoDefaultCommodityKeepsSeparate(t *testing.T) {
 }
 
 func TestHover_AccountBalanceDecimalPrecision(t *testing.T) {
-	srv := NewServer()
+	srv := newMarkdownHoverServer()
 	content := `2024-01-15 grocery
     expenses:food  25.70 USD
     assets:cash  -25.70 USD

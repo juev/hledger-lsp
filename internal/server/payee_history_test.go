@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,13 +20,10 @@ func TestPayeeAccountHistory_EmptyJournal(t *testing.T) {
 
 	srv.documents.Store(uri, content)
 
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -47,13 +43,10 @@ func TestPayeeAccountHistory_SinglePayee(t *testing.T) {
 
 	srv.documents.Store(uri, content)
 
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -83,13 +76,10 @@ func TestPayeeAccountHistory_MultiplePayees(t *testing.T) {
 
 	srv.documents.Store(uri, content)
 
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -121,13 +111,10 @@ func TestPayeeAccountHistory_FrequentAccounts(t *testing.T) {
 
 	srv.documents.Store(uri, content)
 
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -155,13 +142,10 @@ func TestPayeeAccountHistory_Unicode(t *testing.T) {
 
 	srv.documents.Store(uri, content)
 
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -170,30 +154,16 @@ func TestPayeeAccountHistory_Unicode(t *testing.T) {
 	assert.Equal(t, 1, result.PairUsage["Пятёрочка::expenses:food"])
 }
 
-func TestPayeeAccountHistory_InvalidJSON(t *testing.T) {
-	srv := NewServer()
-	client := &mockClient{}
-	srv.SetClient(client)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), json.RawMessage(`{invalid}`))
-
-	assert.Error(t, err)
-	assert.Nil(t, result)
-}
-
 func TestPayeeAccountHistory_UnknownDocument(t *testing.T) {
 	srv := NewServer()
 	client := &mockClient{}
 	srv.SetClient(client)
 
 	uri := uri.URI("file:///unknown.journal")
-	params := PayeeAccountHistoryParams{
+	params := &PayeeAccountHistoryParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, err := srv.PayeeAccountHistory(context.Background(), paramsJSON)
+	result, err := srv.PayeeAccountHistory(context.Background(), params)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)

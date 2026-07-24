@@ -37,7 +37,7 @@ func TestRulesFileGuards_Definition(t *testing.T) {
 	srv := NewServer()
 	srv.documents.Store(rulesFileURI, journalLikeContent)
 
-	result, err := srv.Definition(context.Background(), &protocol.DefinitionParams{
+	result, err := srv.definition(context.Background(), &protocol.DefinitionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: rulesFileURI},
 			Position:     hoverPos,
@@ -66,7 +66,7 @@ func TestRulesFileGuards_PrepareRename(t *testing.T) {
 	srv := NewServer()
 	srv.documents.Store(rulesFileURI, journalLikeContent)
 
-	result, err := srv.PrepareRename(context.Background(), &protocol.PrepareRenameParams{
+	result, err := srv.prepareRename(context.Background(), &protocol.PrepareRenameParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: rulesFileURI},
 			Position:     hoverPos,
