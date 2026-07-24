@@ -15,7 +15,19 @@ import (
 func TestServer_Initialize_AdvertisesQuickFixCodeActions(t *testing.T) {
 	srv := NewServer()
 
-	result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{})
+	result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
+		Capabilities: protocol.ClientCapabilities{
+			TextDocument: &protocol.TextDocumentClientCapabilities{
+				CodeAction: &protocol.CodeActionClientCapabilities{
+					CodeActionLiteralSupport: protocol.ClientCodeActionLiteralOptions{
+						CodeActionKind: protocol.ClientCodeActionKindOptions{
+							ValueSet: []protocol.CodeActionKind{protocol.CodeActionKindQuickFix},
+						},
+					},
+				},
+			},
+		},
+	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -29,6 +41,8 @@ func TestServer_Initialize_AdvertisesQuickFixCodeActions(t *testing.T) {
 func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	ts.clientCapabilities.supportsCodeActionLiterals = true
+	ts.clientCapabilities.supportsCodeActionIsPreferred = true
 
 	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 lunch
@@ -66,6 +80,7 @@ func TestServer_CodeAction_QuickFixForUnbalancedFinalPosting(t *testing.T) {
 func TestServer_CodeAction_QuickFixWithoutDiagnosticContext(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	ts.clientCapabilities.supportsCodeActionLiterals = true
 
 	uri := uri.URI("file:///test.journal")
 	content := `2024-01-15 lunch
@@ -543,6 +558,8 @@ skip 1`,
 }
 
 func codeActionsForDiagnostics(ts *testServer, uri uri.URI, diagnostics []protocol.Diagnostic) ([]protocol.CodeAction, error) {
+	ts.clientCapabilities.supportsCodeActionLiterals = true
+
 	rng := protocol.Range{}
 	if len(diagnostics) > 0 {
 		rng = diagnostics[0].Range

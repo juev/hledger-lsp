@@ -34,7 +34,9 @@ func TestLSPWire(t *testing.T) {
 		<-serverConn.Done()
 	})
 
-	initializeResult, err := clientServer.Initialize(ctx, &protocol.InitializeParams{})
+	initializeResult, err := clientServer.Initialize(ctx, &protocol.InitializeParams{
+		Capabilities: codeActionLiteralClientCapabilities(),
+	})
 	require.NoError(t, err)
 	require.NotNil(t, initializeResult.ServerInfo)
 	require.Equal(t, "hledger-lsp", initializeResult.ServerInfo.Name)
@@ -80,6 +82,11 @@ func TestLSPWire(t *testing.T) {
 `,
 		}},
 	}))
+
+	_, err = clientServer.Formatting(ctx, &protocol.DocumentFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+	})
+	require.NoError(t, err)
 
 	completion, err := clientServer.Completion(ctx, &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -130,6 +137,118 @@ func TestLSPWire(t *testing.T) {
 		assert.Positive(t, version)
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for publishDiagnostics")
+	}
+}
+
+func codeActionLiteralClientCapabilities() protocol.ClientCapabilities {
+	hierarchicalDocumentSymbols := true
+
+	return protocol.ClientCapabilities{
+		TextDocument: &protocol.TextDocumentClientCapabilities{
+			CodeAction: &protocol.CodeActionClientCapabilities{
+				CodeActionLiteralSupport: protocol.ClientCodeActionLiteralOptions{
+					CodeActionKind: protocol.ClientCodeActionKindOptions{
+						ValueSet: []protocol.CodeActionKind{protocol.CodeActionKindQuickFix},
+					},
+				},
+			},
+			DocumentSymbol: &protocol.DocumentSymbolClientCapabilities{
+				HierarchicalDocumentSymbolSupport: &hierarchicalDocumentSymbols,
+			},
+		},
+	}
+}
+
+func TestLSPWire_InitializeReportsRuntimeVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	serverPipe, clientPipe := net.Pipe()
+	srv := server.NewServerWithVersion("wire-test-version")
+	_, serverConn, _, _ := newServerConnection(ctx, serverPipe, srv)
+	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{}, jsonrpc2.NewStream(clientPipe))
+	t.Cleanup(func() {
+		require.NoError(t, clientConn.Close())
+		require.NoError(t, serverConn.Close())
+		<-clientConn.Done()
+		<-serverConn.Done()
+	})
+
+	result, err := clientServer.Initialize(ctx, &protocol.InitializeParams{})
+
+	require.NoError(t, err)
+	require.NotNil(t, result.ServerInfo)
+	version, ok := result.ServerInfo.Version.Get()
+	require.True(t, ok)
+	require.Equal(t, "wire-test-version", version)
+}
+
+func TestLSPWire_CodeActionResultArmsMatchCapabilities(t *testing.T) {
+	tests := []struct {
+		name               string
+		capabilities       protocol.ClientCapabilities
+		wantCodeActionArms bool
+	}{
+		{
+			name:               "literal client",
+			capabilities:       codeActionLiteralClientCapabilities(),
+			wantCodeActionArms: true,
+		},
+		{
+			name: "command-only client",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			serverPipe, clientPipe := net.Pipe()
+			srv := server.NewServer()
+			_, serverConn, _, _ := newServerConnection(ctx, serverPipe, srv)
+			_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{}, jsonrpc2.NewStream(clientPipe))
+			t.Cleanup(func() {
+				require.NoError(t, clientConn.Close())
+				require.NoError(t, serverConn.Close())
+				<-clientConn.Done()
+				<-serverConn.Done()
+			})
+
+			initializeResult, err := clientServer.Initialize(ctx, &protocol.InitializeParams{Capabilities: tt.capabilities})
+			require.NoError(t, err)
+			if tt.wantCodeActionArms {
+				require.IsType(t, &protocol.CodeActionOptions{}, initializeResult.Capabilities.CodeActionProvider)
+			} else {
+				assert.Equal(t, protocol.Boolean(true), initializeResult.Capabilities.CodeActionProvider)
+			}
+			require.NoError(t, clientServer.Initialized(ctx, &protocol.InitializedParams{}))
+
+			documentURI := uri.URI("file:///wire-code-action.journal")
+			require.NoError(t, clientServer.DidOpen(ctx, &protocol.DidOpenTextDocumentParams{
+				TextDocument: protocol.TextDocumentItem{
+					URI: documentURI,
+					Text: `2024-01-15 lunch
+    expenses:food  $10.00
+    assets:cash    $-9.00`,
+				},
+			}))
+
+			actions, err := clientServer.CodeAction(ctx, &protocol.CodeActionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+				Context: protocol.CodeActionContext{Diagnostics: []protocol.Diagnostic{{
+					Code: protocol.String("UNBALANCED"),
+				}}},
+			})
+			require.NoError(t, err)
+			if tt.wantCodeActionArms {
+				require.NotEmpty(t, actions)
+			}
+			for _, action := range actions {
+				_, isCodeAction := action.(*protocol.CodeAction)
+				assert.Equal(t, tt.wantCodeActionArms, isCodeAction, "received %T", action)
+			}
+		})
 	}
 }
 
@@ -252,6 +371,10 @@ func (c *testClient) PublishDiagnostics(_ context.Context, params *protocol.Publ
 
 func TestProtocolServer_CodeAction_DelegatesToServer(t *testing.T) {
 	srv := server.NewServer()
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
+		Capabilities: codeActionLiteralClientCapabilities(),
+	})
+	require.NoError(t, err)
 
 	documentURI := uri.URI("file:///test.journal")
 	srv.StoreDocument(documentURI, `2024-01-15 lunch

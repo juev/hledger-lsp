@@ -424,7 +424,7 @@ account Expenses:Occasions
 	// Total Assets:Cash: main(-25.70 + -18.00) + records(-25.70 + -9.00 + -6.20 + -5.00 + -17.70 + -7.80)
 	// = -43.70 + -71.40 = -115.10, 8 postings
 	assert.Contains(t, hoverContent, "115.10", "balance should include all postings from both files")
-	assert.Contains(t, hoverContent, "Postings:** 8", "should count all 8 postings across both files")
+	assert.Contains(t, hoverContent, "Postings: 8", "should count all 8 postings across both files")
 }
 
 func TestIntegration_Issue18_CRLFIncludedFile(t *testing.T) {
@@ -470,7 +470,7 @@ account Expenses:Occasions
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
 	assert.Contains(t, hoverContent, "115.10", "balance should be correct even with CRLF included file")
-	assert.Contains(t, hoverContent, "Postings:** 8", "should count all 8 postings even with CRLF included file")
+	assert.Contains(t, hoverContent, "Postings: 8", "should count all 8 postings even with CRLF included file")
 }
 
 func TestIntegration_Issue18_WorkspaceFolderMode(t *testing.T) {
@@ -523,7 +523,7 @@ func TestIntegration_Issue18_WorkspaceFolderMode(t *testing.T) {
 	// main: -25.70 + -18.00 = -43.70 (2 postings)
 	// records: -25.70 + -9.00 + -6.20 = -40.90 (3 postings)
 	// Total: -84.60, 5 postings
-	assert.Contains(t, hoverContent, "Postings:** 5", "workspace mode should aggregate postings from included files")
+	assert.Contains(t, hoverContent, "Postings: 5", "workspace mode should aggregate postings from included files")
 }
 
 func TestIntegration_Issue18_GlobIncludeWithSubdirectory(t *testing.T) {
@@ -584,7 +584,7 @@ func TestIntegration_Issue18_GlobIncludeWithSubdirectory(t *testing.T) {
 
 	assert.Contains(t, hoverContent, "Assets:Cash")
 	assert.Contains(t, hoverContent, "115.10", "balance should include all postings from both files")
-	assert.Contains(t, hoverContent, "Postings:** 8", "should count all 8 postings across both files")
+	assert.Contains(t, hoverContent, "Postings: 8", "should count all 8 postings across both files")
 }
 
 func TestIntegration_JournalIncludesRulesFile(t *testing.T) {

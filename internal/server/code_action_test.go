@@ -153,6 +153,96 @@ func TestServer_CodeAction_WithCLI(t *testing.T) {
 	}
 }
 
+func TestServer_CodeAction_ResultArmsMatchClientCapabilities(t *testing.T) {
+	trueValue := true
+	falseValue := false
+
+	tests := []struct {
+		name               string
+		capabilities       protocol.ClientCapabilities
+		wantCodeActionArms bool
+		wantIsPreferred    bool
+		wantCodeActionOpts bool
+	}{
+		{
+			name:               "literal client with isPreferred support",
+			capabilities:       codeActionClientCapabilities(trueValue),
+			wantCodeActionArms: true,
+			wantIsPreferred:    true,
+			wantCodeActionOpts: true,
+		},
+		{
+			name:               "literal client without isPreferred support",
+			capabilities:       codeActionClientCapabilities(falseValue),
+			wantCodeActionArms: true,
+			wantCodeActionOpts: true,
+		},
+		{
+			name:               "command-only client",
+			wantCodeActionArms: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			srv.cliClient = &fakeCLIClient{available: true}
+			result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: tt.capabilities})
+			require.NoError(t, err)
+
+			if tt.wantCodeActionOpts {
+				require.IsType(t, &protocol.CodeActionOptions{}, result.Capabilities.CodeActionProvider)
+			} else {
+				assert.Equal(t, protocol.Boolean(true), result.Capabilities.CodeActionProvider)
+			}
+
+			documentURI := uri.URI("file:///test.journal")
+			srv.StoreDocument(documentURI, `2024-01-15 lunch
+    expenses:food  $10.00
+    assets:cash    $-9.00`)
+			actions, err := srv.CodeAction(context.Background(), &protocol.CodeActionParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+				Range:        protocol.Range{},
+				Context: protocol.CodeActionContext{Diagnostics: []protocol.Diagnostic{{
+					Code: protocol.String("UNBALANCED"),
+				}}},
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, actions)
+
+			for _, action := range actions {
+				codeAction, isCodeAction := action.(*protocol.CodeAction)
+				if tt.wantCodeActionArms {
+					require.True(t, isCodeAction, "literal client received %T", action)
+					if codeAction.Kind != nil && *codeAction.Kind == protocol.CodeActionKindQuickFix {
+						assert.Equal(t, tt.wantIsPreferred, codeAction.IsPreferred != nil)
+					}
+					continue
+				}
+
+				assert.False(t, isCodeAction, "command-only client received %T", action)
+				_, isCommand := action.(*protocol.Command)
+				assert.True(t, isCommand, "command-only client received %T", action)
+			}
+		})
+	}
+}
+
+func codeActionClientCapabilities(isPreferred bool) protocol.ClientCapabilities {
+	return protocol.ClientCapabilities{
+		TextDocument: &protocol.TextDocumentClientCapabilities{
+			CodeAction: &protocol.CodeActionClientCapabilities{
+				CodeActionLiteralSupport: protocol.ClientCodeActionLiteralOptions{
+					CodeActionKind: protocol.ClientCodeActionKindOptions{
+						ValueSet: []protocol.CodeActionKind{protocol.CodeActionKindQuickFix},
+					},
+				},
+				IsPreferredSupport: &isPreferred,
+			},
+		},
+	}
+}
+
 func TestCommentLinePrefix(t *testing.T) {
 	tests := []struct {
 		line     string

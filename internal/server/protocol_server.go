@@ -26,11 +26,18 @@ func (s *Server) DocumentSymbol(ctx context.Context, params *protocol.DocumentSy
 	if len(symbols) == 0 {
 		return nil, nil
 	}
+	if !s.clientCapabilities.supportsHierarchicalDocumentSymbols {
+		return protocol.SymbolInformationSlice(flattenDocumentSymbols(params.TextDocument.URI, symbols)), nil
+	}
 	return protocol.DocumentSymbolSlice(symbols), nil
 }
 
 func (s *Server) PrepareRename(ctx context.Context, params *protocol.PrepareRenameParams) (protocol.PrepareRenameResult, error) {
 	return s.prepareRename(ctx, params)
+}
+
+func (s *Server) Formatting(ctx context.Context, params *protocol.DocumentFormattingParams) ([]protocol.TextEdit, error) {
+	return s.Format(ctx, params)
 }
 
 func (s *Server) RangeFormatting(ctx context.Context, params *protocol.DocumentRangeFormattingParams) ([]protocol.TextEdit, error) {

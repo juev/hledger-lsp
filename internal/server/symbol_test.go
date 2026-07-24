@@ -253,3 +253,62 @@ func TestDocumentSymbol_RangeEndIsSet(t *testing.T) {
 		})
 	}
 }
+
+func TestDocumentSymbol_ProtocolResultMatchesClientHierarchySupport(t *testing.T) {
+	const documentURI = uri.URI("file:///test.journal")
+	params := &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: documentURI},
+	}
+
+	newServerWithDocument := func() *Server {
+		srv := NewServer()
+		srv.documents.Store(documentURI, `2024-01-15 grocery
+    expenses:food  $50
+    assets:cash`)
+		return srv
+	}
+
+	t.Run("hierarchical client", func(t *testing.T) {
+		srv := newServerWithDocument()
+		srv.clientCapabilities.supportsHierarchicalDocumentSymbols = true
+
+		result, err := srv.DocumentSymbol(context.Background(), params)
+		require.NoError(t, err)
+		symbols, ok := result.(protocol.DocumentSymbolSlice)
+		require.True(t, ok)
+		require.Len(t, symbols, 1)
+		require.Len(t, symbols[0].Children, 1)
+	})
+
+	t.Run("minimal client", func(t *testing.T) {
+		srv := newServerWithDocument()
+		hierarchical := srv.documentSymbols(context.Background(), params)
+		require.Len(t, hierarchical, 1)
+		require.Len(t, hierarchical[0].Children, 1)
+
+		result, err := srv.DocumentSymbol(context.Background(), params)
+		require.NoError(t, err)
+		symbols, ok := result.(protocol.SymbolInformationSlice)
+		require.True(t, ok)
+		require.Len(t, symbols, 2)
+		assert.Equal(t, documentURI, symbols[0].Location.URI)
+		assert.Equal(t, hierarchical[0].Range, symbols[0].Location.Range)
+		assert.Nil(t, symbols[0].ContainerName)
+		assert.Equal(t, "2024-01", *symbols[1].ContainerName)
+		assert.Equal(t, documentURI, symbols[1].Location.URI)
+		assert.Equal(t, hierarchical[0].Children[0].Range, symbols[1].Location.Range)
+	})
+}
+
+func TestFlattenDocumentSymbols_PreservesMetadata(t *testing.T) {
+	symbols := flattenDocumentSymbols("file:///test.journal", []protocol.DocumentSymbol{
+		{
+			Name: "account assets",
+			Kind: protocol.SymbolKindClass,
+			Tags: []protocol.SymbolTag{protocol.SymbolTagDeprecated},
+		},
+	})
+
+	require.Len(t, symbols, 1)
+	assert.Equal(t, []protocol.SymbolTag{protocol.SymbolTagDeprecated}, symbols[0].Tags)
+}

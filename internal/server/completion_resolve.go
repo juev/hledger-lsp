@@ -88,10 +88,7 @@ func (s *Server) CompletionResolve(_ context.Context, item *protocol.CompletionI
 	}
 
 	if documentation != "" {
-		item.Documentation = &protocol.MarkupContent{
-			Kind:  protocol.MarkupKindMarkdown,
-			Value: documentation,
-		}
+		item.Documentation = documentationMarkupContent(documentation, s.clientCapabilities.completionDocumentationFormats)
 	}
 
 	return item, nil

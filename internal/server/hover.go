@@ -86,11 +86,8 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 	}
 
 	return &protocol.Hover{
-		Contents: &protocol.MarkupContent{
-			Kind:  protocol.MarkupKindMarkdown,
-			Value: content,
-		},
-		Range: astRangeToProtocol(element.rng),
+		Contents: documentationMarkupContent(content, s.clientCapabilities.hoverContentFormats),
+		Range:    astRangeToProtocol(element.rng),
 	}, nil
 }
 

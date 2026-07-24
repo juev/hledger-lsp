@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
@@ -168,4 +169,28 @@ func rulesDocumentSymbols(doc string) []protocol.DocumentSymbol {
 		})
 	}
 	return result
+}
+
+func flattenDocumentSymbols(documentURI uri.URI, symbols []protocol.DocumentSymbol) []protocol.SymbolInformation {
+	result := make([]protocol.SymbolInformation, 0, len(symbols))
+	for _, symbol := range symbols {
+		flattenDocumentSymbol(documentURI, symbol, nil, &result)
+	}
+	return result
+}
+
+func flattenDocumentSymbol(documentURI uri.URI, symbol protocol.DocumentSymbol, containerName *string, result *[]protocol.SymbolInformation) {
+	*result = append(*result, protocol.SymbolInformation{
+		BaseSymbolInformation: protocol.BaseSymbolInformation{
+			Name:          symbol.Name,
+			Kind:          symbol.Kind,
+			Tags:          symbol.Tags,
+			ContainerName: containerName,
+		},
+		Location: protocol.Location{URI: documentURI, Range: symbol.Range},
+	})
+
+	for _, child := range symbol.Children {
+		flattenDocumentSymbol(documentURI, child, &symbol.Name, result)
+	}
 }
