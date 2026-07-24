@@ -264,6 +264,23 @@ func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 	return tree.Resolved
 }
 
+// GetIncludeTreesForFile returns all include trees that own path, sorted by
+// root path. Callers that depend on include context must use this instead of
+// GetResolvedForFile, which keeps its primary-root behavior for compatibility.
+func (w *Workspace) GetIncludeTreesForFile(path string) []*IncludeTree {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	roots := w.fileTree[path]
+	trees := make([]*IncludeTree, 0, len(roots))
+	for _, rootPath := range roots {
+		if tree := w.trees[rootPath]; tree != nil {
+			trees = append(trees, tree)
+		}
+	}
+	return trees
+}
+
 // GetUniqueResolvedForFile returns the resolved journal only when exactly one
 // include-tree root owns path. Callers that need an unambiguous transaction
 // context, such as running balance calculations, must use this method instead

@@ -15,8 +15,9 @@ import (
 )
 
 type typeHierarchyData struct {
-	Account string  `json:"account"`
-	Origin  uri.URI `json:"origin"`
+	Account  string  `json:"account"`
+	Origin   uri.URI `json:"origin"`
+	RootPath string  `json:"rootPath,omitempty"`
 }
 
 type typeHierarchyCandidate struct {
@@ -24,6 +25,11 @@ type typeHierarchyCandidate struct {
 	uri         uri.URI
 	rangeValue  protocol.Range
 	declaration bool
+}
+
+type typeHierarchyPreparedName struct {
+	name     string
+	rootPath string
 }
 
 type typeHierarchyAccountIdentity struct {
@@ -47,9 +53,9 @@ func (s *Server) prepareTypeHierarchy(_ context.Context, params *protocol.TypeHi
 		if positionInProtocolRange(params.Position, itemRange) {
 			names := s.typeHierarchyPreparedNames(params.TextDocument.URI, account)
 			items := make([]protocol.TypeHierarchyItem, 0, len(names))
-			for _, name := range names {
-				candidate := typeHierarchyCandidate{name: name, uri: params.TextDocument.URI, rangeValue: itemRange}
-				items = append(items, s.typeHierarchyItem(candidate, params.TextDocument.URI))
+			for _, prepared := range names {
+				candidate := typeHierarchyCandidate{name: prepared.name, uri: params.TextDocument.URI, rangeValue: itemRange}
+				items = append(items, s.typeHierarchyItem(candidate, params.TextDocument.URI, prepared.rootPath))
 			}
 			return items, nil
 		}
@@ -57,30 +63,42 @@ func (s *Server) prepareTypeHierarchy(_ context.Context, params *protocol.TypeHi
 	return nil, nil
 }
 
-func (s *Server) typeHierarchyPreparedNames(docURI uri.URI, account ast.Account) []string {
-	names := map[string]struct{}{account.GetResolvedName(): {}}
-	if resolved := s.getWorkspaceResolved(docURI); resolved != nil && len(resolved.Occurrences) > 0 {
-		names = make(map[string]struct{})
-		path := uriToPath(docURI)
-		for _, occurrence := range resolved.Occurrences {
+func (s *Server) typeHierarchyPreparedNames(docURI uri.URI, account ast.Account) []typeHierarchyPreparedName {
+	path := uriToPath(docURI)
+	resolvedTrees := s.typeHierarchyTrees(docURI)
+	if len(resolvedTrees) == 0 {
+		resolvedTrees = []typeHierarchyTree{{resolved: s.GetResolved(docURI)}}
+	}
+
+	names := make(map[typeHierarchyPreparedName]struct{})
+	for _, tree := range resolvedTrees {
+		if tree.resolved == nil || len(tree.resolved.Occurrences) == 0 {
+			continue
+		}
+		for _, occurrence := range tree.resolved.Occurrences {
 			if occurrence.Path != path || occurrence.Journal == nil {
 				continue
 			}
 			for _, contextual := range hierarchyAccounts(occurrence.Journal) {
 				if contextual.Name == account.Name && contextual.Range.Start.Offset == account.Range.Start.Offset {
-					names[contextual.GetResolvedName()] = struct{}{}
+					names[typeHierarchyPreparedName{name: contextual.GetResolvedName(), rootPath: tree.rootPath}] = struct{}{}
 				}
 			}
 		}
-		if len(names) == 0 {
-			names[account.GetResolvedName()] = struct{}{}
-		}
 	}
-	result := make([]string, 0, len(names))
+	if len(names) == 0 {
+		names[typeHierarchyPreparedName{name: account.GetResolvedName()}] = struct{}{}
+	}
+	result := make([]typeHierarchyPreparedName, 0, len(names))
 	for name := range names {
 		result = append(result, name)
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].name != result[j].name {
+			return result[i].name < result[j].name
+		}
+		return result[i].rootPath < result[j].rootPath
+	})
 	return result
 }
 
@@ -96,13 +114,13 @@ func (s *Server) typeHierarchySupertypes(_ context.Context, params *protocol.Typ
 	if !ok {
 		return nil, nil
 	}
-	candidates := s.typeHierarchyCandidates(data.Origin)
+	candidates := s.typeHierarchyCandidates(data.Origin, data.RootPath)
 	if !hasHierarchyName(candidates, parent) {
 		return nil, nil
 	}
 	candidate := candidateForName(candidates, parent)
 	candidate.name = parent
-	return []protocol.TypeHierarchyItem{s.typeHierarchyItem(candidate, data.Origin)}, nil
+	return []protocol.TypeHierarchyItem{s.typeHierarchyItem(candidate, data.Origin, data.RootPath)}, nil
 }
 
 func (s *Server) typeHierarchySubtypes(_ context.Context, params *protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
@@ -113,7 +131,7 @@ func (s *Server) typeHierarchySubtypes(_ context.Context, params *protocol.TypeH
 	if !ok {
 		return nil, nil
 	}
-	candidates := s.typeHierarchyCandidates(data.Origin)
+	candidates := s.typeHierarchyCandidates(data.Origin, data.RootPath)
 	children := make(map[string]struct{})
 	for _, candidate := range candidates {
 		if child, ok := hierarchyDirectChild(data.Account, candidate.name); ok {
@@ -132,13 +150,50 @@ func (s *Server) typeHierarchySubtypes(_ context.Context, params *protocol.TypeH
 	for _, name := range names {
 		candidate := candidateForName(candidates, name)
 		candidate.name = name
-		items = append(items, s.typeHierarchyItem(candidate, data.Origin))
+		items = append(items, s.typeHierarchyItem(candidate, data.Origin, data.RootPath))
 	}
 	return items, nil
 }
 
-func (s *Server) typeHierarchyCandidates(origin uri.URI) []typeHierarchyCandidate {
-	resolved := s.getWorkspaceResolved(origin)
+type typeHierarchyTree struct {
+	rootPath string
+	resolved *include.ResolvedJournal
+}
+
+func (s *Server) typeHierarchyTrees(origin uri.URI) []typeHierarchyTree {
+	if s.workspace == nil {
+		return nil
+	}
+	path := uriToPath(origin)
+	if path == "" {
+		return nil
+	}
+	trees := s.workspace.GetIncludeTreesForFile(path)
+	result := make([]typeHierarchyTree, 0, len(trees))
+	for _, tree := range trees {
+		result = append(result, typeHierarchyTree{rootPath: tree.RootPath, resolved: tree.Resolved})
+	}
+	return result
+}
+
+func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []typeHierarchyCandidate {
+	var resolved *include.ResolvedJournal
+	if rootPath != "" {
+		for _, tree := range s.typeHierarchyTrees(origin) {
+			if tree.rootPath == rootPath {
+				resolved = tree.resolved
+				break
+			}
+		}
+		if resolved == nil {
+			return nil
+		}
+	} else {
+		resolved = s.getWorkspaceResolved(origin)
+	}
+	if resolved == nil {
+		resolved = s.GetResolved(origin)
+	}
 	var occurrences []include.JournalOccurrence
 	if resolved != nil && len(resolved.Occurrences) > 0 {
 		occurrences = resolved.Occurrences
@@ -159,10 +214,13 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI) []typeHierarchyCandidat
 	var candidates []typeHierarchyCandidate
 	mappers := make(map[uri.URI]*lsputil.PositionMapper)
 	for _, occurrence := range occurrences {
-		if occurrence.Journal == nil || occurrence.Path == "" {
+		if occurrence.Journal == nil {
 			continue
 		}
-		docURI := pathToURI(occurrence.Path)
+		docURI := origin
+		if occurrence.Path != "" {
+			docURI = pathToURI(occurrence.Path)
+		}
 		mapper := mappers[docURI]
 		if mapper == nil {
 			content, ok := s.typeHierarchySource(docURI)
@@ -195,8 +253,8 @@ func (s *Server) typeHierarchySource(docURI uri.URI) (string, bool) {
 	return normalizeLineEndings(string(content)), true
 }
 
-func (s *Server) typeHierarchyItem(candidate typeHierarchyCandidate, origin uri.URI) protocol.TypeHierarchyItem {
-	data, _ := protocol.Marshal(typeHierarchyData{Account: candidate.name, Origin: origin})
+func (s *Server) typeHierarchyItem(candidate typeHierarchyCandidate, origin uri.URI, rootPath string) protocol.TypeHierarchyItem {
+	data, _ := protocol.Marshal(typeHierarchyData{Account: candidate.name, Origin: origin, RootPath: rootPath})
 	return protocol.TypeHierarchyItem{Name: candidate.name, Kind: protocol.SymbolKindClass, URI: candidate.uri, Range: candidate.rangeValue, SelectionRange: candidate.rangeValue, Data: protocol.LSPAny(data)}
 }
 
