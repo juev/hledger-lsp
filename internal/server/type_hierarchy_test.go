@@ -10,6 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
 func TestTypeHierarchy_LocalDirectAndSyntheticNodes(t *testing.T) {
@@ -202,4 +205,86 @@ func TestTypeHierarchy_PrepareIncludedAccountUsesAllOccurrenceContexts(t *testin
 		require.Len(t, parents, 1)
 		assert.Equal(t, []string{"first", "second"}[i], parents[0].Name)
 	}
+}
+
+func TestTypeHierarchy_WorkspaceOwnersKeepApplyAccountContext(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child.journal")
+	firstRootPath := filepath.Join(dir, "a-root.journal")
+	secondRootPath := filepath.Join(dir, "b-root.journal")
+	child := "2024-01-01 child\n    cash  $1\n    assets:y\n"
+	require.NoError(t, os.WriteFile(childPath, []byte(child), 0o644))
+	require.NoError(t, os.WriteFile(firstRootPath, []byte("apply account first\ninclude child.journal\nend apply account\n"), 0o644))
+	require.NoError(t, os.WriteFile(secondRootPath, []byte("apply account second\ninclude child.journal\nend apply account\n"), 0o644))
+
+	srv := NewServer()
+	srv.loader = include.NewLoader()
+	srv.workspace = workspace.NewWorkspace(dir, srv.loader)
+	require.NoError(t, srv.workspace.Initialize())
+	childURI := uri.File(childPath)
+	srv.StoreDocument(childURI, child)
+
+	items, err := srv.PrepareTypeHierarchy(context.Background(), &protocol.TypeHierarchyPrepareParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{TextDocument: protocol.TextDocumentIdentifier{URI: childURI}, Position: protocol.Position{Line: 1, Character: 5}},
+	})
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, []string{"first:cash", "second:cash"}, []string{items[0].Name, items[1].Name})
+
+	for i, item := range items {
+		data, ok := decodeTypeHierarchyData(item.Data)
+		require.True(t, ok)
+		assert.Equal(t, []string{firstRootPath, secondRootPath}[i], data.RootPath)
+		parents, err := srv.Supertypes(context.Background(), &protocol.TypeHierarchySupertypesParams{Item: item})
+		require.NoError(t, err)
+		require.Len(t, parents, 1)
+		assert.Equal(t, []string{"first", "second"}[i], parents[0].Name)
+	}
+}
+
+func TestTypeHierarchy_RejectsUnknownWorkspaceRootPath(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child.journal")
+	rootPath := filepath.Join(dir, "root.journal")
+	child := "2024-01-01 child\n    cash  $1\n    assets:y\n"
+	require.NoError(t, os.WriteFile(childPath, []byte(child), 0o644))
+	require.NoError(t, os.WriteFile(rootPath, []byte("apply account first\ninclude child.journal\nend apply account\n"), 0o644))
+
+	srv := NewServer()
+	srv.loader = include.NewLoader()
+	srv.workspace = workspace.NewWorkspace(dir, srv.loader)
+	require.NoError(t, srv.workspace.Initialize())
+	childURI := uri.File(childPath)
+	srv.StoreDocument(childURI, child)
+
+	data, err := protocol.Marshal(typeHierarchyData{Account: "assets", Origin: childURI, RootPath: filepath.Join(dir, "missing.journal")})
+	require.NoError(t, err)
+	children, err := srv.Subtypes(context.Background(), &protocol.TypeHierarchySubtypesParams{Item: protocol.TypeHierarchyItem{Data: protocol.LSPAny(data)}})
+	require.NoError(t, err)
+	assert.Nil(t, children)
+}
+
+func TestTypeHierarchy_UntitledDocumentKeepsURIForFollowups(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("untitled:hledger")
+	srv.StoreDocument(docURI, "2024-01-01 lunch\n    expenses:food  $10\n    assets:cash\n")
+
+	items, err := srv.PrepareTypeHierarchy(context.Background(), &protocol.TypeHierarchyPrepareParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}, Position: protocol.Position{Line: 1, Character: 12}},
+	})
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, docURI, items[0].URI)
+
+	parents, err := srv.Supertypes(context.Background(), &protocol.TypeHierarchySupertypesParams{Item: items[0]})
+	require.NoError(t, err)
+	require.Len(t, parents, 1)
+	assert.Equal(t, "expenses", parents[0].Name)
+	assert.Equal(t, docURI, parents[0].URI)
+
+	children, err := srv.Subtypes(context.Background(), &protocol.TypeHierarchySubtypesParams{Item: parents[0]})
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	assert.Equal(t, "expenses:food", children[0].Name)
+	assert.Equal(t, docURI, children[0].URI)
 }

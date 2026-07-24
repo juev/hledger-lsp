@@ -1298,6 +1298,24 @@ func TestWorkspace_GetUniqueResolvedForFile(t *testing.T) {
 	assert.Nil(t, resolved)
 }
 
+func TestWorkspace_GetIncludeTreesForFile_ReturnsAllOwnersInRootOrder(t *testing.T) {
+	tmpDir := t.TempDir()
+	childPath := filepath.Join(tmpDir, "child.journal")
+	firstRootPath := filepath.Join(tmpDir, "a-root.journal")
+	secondRootPath := filepath.Join(tmpDir, "b-root.journal")
+	require.NoError(t, os.WriteFile(childPath, []byte("account cash\n"), 0o644))
+	require.NoError(t, os.WriteFile(firstRootPath, []byte("include child.journal\n"), 0o644))
+	require.NoError(t, os.WriteFile(secondRootPath, []byte("include child.journal\n"), 0o644))
+
+	ws := NewWorkspace(tmpDir, include.NewLoader())
+	require.NoError(t, ws.Initialize())
+
+	trees := ws.GetIncludeTreesForFile(childPath)
+	require.Len(t, trees, 2)
+	assert.Equal(t, []string{firstRootPath, secondRootPath}, []string{trees[0].RootPath, trees[1].RootPath})
+	assert.NotSame(t, trees[0].Resolved, trees[1].Resolved)
+}
+
 func TestWorkspace_AllTrees(t *testing.T) {
 	t.Setenv("LEDGER_FILE", "")
 	t.Setenv("HLEDGER_JOURNAL", "")
