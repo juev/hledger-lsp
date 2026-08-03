@@ -8,6 +8,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func (s *Server) References(ctx context.Context, params *protocol.ReferenceParams) ([]protocol.Location, error) {
@@ -18,7 +19,8 @@ func (s *Server) References(ctx context.Context, params *protocol.ReferenceParam
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
-	target := findDefinitionTarget(journal, params.Position)
+	mapper := lsputil.NewPositionMapper(doc)
+	target := findDefinitionTarget(mapper, journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}

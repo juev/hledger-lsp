@@ -10,6 +10,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([]protocol.CodeLens, error) {
@@ -28,6 +29,7 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 		return nil, nil
 	}
 
+	mapper := lsputil.NewPositionMapper(doc)
 	lenses := make([]protocol.CodeLens, 0, len(journal.Transactions))
 
 	for i := range journal.Transactions {
@@ -36,7 +38,7 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 
 		title := buildCodeLensTitle(result, len(tx.Postings))
 		lens := protocol.CodeLens{
-			Range:   *astRangeToProtocol(tx.Date.Range),
+			Range:   astRangeToLSP(mapper, tx.Date.Range),
 			Command: protocol.Command{Title: title},
 		}
 		if !result.Balanced {
@@ -44,7 +46,7 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 			// ExecuteCommand can re-resolve the exact transaction and apply the
 			// balance quickfix via workspace/applyEdit.
 			lens.Command.Command = "hledger.fixUnbalanced"
-			arguments, err := commandArguments(string(params.TextDocument.URI), *astRangeToProtocol(tx.Range))
+			arguments, err := commandArguments(string(params.TextDocument.URI), astRangeToLSP(mapper, tx.Range))
 			if err != nil {
 				return nil, fmt.Errorf("marshal code lens arguments: %w", err)
 			}

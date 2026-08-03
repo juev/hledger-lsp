@@ -7,6 +7,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/filetype"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -32,6 +33,7 @@ func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLink
 		return []protocol.DocumentLink{}, nil
 	}
 
+	mapper := lsputil.NewPositionMapper(doc)
 	var links []protocol.DocumentLink
 
 	for _, inc := range journal.Includes {
@@ -44,7 +46,7 @@ func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLink
 		target := pathToURI(includePath)
 
 		links = append(links, protocol.DocumentLink{
-			Range:  *astRangeToProtocol(inc.Range),
+			Range:  astRangeToLSP(mapper, inc.Range),
 			Target: &target,
 		})
 	}

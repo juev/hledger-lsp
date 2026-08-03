@@ -50,6 +50,47 @@ func TestReferences_ReportsUTF16RangesForEmojiAccount(t *testing.T) {
 	}
 }
 
+func TestDocumentHighlight_ReportsUTF16RangesForEmojiAccount(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///emoji.journal")
+	srv.StoreDocument(docURI, emojiAccountJournal)
+
+	highlights, err := srv.DocumentHighlight(context.Background(), &protocol.DocumentHighlightParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 3, Character: 6},
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, highlights)
+
+	for _, highlight := range highlights {
+		if highlight.Range.Start.Line == 3 {
+			assert.Equal(t, uint32(emojiAccountStartChar), highlight.Range.Start.Character)
+			assert.Equal(t, uint32(emojiAccountEndChar), highlight.Range.End.Character)
+		}
+	}
+}
+
+func TestPrepareRename_ReportsUTF16RangeForEmojiAccount(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///emoji.journal")
+	srv.StoreDocument(docURI, emojiAccountJournal)
+
+	result, err := srv.prepareRename(context.Background(), &protocol.PrepareRenameParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 3, Character: 6},
+		},
+	})
+	require.NoError(t, err)
+
+	rng, ok := result.(*protocol.Range)
+	require.True(t, ok, "prepareRename should answer with a range, got %T", result)
+	assert.Equal(t, uint32(emojiAccountStartChar), rng.Start.Character)
+	assert.Equal(t, uint32(emojiAccountEndChar), rng.End.Character)
+}
+
 func TestDiagnostics_ReportUTF16RangesForEmojiAccount(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil

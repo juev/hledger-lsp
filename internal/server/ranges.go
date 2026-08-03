@@ -79,3 +79,6 @@ func (c *mapperCache) rangeIn(path string, rng ast.Range) protocol.Range {
 	}
 	return astRangeToLSP(mapper, rng)
 }
+
+// rangePtr is a small convenience for fields that hold an optional range.
+func rangePtr(rng protocol.Range) *protocol.Range { return &rng }

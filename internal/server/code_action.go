@@ -231,7 +231,7 @@ func (s *Server) quickFixForUnbalanced(
 		return protocol.CodeAction{}, false
 	}
 
-	tx := findTransactionForDiagnostic(journal.Transactions, diag.Range)
+	tx := findTransactionForDiagnostic(mapper, journal.Transactions, diag.Range)
 	if tx == nil {
 		return protocol.CodeAction{}, false
 	}
@@ -394,7 +394,7 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 		return nil, fmt.Errorf("failed to parse document")
 	}
 
-	tx := findTransactionByRange(journal.Transactions, txRange)
+	tx := findTransactionByRange(lsputil.NewPositionMapper(doc), journal.Transactions, txRange)
 	if tx == nil {
 		return nil, fmt.Errorf("transaction not found")
 	}
@@ -430,10 +430,10 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 	return nil, nil
 }
 
-func findTransactionByRange(transactions []ast.Transaction, target protocol.Range) *ast.Transaction {
+func findTransactionByRange(mapper *lsputil.PositionMapper, transactions []ast.Transaction, target protocol.Range) *ast.Transaction {
 	for i := range transactions {
-		r := astRangeToProtocol(transactions[i].Range)
-		if r != nil && *r == target {
+		r := astRangeToLSP(mapper, transactions[i].Range)
+		if r == target {
 			return &transactions[i]
 		}
 	}
@@ -527,10 +527,10 @@ func formatOutputAsComment(cmd, output string) string {
 	return builder.String()
 }
 
-func findTransactionForDiagnostic(transactions []ast.Transaction, rng protocol.Range) *ast.Transaction {
+func findTransactionForDiagnostic(mapper *lsputil.PositionMapper, transactions []ast.Transaction, rng protocol.Range) *ast.Transaction {
 	for i := range transactions {
-		txRange := astRangeToProtocol(transactions[i].Range)
-		if txRange != nil && rangesOverlap(*txRange, rng) {
+		txRange := astRangeToLSP(mapper, transactions[i].Range)
+		if rangesOverlap(txRange, rng) {
 			return &transactions[i]
 		}
 	}

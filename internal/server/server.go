@@ -549,14 +549,23 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 
 func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagnostic {
 	journal, parseErrs := s.cachedJournal(docURI, content)
-	mapper := lsputil.NewPositionMapper(content)
+
+	// Analysis runs on every keystroke, and indexing the document costs a pass
+	// over it, so pay for the mapper only when there is a range to convert.
+	var mapper *lsputil.PositionMapper
+	positionMapper := func() *lsputil.PositionMapper {
+		if mapper == nil {
+			mapper = lsputil.NewPositionMapper(content)
+		}
+		return mapper
+	}
 
 	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
 	for _, err := range parseErrs {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{
-				Start: mapper.ByteToLSP(err.Pos.Offset),
-				End:   mapper.ByteToLSP(err.End.Offset),
+				Start: positionMapper().ByteToLSP(err.Pos.Offset),
+				End:   positionMapper().ByteToLSP(err.End.Offset),
 			},
 			Severity: protocol.DiagnosticSeverityError,
 			Source:   protocol.NewOptional("hledger-lsp"),
@@ -583,7 +592,7 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 			continue
 		}
 		diagnostics = append(diagnostics, protocol.Diagnostic{
-			Range:    astRangeToLSP(mapper, diag.Range),
+			Range:    astRangeToLSP(positionMapper(), diag.Range),
 			Severity: toProtocolSeverity(diag.Severity),
 			Source:   protocol.NewOptional("hledger-lsp"),
 			Message:  protocol.String(diag.Message),
