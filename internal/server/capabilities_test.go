@@ -90,7 +90,7 @@ func TestServer_Initialize_CapabilityProfiles(t *testing.T) {
 			if tt.wantCodeActionOpts {
 				codeActionOptions, ok := result.Capabilities.CodeActionProvider.(*protocol.CodeActionOptions)
 				require.True(t, ok)
-				assert.Equal(t, []protocol.CodeActionKind{protocol.CodeActionKindQuickFix, "source.hledger"}, codeActionOptions.CodeActionKinds)
+				assert.Equal(t, []protocol.CodeActionKind{protocol.CodeActionKindQuickFix, insertInferredAmountKind, "source.hledger"}, codeActionOptions.CodeActionKinds)
 			} else {
 				assert.Equal(t, protocol.Boolean(true), result.Capabilities.CodeActionProvider)
 			}

@@ -205,6 +205,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 			caps.CodeActionProvider = &protocol.CodeActionOptions{
 				CodeActionKinds: []protocol.CodeActionKind{
 					protocol.CodeActionKindQuickFix,
+					insertInferredAmountKind,
 					"source.hledger",
 				},
 			}

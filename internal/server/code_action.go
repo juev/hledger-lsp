@@ -50,9 +50,11 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, err
 	}
 	quickFixes := s.getQuickFixCodeActions(params)
+	inferred := s.getInferredAmountCodeActions(params)
 
-	generated := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes))
+	generated := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes)+len(inferred))
 	generated = append(generated, quickFixes...)
+	generated = append(generated, inferred...)
 	generated = append(generated, actions...)
 	return s.codeActionResult(generated), nil
 }

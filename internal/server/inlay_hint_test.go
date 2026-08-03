@@ -28,6 +28,27 @@ func TestInlayHint_LocalInferredAmount(t *testing.T) {
 	assert.True(t, *hints[0].PaddingLeft)
 }
 
+func TestInlayHint_InferredAmountAnchoredAtLineEnd(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
+	// The trailing spaces are the alignment padding Tab inserts before the user
+	// types the amount. Anchoring the hint inside the line would shift that
+	// padding — and the cursor sitting at its end — to the right.
+	lastLine := "    Expenses:Food          "
+	content := "2026-08-03 Good\n    Expenses:Test  -20.50 USD\n" + lastLine + "\n"
+	srv.StoreDocument(docURI, content)
+
+	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        protocol.Range{End: protocol.Position{Line: 10}},
+	})
+	require.NoError(t, err)
+	require.Len(t, hints, 1)
+	assert.Equal(t, protocol.String("= 20.5 USD"), hints[0].Label)
+	assert.Equal(t, uint32(2), hints[0].Position.Line)
+	assert.Equal(t, uint32(len(lastLine)), hints[0].Position.Character)
+}
+
 func TestInlayHint_CostAndChronologicalRunningBalance(t *testing.T) {
 	srv := NewServer()
 	settings := srv.getSettings()
@@ -102,7 +123,8 @@ func TestInlayHint_UsesUTF16PositionAndCRLF(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
 	assert.Equal(t, uint32(2), hints[0].Position.Line)
-	assert.Equal(t, uint32(13), hints[0].Position.Character)
+	// End of "    assets:cash", the carriage return excluded.
+	assert.Equal(t, uint32(15), hints[0].Position.Character)
 }
 
 func TestInlayHint_InferFinalPostingAtEOF(t *testing.T) {

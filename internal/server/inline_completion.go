@@ -196,7 +196,8 @@ func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting for
 
 		amountText := renderInlineAmount(p)
 		if amountText != "" {
-			spaces := inlineAmountSpacesFromAlignment(p, amountText, alignment, formatting, indent)
+			accountEnd := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
+			spaces := amountSpacesFromAlignment(accountEnd, amountText, alignment, formatting)
 			sb.WriteString(strings.Repeat(" ", spaces))
 			sb.WriteString(amountText)
 		}
@@ -222,17 +223,15 @@ func renderInlineAmount(p analyzer.PostingTemplate) string {
 	return sb.String()
 }
 
-// inlineAmountSpacesFromAlignment returns the gap between the rendered account
-// and the rendered amount such that the amount lands on the same column the
-// formatter would produce for this document. Falls back to 2 spaces when
-// alignment is disabled or no usable column was computed.
-func inlineAmountSpacesFromAlignment(p analyzer.PostingTemplate, amountText string, alignment formatter.AlignmentInfo, formatting formattingSettings, indent string) int {
+// amountSpacesFromAlignment returns the gap between an account ending at
+// accountEnd (a rune column) and the rendered amount such that the amount lands
+// on the same column the formatter would produce for this document. Falls back
+// to 2 spaces when alignment is disabled or no usable column was computed.
+func amountSpacesFromAlignment(accountEnd int, amountText string, alignment formatter.AlignmentInfo, formatting formattingSettings) int {
 	const minSpaces = 2
 	if !formatting.AlignAmounts {
 		return minSpaces
 	}
-
-	accountEnd := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
 
 	switch formatting.AmountAlignmentMode {
 	case "decimal":
