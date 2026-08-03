@@ -30,6 +30,25 @@ func stringPtr(value string) *string { return &value }
 
 func codeActionKind(value protocol.CodeActionKind) *protocol.CodeActionKind { return &value }
 
+// codeActionKindAllowed reports whether an action of this kind may be returned
+// for the given CodeActionContext.Only filter. Kinds form a dotted hierarchy,
+// so "quickfix" also selects "quickfix.hledger.insertInferredAmount". An empty
+// filter selects everything; an action without a kind matches no filter.
+func codeActionKindAllowed(kind *protocol.CodeActionKind, only []protocol.CodeActionKind) bool {
+	if len(only) == 0 {
+		return true
+	}
+	if kind == nil {
+		return false
+	}
+	for _, filter := range only {
+		if *kind == filter || strings.HasPrefix(string(*kind), string(filter)+".") {
+			return true
+		}
+	}
+	return false
+}
+
 func getHledgerCommands() []hledgerCommand {
 	return []hledgerCommand{
 		{cmd: "bal", title: "Run hledger bal (balance)"},
@@ -45,18 +64,42 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, nil
 	}
 
-	actions, err := s.getCodeActions(params.TextDocument.URI)
-	if err != nil {
-		return nil, err
+	// Each source is skipped up front when the filter excludes its kind:
+	// quick fixes may run a full document analysis and the inferred-amount
+	// source parses and computes alignment, and a client asking for one kind
+	// should not pay for the others.
+	only := params.Context.Only
+
+	var actions []protocol.CodeAction
+	if codeActionKindAllowed(codeActionKind("source.hledger"), only) {
+		var err error
+		actions, err = s.getCodeActions(params.TextDocument.URI)
+		if err != nil {
+			return nil, err
+		}
 	}
-	quickFixes := s.getQuickFixCodeActions(params)
-	inferred := s.getInferredAmountCodeActions(params)
+	var quickFixes []protocol.CodeAction
+	if codeActionKindAllowed(codeActionKind(protocol.CodeActionKindQuickFix), only) {
+		quickFixes = s.getQuickFixCodeActions(params)
+	}
+	var inferred []protocol.CodeAction
+	if codeActionKindAllowed(codeActionKind(insertInferredAmountKind), only) {
+		inferred = s.getInferredAmountCodeActions(params)
+	}
 
 	generated := make([]protocol.CodeAction, 0, len(actions)+len(quickFixes)+len(inferred))
 	generated = append(generated, quickFixes...)
 	generated = append(generated, inferred...)
 	generated = append(generated, actions...)
-	return s.codeActionResult(generated), nil
+
+	// Filtered before codeActionResult: the command-only arm drops the kind.
+	filtered := generated[:0]
+	for _, action := range generated {
+		if codeActionKindAllowed(action.Kind, only) {
+			filtered = append(filtered, action)
+		}
+	}
+	return s.codeActionResult(filtered), nil
 }
 
 func (s *Server) codeActionResult(actions []protocol.CodeAction) []protocol.CommandOrCodeAction {
