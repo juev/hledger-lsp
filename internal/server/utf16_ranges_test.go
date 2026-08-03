@@ -91,6 +91,37 @@ func TestPrepareRename_ReportsUTF16RangeForEmojiAccount(t *testing.T) {
 	assert.Equal(t, uint32(emojiAccountEndChar), rng.End.Character)
 }
 
+func TestSemanticTokens_ReportUTF16ColumnsAfterEmoji(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///emoji.journal")
+	srv.StoreDocument(docURI, "2024-01-01 обед\n    Расходы:🍜  $10\n")
+
+	result, err := srv.SemanticTokensFull(context.Background(), &protocol.SemanticTokensParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Data)
+
+	// Decode the delta encoding into absolute columns for line 1.
+	var columns []uint32
+	line, col := uint32(0), uint32(0)
+	for i := 0; i+4 < len(result.Data); i += 5 {
+		if deltaLine := result.Data[i]; deltaLine > 0 {
+			line += deltaLine
+			col = result.Data[i+1]
+		} else {
+			col += result.Data[i+1]
+		}
+		if line == 1 {
+			columns = append(columns, col)
+		}
+	}
+
+	// "    Расходы:🍜" occupies 14 UTF-16 units, then two spaces, so the amount
+	// starts at 16 — one further right than the emoji's single rune suggests.
+	assert.Equal(t, []uint32{4, 16, 17}, columns, "account, commodity and number columns")
+}
+
 func TestDiagnostics_ReportUTF16RangesForEmojiAccount(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
