@@ -17,12 +17,13 @@ func (s *Server) SelectionRange(_ context.Context, params *protocol.SelectionRan
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
+	mapper := lsputil.NewPositionMapper(doc)
 	lines := strings.Split(doc, "\n")
 	docRange := documentRange(lines)
 
 	result := make([]protocol.SelectionRange, len(params.Positions))
 	for i, pos := range params.Positions {
-		result[i] = buildSelectionRange(journal, pos, docRange)
+		result[i] = buildSelectionRange(mapper, journal, pos, docRange)
 	}
 
 	return result, nil
@@ -40,25 +41,25 @@ func documentRange(lines []string) protocol.Range {
 	}
 }
 
-func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange protocol.Range) protocol.SelectionRange {
+func buildSelectionRange(mapper *lsputil.PositionMapper, journal *ast.Journal, pos protocol.Position, docRange protocol.Range) protocol.SelectionRange {
 	docSel := protocol.SelectionRange{Range: docRange}
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		txRange := *astRangeToProtocol(tx.Range)
+		txRange := astRangeToLSP(mapper, tx.Range)
 		if !rangeContainsPosition(txRange, pos) {
 			continue
 		}
 
 		txSel := protocol.SelectionRange{Range: txRange, Parent: &docSel}
 
-		if dateRange := *astRangeToProtocol(tx.Date.Range); rangeContainsPosition(dateRange, pos) {
+		if dateRange := astRangeToLSP(mapper, tx.Date.Range); rangeContainsPosition(dateRange, pos) {
 			return protocol.SelectionRange{Range: dateRange, Parent: &txSel}
 		}
 
 		payee := getPayeeOrDescription(tx)
 		if payee != "" {
-			payeeRange := *astRangeToProtocol(payeeRange(tx, payee))
+			payeeRange := astRangeToLSP(mapper, payeeRange(tx, payee))
 			if rangeContainsPosition(payeeRange, pos) {
 				return protocol.SelectionRange{Range: payeeRange, Parent: &txSel}
 			}
@@ -66,14 +67,14 @@ func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange p
 
 		for j := range tx.Postings {
 			p := &tx.Postings[j]
-			postingRange := *astRangeToProtocol(p.Range)
+			postingRange := astRangeToLSP(mapper, p.Range)
 			if !rangeContainsPosition(postingRange, pos) {
 				continue
 			}
 
 			postingSel := protocol.SelectionRange{Range: postingRange, Parent: &txSel}
 
-			accountRange := *astRangeToProtocol(p.Account.Range)
+			accountRange := astRangeToLSP(mapper, p.Account.Range)
 			if rangeContainsPosition(accountRange, pos) {
 				segRange := findAccountSegmentRange(p.Account, pos)
 				if segRange != nil && !rangesEqual(*segRange, accountRange) {
@@ -84,10 +85,10 @@ func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange p
 			}
 
 			if p.Amount != nil {
-				amountRange := *astRangeToProtocol(p.Amount.Range)
+				amountRange := astRangeToLSP(mapper, p.Amount.Range)
 				if rangeContainsPosition(amountRange, pos) {
 					amountSel := protocol.SelectionRange{Range: amountRange, Parent: &postingSel}
-					commodityRange := *astRangeToProtocol(p.Amount.Commodity.Range)
+					commodityRange := astRangeToLSP(mapper, p.Amount.Commodity.Range)
 					if p.Amount.Commodity.Symbol != "" && rangeContainsPosition(commodityRange, pos) {
 						return protocol.SelectionRange{Range: commodityRange, Parent: &amountSel}
 					}
@@ -102,7 +103,7 @@ func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange p
 	}
 
 	for _, dir := range journal.Directives {
-		dirRange := *astRangeToProtocol(dir.GetRange())
+		dirRange := astRangeToLSP(mapper, dir.GetRange())
 		if !rangeContainsPosition(dirRange, pos) {
 			continue
 		}
@@ -111,12 +112,12 @@ func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange p
 
 		switch d := dir.(type) {
 		case ast.AccountDirective:
-			accountRange := *astRangeToProtocol(ensureRangeEnd(d.Account.Range, d.Account.Name))
+			accountRange := astRangeToLSP(mapper, ensureRangeEnd(d.Account.Range, d.Account.Name))
 			if rangeContainsPosition(accountRange, pos) {
 				return protocol.SelectionRange{Range: accountRange, Parent: &dirSel}
 			}
 		case ast.CommodityDirective:
-			commodityRange := *astRangeToProtocol(ensureRangeEnd(d.Commodity.Range, d.Commodity.Symbol))
+			commodityRange := astRangeToLSP(mapper, ensureRangeEnd(d.Commodity.Range, d.Commodity.Symbol))
 			if rangeContainsPosition(commodityRange, pos) {
 				return protocol.SelectionRange{Range: commodityRange, Parent: &dirSel}
 			}
@@ -126,7 +127,7 @@ func buildSelectionRange(journal *ast.Journal, pos protocol.Position, docRange p
 	}
 
 	for _, comment := range journal.Comments {
-		commentRange := *astRangeToProtocol(comment.Range)
+		commentRange := astRangeToLSP(mapper, comment.Range)
 		if rangeContainsPosition(commentRange, pos) {
 			return protocol.SelectionRange{Range: commentRange, Parent: &docSel}
 		}

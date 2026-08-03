@@ -86,6 +86,22 @@ func (m *PositionMapper) LineUTF16Len(line int) int {
 	return UTF16Len(m.lines[line])
 }
 
+// LineEndPosition returns the position just past the last character of the
+// line. The line terminator is excluded, so in a CRLF document the position
+// points before the carriage return.
+func (m *PositionMapper) LineEndPosition(line int) protocol.Position {
+	if line < 0 {
+		return protocol.Position{Line: 0, Character: 0}
+	}
+	if line >= len(m.lines) {
+		return protocol.Position{Line: uint32(line), Character: 0}
+	}
+	return protocol.Position{
+		Line:      uint32(line),
+		Character: uint32(UTF16Len(strings.TrimSuffix(m.lines[line], "\r"))),
+	}
+}
+
 func (m *PositionMapper) LineRuneLen(line int) int {
 	if line < 0 || line >= len(m.lines) {
 		return 0
@@ -138,6 +154,28 @@ func UTF16OffsetToByteOffset(s string, utf16Offset int) int {
 		}
 	}
 	return byteOffset
+}
+
+// RuneOffsetToUTF16Offset converts a rune offset within s — the unit the lexer
+// reports columns in — to the UTF-16 code unit offset LSP positions use.
+func RuneOffsetToUTF16Offset(s string, runeOffset int) int {
+	if runeOffset <= 0 {
+		return 0
+	}
+	utf16Offset := 0
+	runes := 0
+	for _, r := range s {
+		if runes >= runeOffset {
+			return utf16Offset
+		}
+		if r >= 0x10000 {
+			utf16Offset += 2
+		} else {
+			utf16Offset++
+		}
+		runes++
+	}
+	return utf16Offset
 }
 
 // UTF16OffsetToRuneOffset converts an LSP UTF-16 character offset within s

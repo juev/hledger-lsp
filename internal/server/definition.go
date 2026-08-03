@@ -9,6 +9,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 type DefinitionContext int
@@ -34,7 +35,8 @@ func (s *Server) definition(_ context.Context, params *protocol.DefinitionParams
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
-	target := findDefinitionTarget(journal, params.Position)
+	mapper := lsputil.NewPositionMapper(doc)
+	target := findDefinitionTarget(mapper, journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}
@@ -42,7 +44,7 @@ func (s *Server) definition(_ context.Context, params *protocol.DefinitionParams
 	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
-	location := findDefinitionLocation(target, resolved, currentPath, journal)
+	location := findDefinitionLocation(target, resolved, currentPath, journal, s.newMapperCache())
 	if location == nil {
 		return nil, nil
 	}
@@ -50,7 +52,7 @@ func (s *Server) definition(_ context.Context, params *protocol.DefinitionParams
 	return []protocol.Location{*location}, nil
 }
 
-func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definitionTarget {
+func findDefinitionTarget(mapper *lsputil.PositionMapper, journal *ast.Journal, pos protocol.Position) *definitionTarget {
 	for _, dir := range journal.Directives {
 		switch d := dir.(type) {
 		case ast.AccountDirective:
@@ -59,7 +61,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 				return &definitionTarget{
 					context:     DefContextAccount,
 					name:        d.Account.Name,
-					symbolRange: astRangeToProtocol(accountRange),
+					symbolRange: rangePtr(astRangeToLSP(mapper, accountRange)),
 				}
 			}
 		case ast.CommodityDirective:
@@ -69,7 +71,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 					return &definitionTarget{
 						context:     DefContextCommodity,
 						name:        d.Commodity.Symbol,
-						symbolRange: astRangeToProtocol(commodityRange),
+						symbolRange: rangePtr(astRangeToLSP(mapper, commodityRange)),
 					}
 				}
 			}
@@ -78,7 +80,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 				return &definitionTarget{
 					context:     DefContextPayee,
 					name:        d.Name,
-					symbolRange: astRangeToProtocol(d.Range),
+					symbolRange: rangePtr(astRangeToLSP(mapper, d.Range)),
 				}
 			}
 		}
@@ -94,7 +96,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 				return &definitionTarget{
 					context:     DefContextPayee,
 					name:        payee,
-					symbolRange: astRangeToProtocol(payeeRange),
+					symbolRange: rangePtr(astRangeToLSP(mapper, payeeRange)),
 				}
 			}
 		}
@@ -107,7 +109,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 				return &definitionTarget{
 					context:     DefContextAccount,
 					name:        p.Account.Name,
-					symbolRange: astRangeToProtocol(accountRange),
+					symbolRange: rangePtr(astRangeToLSP(mapper, accountRange)),
 				}
 			}
 
@@ -116,7 +118,7 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 					return &definitionTarget{
 						context:     DefContextCommodity,
 						name:        p.Amount.Commodity.Symbol,
-						symbolRange: astRangeToProtocol(p.Amount.Commodity.Range),
+						symbolRange: rangePtr(astRangeToLSP(mapper, p.Amount.Commodity.Range)),
 					}
 				}
 			}
@@ -126,20 +128,20 @@ func findDefinitionTarget(journal *ast.Journal, pos protocol.Position) *definiti
 	return nil
 }
 
-func findDefinitionLocation(target *definitionTarget, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
+func findDefinitionLocation(target *definitionTarget, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, mappers *mapperCache) *protocol.Location {
 	switch target.context {
 	case DefContextAccount:
-		return findAccountDefinitionResolved(target.name, resolved, currentPath, currentJournal)
+		return findAccountDefinitionResolved(target.name, resolved, currentPath, currentJournal, mappers)
 	case DefContextCommodity:
-		return findCommodityDefinitionResolved(target.name, resolved, currentPath, currentJournal)
+		return findCommodityDefinitionResolved(target.name, resolved, currentPath, currentJournal, mappers)
 	case DefContextPayee:
-		return findPayeeDefinitionResolved(target.name, resolved, currentPath, currentJournal)
+		return findPayeeDefinitionResolved(target.name, resolved, currentPath, currentJournal, mappers)
 	default:
 		return nil
 	}
 }
 
-func findAccountDefinitionResolved(name string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
+func findAccountDefinitionResolved(name string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, mappers *mapperCache) *protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 
 	for _, filePath := range sortedJournalPaths(journals) {
@@ -149,17 +151,17 @@ func findAccountDefinitionResolved(name string, resolved *include.ResolvedJourna
 				if ad.Account.Name == name {
 					return &protocol.Location{
 						URI:   pathToURI(filePath),
-						Range: *astRangeToProtocol(ad.Range),
+						Range: mappers.rangeIn(filePath, ad.Range),
 					}
 				}
 			}
 		}
 	}
 
-	return findFirstAccountUsageResolved(name, journals)
+	return findFirstAccountUsageResolved(name, journals, mappers)
 }
 
-func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal) *protocol.Location {
+func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal, mappers *mapperCache) *protocol.Location {
 	var earliest *protocol.Location
 	var earliestDate *ast.Date
 
@@ -174,7 +176,7 @@ func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal
 						earliestDate = &tx.Date
 						earliest = &protocol.Location{
 							URI:   pathToURI(filePath),
-							Range: *astRangeToProtocol(computeAccountRange(&p.Account)),
+							Range: mappers.rangeIn(filePath, computeAccountRange(&p.Account)),
 						}
 					}
 				}
@@ -185,7 +187,7 @@ func findFirstAccountUsageResolved(name string, journals map[string]*ast.Journal
 	return earliest
 }
 
-func findCommodityDefinitionResolved(symbol string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
+func findCommodityDefinitionResolved(symbol string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, mappers *mapperCache) *protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 
 	for _, filePath := range sortedJournalPaths(journals) {
@@ -195,17 +197,17 @@ func findCommodityDefinitionResolved(symbol string, resolved *include.ResolvedJo
 				if cd.Commodity.Symbol == symbol {
 					return &protocol.Location{
 						URI:   pathToURI(filePath),
-						Range: *astRangeToProtocol(cd.Range),
+						Range: mappers.rangeIn(filePath, cd.Range),
 					}
 				}
 			}
 		}
 	}
 
-	return findFirstCommodityUsageResolved(symbol, journals)
+	return findFirstCommodityUsageResolved(symbol, journals, mappers)
 }
 
-func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Journal) *protocol.Location {
+func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Journal, mappers *mapperCache) *protocol.Location {
 	var earliest *protocol.Location
 	var earliestDate *ast.Date
 
@@ -220,7 +222,7 @@ func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Jou
 						earliestDate = &tx.Date
 						earliest = &protocol.Location{
 							URI:   pathToURI(filePath),
-							Range: *astRangeToProtocol(p.Amount.Commodity.Range),
+							Range: mappers.rangeIn(filePath, p.Amount.Commodity.Range),
 						}
 					}
 				}
@@ -231,7 +233,7 @@ func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Jou
 	return earliest
 }
 
-func findPayeeDefinitionResolved(payee string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) *protocol.Location {
+func findPayeeDefinitionResolved(payee string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, mappers *mapperCache) *protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 
 	var earliest *protocol.Location
@@ -247,7 +249,7 @@ func findPayeeDefinitionResolved(payee string, resolved *include.ResolvedJournal
 					earliestDate = &tx.Date
 					earliest = &protocol.Location{
 						URI:   pathToURI(filePath),
-						Range: *astRangeToProtocol(tx.Range),
+						Range: mappers.rangeIn(filePath, tx.Range),
 					}
 				}
 			}

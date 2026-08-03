@@ -102,13 +102,21 @@ type Parser struct {
 	initialCommodityDecimalMarks map[string]string
 }
 
+// Parse turns journal text into an AST. The input must already use LF line
+// endings — see ParseWithContext.
 func Parse(input string) (*ast.Journal, []ParseError) {
 	result, errs := ParseWithContext(input, Context{}, nil)
 	return result.Journal, errs
 }
 
+// ParseWithContext parses journal text that carries an outer parse context.
+//
+// The input must use LF line endings. Positions in the returned AST are
+// offsets into exactly the string passed in, and callers map them back to LSP
+// positions against that same string; normalizing here would instead give the
+// AST a coordinate system of its own and shift every position on a CRLF
+// document. Callers normalize on the way in — textutil.NormalizeLineEndings.
 func ParseWithContext(input string, initial Context, resolve IncludeResolver) (ParseResult, []ParseError) {
-	input = strings.ReplaceAll(input, "\r\n", "\n")
 	context := cloneContext(initial)
 	p := &Parser{
 		lexer:                        NewLexer(input),

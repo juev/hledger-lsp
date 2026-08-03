@@ -13,6 +13,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/parser"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 const (
@@ -83,7 +84,7 @@ func (l *Loader) LoadFromContent(path, content string) (*ResolvedJournal, []Load
 	if int64(len(content)) > limits.MaxFileSizeBytes {
 		return nil, []LoadError{{Kind: ErrorFileTooLarge, Path: path, SourcePath: path, Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), limits.MaxFileSizeBytes)}}
 	}
-	return l.load(path, normalizeLineEndings(content), LoadOptions{Overlays: map[string]OverlayEntry{
+	return l.load(path, textutil.NormalizeLineEndings(content), LoadOptions{Overlays: map[string]OverlayEntry{
 		canonicalPath(path): {SourcePath: path, Content: content},
 	}})
 }
@@ -266,7 +267,7 @@ func (s *loadState) readIncluded(path string) (string, *LoadError) {
 		if int64(len(content)) > s.limits.MaxFileSizeBytes {
 			return "", &LoadError{Kind: ErrorFileTooLarge, Path: path, Message: fmt.Sprintf("included file too large: %d bytes (max %d)", len(content), s.limits.MaxFileSizeBytes)}
 		}
-		return normalizeLineEndings(content), nil
+		return textutil.NormalizeLineEndings(content), nil
 	}
 	canonical := canonicalPath(path)
 	s.loader.mu.RLock()
@@ -286,7 +287,7 @@ func (s *loadState) readIncluded(path string) (string, *LoadError) {
 	if err != nil {
 		return "", &LoadError{Kind: ErrorFileNotFound, Path: path, Message: fmt.Sprintf("cannot read included file: %v", err)}
 	}
-	content = normalizeLineEndings(string(raw))
+	content = textutil.NormalizeLineEndings(string(raw))
 	s.loader.mu.Lock()
 	s.loader.cache[canonical] = content
 	s.loader.mu.Unlock()
@@ -298,7 +299,7 @@ func (l *Loader) readRoot(path string, options LoadOptions) (string, *LoadError)
 		if int64(len(content)) > l.getLimits().MaxFileSizeBytes {
 			return "", &LoadError{Kind: ErrorFileTooLarge, Path: path, SourcePath: path, Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), l.getLimits().MaxFileSizeBytes)}
 		}
-		return normalizeLineEndings(content), nil
+		return textutil.NormalizeLineEndings(content), nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -311,7 +312,7 @@ func (l *Loader) readRoot(path string, options LoadOptions) (string, *LoadError)
 	if err != nil {
 		return "", &LoadError{Kind: ErrorFileNotFound, Path: path, SourcePath: path, Message: fmt.Sprintf("cannot read file: %v", err)}
 	}
-	return normalizeLineEndings(string(raw)), nil
+	return textutil.NormalizeLineEndings(string(raw)), nil
 }
 
 func (l *Loader) expandGlob(basePath, pattern string) ([]string, error) {
@@ -352,11 +353,6 @@ func (l *Loader) InvalidateFile(path string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.cache, canonicalPath(path))
-}
-
-func normalizeLineEndings(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	return strings.ReplaceAll(content, "\r", "\n")
 }
 
 func absoluteClean(path string) string {

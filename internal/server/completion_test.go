@@ -25,7 +25,7 @@ account expenses:food
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -62,7 +62,7 @@ func TestCompletion_AccountsShowUsageCount(t *testing.T) {
 2024-01-18 new
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -110,7 +110,7 @@ func TestCompletion_PayeesShowUsageCount(t *testing.T) {
 
 2024-01-18 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -150,7 +150,7 @@ account assets:cash
     expenses:food:restaurant  $20
     assets:cash`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -186,7 +186,7 @@ func TestCompletion_Payees(t *testing.T) {
 
 2024-01-17 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -218,7 +218,7 @@ func TestCompletion_Commodities(t *testing.T) {
     expenses:rent  EUR 100
     assets:cash`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -295,7 +295,7 @@ account expenses:food
 2024-01-15 test
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -405,7 +405,7 @@ func TestCompletion_TagNames(t *testing.T) {
 
 2024-01-16 another ; `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -438,7 +438,7 @@ func TestCompletion_TagNames_NoDuplicates(t *testing.T) {
 
 2024-01-17 new ; `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -475,7 +475,7 @@ func TestCompletion_TagValues(t *testing.T) {
 
 2024-01-17 new ; project:`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -507,7 +507,7 @@ func TestCompletion_TagValues_OnlyForCurrentTag(t *testing.T) {
 
 2024-01-17 new ; status:`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -573,7 +573,7 @@ func TestCompletion_Date_BuiltIn(t *testing.T) {
 	srv := NewServer()
 	content := ``
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -609,7 +609,7 @@ func TestCompletion_Date_Historical(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -637,7 +637,7 @@ func TestCompletion_Date_UsesFileFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -672,7 +672,7 @@ func TestCompletion_Date_UsesSlashSeparator(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -705,7 +705,7 @@ func TestCompletion_Date_DefaultFormatWhenNoValidDates(t *testing.T) {
 account expenses:food
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -740,7 +740,7 @@ func TestCompletion_Date_UsesDotSeparator(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -775,7 +775,7 @@ func TestCompletion_Date_WithoutLeadingZeros(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -814,7 +814,7 @@ func TestCompletion_Date_HistoricalUsesFileFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -858,7 +858,7 @@ func TestCompletion_PayeeInsertsOnlyPayeeName(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -902,7 +902,7 @@ func TestCompletion_MultiplePayeesShowCounts(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -962,7 +962,7 @@ func TestCompletion_RankingByFrequency(t *testing.T) {
 
 2024-01-05 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1018,7 +1018,7 @@ func TestCompletion_AccountsRankingByFrequency(t *testing.T) {
 2024-01-05 Test5
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1090,7 +1090,7 @@ func TestCompletion_MaxResultsPreservesFrequent(t *testing.T) {
 
 2024-01-06 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1138,7 +1138,7 @@ func TestCompletion_MaxResultsAccountsPreservesFrequent(t *testing.T) {
 2024-01-05 Test5
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1240,7 +1240,7 @@ func TestCompletion_IsIncompleteAlwaysTrue(t *testing.T) {
     expenses:food  $50
     assets:cash`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1268,7 +1268,7 @@ func TestCompletion_FilterTextSameForAllItems(t *testing.T) {
 2024-01-16 another
     exp`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1491,7 +1491,7 @@ func TestCompletion_FiltersAndSortsByFrequency(t *testing.T) {
 2024-01-04 Test4
     альа`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1547,7 +1547,7 @@ func TestCompletion_ConsecutiveMatchBeforeSparse(t *testing.T) {
 2024-01-05 Test5
     альф`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1661,7 +1661,7 @@ commodity RUB
 2024-01-15 test
     expenses:food  100 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1691,7 +1691,7 @@ account expenses:food
 
 account `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1719,7 +1719,7 @@ func TestCompletion_DirectiveCommodity(t *testing.T) {
 
 commodity U`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1779,7 +1779,7 @@ account expenses:food
 2024-01-15 test
     exp`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -1818,7 +1818,7 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 	srv := NewServer()
 	content := "account expenses:food:supermarket\naccount expenses:food:electronics\n\n2024-01-15 test\n    expenses:food:supermarket"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	// Cursor right after "food:" at "expenses:food:|supermarket" — UTF-16 col 18
 	params := &protocol.CompletionParams{
@@ -2016,7 +2016,7 @@ func TestCompletion_PayeeWithoutTemplate(t *testing.T) {
 
 2024-01-15 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2134,7 +2134,7 @@ func TestCompletion_Date_UsesNearbyFormat(t *testing.T) {
 
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2267,7 +2267,7 @@ func TestCompletion_PartialDateReturnsDates(t *testing.T) {
 
 2026-`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2311,7 +2311,7 @@ func TestCompletion_PartialDateOverridesFileFormat(t *testing.T) {
 
 2026-`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2351,7 +2351,7 @@ func TestCompletion_ShortDateKeepsShortFormat(t *testing.T) {
 
 ` + prefix
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2418,7 +2418,7 @@ commodity RUB
 2024-01-15 test
     expenses:food  `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2617,7 +2617,7 @@ func TestCompletion_PayeeWithTab(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 Grocery Store\n    expenses:food  $50\n    assets:cash\n\n2024-01-16\t"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2850,7 +2850,7 @@ func TestCompletion_IncludeNotes_True_ShowsFullDescription(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2884,7 +2884,7 @@ func TestCompletion_IncludeNotes_False_ShowsPayeeOnly(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2915,7 +2915,7 @@ func TestCompletion_IncludeNotes_DefaultTrue(t *testing.T) {
 
 2024-01-16 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2944,7 +2944,7 @@ func TestCompletion_ExcludesCurrentTransactionAccounts(t *testing.T) {
 2024-01-16 new
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -2972,7 +2972,7 @@ func TestCompletion_ExcludesCurrentTransactionPayee(t *testing.T) {
 
 2024-01-16 Groc`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3003,7 +3003,7 @@ func TestCompletion_CursorBetweenTransactions(t *testing.T) {
     assets:cash
 `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3038,7 +3038,7 @@ account assets:cash
 2024-01-15 test
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3269,7 +3269,7 @@ func TestCompletion_DigitTriggerOnEmptyLine(t *testing.T) {
 
 2`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3303,7 +3303,7 @@ func TestCompletion_DigitTriggerPartialYear(t *testing.T) {
 
 202`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3338,7 +3338,7 @@ func TestCompletion_DigitTriggerInPostingDoesNotReturnDates(t *testing.T) {
     expenses:food  $5
     assets:cash`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3365,7 +3365,7 @@ func TestCompletion_DigitTriggerInPayeeArea(t *testing.T) {
 	srv := NewServer()
 	content := `2024-01-10 3`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3392,7 +3392,7 @@ func TestCompletion_DigitTriggerOnEmptyDocument(t *testing.T) {
 	srv := NewServer()
 	content := `2`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3492,7 +3492,7 @@ func TestCompletion_Directive_TypingAccProducesAccount(t *testing.T) {
 	srv := NewServer()
 	content := "acc"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3525,7 +3525,7 @@ func TestCompletion_Directive_InsertTextHasTrailingSpace(t *testing.T) {
 	srv := NewServer()
 	content := "inc"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3553,7 +3553,7 @@ func TestCompletion_Directive_TextEditFromColumnZero(t *testing.T) {
 	srv := NewServer()
 	content := "acc"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3583,7 +3583,7 @@ func TestCompletion_Directive_FuzzyFiltering(t *testing.T) {
 	srv := NewServer()
 	content := "com"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3609,7 +3609,7 @@ func TestCompletion_Directive_AllDirectivesShownOnSingleLetter(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test\n    expenses:food  $50\n    assets:cash\n\na"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3634,7 +3634,7 @@ func TestCompletion_Directive_MultiWordDirective(t *testing.T) {
 	srv := NewServer()
 	content := "app"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3693,7 +3693,7 @@ func TestCompletion_Directive_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\nacc"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3716,7 +3716,7 @@ func TestCompletion_Directive_BlockDirectiveNewlineInsertText(t *testing.T) {
 	srv := NewServer()
 	content := "com"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3744,7 +3744,7 @@ func TestCompletion_Directive_TextEditCoversFullLine(t *testing.T) {
 	srv := NewServer()
 	content := "apply a"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3787,7 +3787,7 @@ func TestCompletion_TagName_TextEditRange(t *testing.T) {
 
 2024-01-16 another ; proj`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3828,7 +3828,7 @@ func TestCompletion_TagValue_TextEditRange(t *testing.T) {
 
 2024-01-17 new ; project:al`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3863,7 +3863,7 @@ func TestCompletion_TagName_FuzzyMatch(t *testing.T) {
 
 2024-01-16 another ; proj`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3955,7 +3955,7 @@ func TestCompletion_TagName_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test  ; project:alpha, status:done\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\n2024-01-16 another ; proj"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -3978,7 +3978,7 @@ func TestCompletion_TagValue_CRLF(t *testing.T) {
 	srv := NewServer()
 	content := "2024-01-15 test1  ; project:alpha\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\n2024-01-16 test2  ; project:beta\r\n    expenses:rent  $1000\r\n    assets:bank\r\n\r\n2024-01-17 new ; project:"
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4006,7 +4006,7 @@ func TestCompletion_TagName_PostingComment(t *testing.T) {
 2024-01-16 another
     expenses:rent  $1000  ; `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4037,7 +4037,7 @@ func TestCompletion_TagValue_PostingComment(t *testing.T) {
 2024-01-16 another
     expenses:rent  $1000  ; project:`
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4101,7 +4101,7 @@ func TestCompletion_PayeeAwareAccountRanking(t *testing.T) {
 2024-01-04 Grocery Store
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4151,7 +4151,7 @@ func TestCompletion_PayeeAwareRanking_UnknownPayeeFallsBackToGlobal(t *testing.T
 2024-01-04 Unknown Place
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
@@ -4205,7 +4205,7 @@ func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
 2024-05-01 Grocery Store
     `
 
-	srv.documents.Store(uri.URI("file:///test.journal"), content)
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
 	params := &protocol.CompletionParams{
 		TextDocumentPositionParams: protocol.TextDocumentPositionParams{

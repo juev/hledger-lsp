@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -14,15 +13,8 @@ import (
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
-
-// normalizeLineEndings converts \r\n and \r to \n.
-// The parser assumes \n-only input. Files read from disk on Windows may have CRLF.
-func normalizeLineEndings(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	return s
-}
 
 // IncludeTree represents a single include tree rooted at one journal file.
 // Each root file (file with no incoming include edges) gets its own tree
@@ -186,7 +178,7 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 			continue
 		}
 
-		journal, errs := parser.Parse(normalizeLineEndings(string(content)))
+		journal, errs := parser.Parse(textutil.NormalizeLineEndings(string(content)))
 		if len(errs) > 0 {
 			for _, e := range errs {
 				w.parseErrors = append(w.parseErrors, fmt.Sprintf("%s: %s", file, e.Message))
@@ -395,7 +387,7 @@ func (w *Workspace) UpdateFile(path, content string) {
 	if path == "" || !filetype.IsJournalPath(path) {
 		return
 	}
-	journal, _ := parser.Parse(normalizeLineEndings(content))
+	journal, _ := parser.Parse(textutil.NormalizeLineEndings(content))
 	w.UpdateFileWithJournal(path, content, journal)
 }
 
@@ -446,7 +438,7 @@ func (w *Workspace) UpdateFileWithJournal(path, content string, journal *ast.Jou
 		tree.LoadErrors = errs
 		tree.rootContentSnapshotIsValid = rootPath == path
 		if tree.rootContentSnapshotIsValid {
-			tree.rootContentSnapshot = normalizeLineEndings(content)
+			tree.rootContentSnapshot = textutil.NormalizeLineEndings(content)
 		}
 		tree.clearCaches()
 		w.syncOwnershipFromResolvedLocked(tree)

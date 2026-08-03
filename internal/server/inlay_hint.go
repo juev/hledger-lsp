@@ -61,8 +61,13 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 		}
 		if settings.InlayHints.InferredAmounts && len(effect.InferredAmounts) > 0 {
+			// Anchored past the end of the line rather than after the account
+			// name: an inlay hint takes up room in the rendered line, so a hint
+			// placed mid-line pushes the alignment padding — and the cursor
+			// waiting at the amount column — to the right.
+			accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
 			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position:    mapper.ByteToLSP(posting.Account.Range.End.Offset),
+				Position:    mapper.LineEndPosition(int(accountEnd.Line)),
 				Label:       protocol.String("= " + formatAmounts(effect.InferredAmounts, formats)),
 				Kind:        protocol.InlayHintKindType,
 				PaddingLeft: boolPtr(true),

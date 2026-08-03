@@ -190,7 +190,9 @@ func computeDateRange(tx *ast.Transaction) ast.Range {
 }
 
 func computeAccountRange(account *ast.Account) ast.Range {
-	return account.Range
+	// Account directives leave the end unset, which would otherwise travel to
+	// the client as a range ending at character 0.
+	return ensureRangeEnd(account.Range, account.Name)
 }
 
 func getPayeeOrDescription(tx *ast.Transaction) string {
@@ -455,14 +457,19 @@ func countPostingsForAccountInTransactions(accountName string, transactions []as
 func ensureRangeEnd(rng ast.Range, name string) ast.Range {
 	if rng.End.Line == 0 && rng.End.Column == 0 && rng.Start.Line > 0 {
 		rng.End = ast.Position{
-			Line:   rng.Start.Line,
-			Column: rng.Start.Column + lsputil.UTF16Len(name),
+			Line: rng.Start.Line,
+			// The lexer counts columns in runes; converting to the UTF-16 units
+			// LSP wants happens at the protocol boundary, not here.
+			Column: rng.Start.Column + utf8.RuneCountInString(name),
 			Offset: rng.Start.Offset + len(name),
 		}
 	}
 	return rng
 }
 
+// astRangeToProtocol reads lexer columns as LSP characters, which only holds
+// while the line has no character outside the BMP. Prefer astRangeToLSP, which
+// goes through byte offsets and a PositionMapper.
 func astRangeToProtocol(rng ast.Range) *protocol.Range {
 	return &protocol.Range{
 		Start: protocol.Position{

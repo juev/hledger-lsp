@@ -21,10 +21,11 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 		startChar uint32
 	}
 	seen := make(map[symbolKey]bool)
+	mappers := s.newMapperCache()
 	var symbols []protocol.SymbolInformation
 
 	addSymbols := func(journal *ast.Journal, docURI uri.URI) {
-		for _, sym := range extractSymbols(journal, docURI, query) {
+		for _, sym := range extractSymbols(mappers, journal, docURI, query) {
 			key := symbolKey{
 				name:      sym.Name,
 				kind:      sym.Kind,
@@ -74,7 +75,7 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 	return symbols, nil
 }
 
-func extractSymbols(journal *ast.Journal, uri uri.URI, query string) []protocol.SymbolInformation {
+func extractSymbols(mappers *mapperCache, journal *ast.Journal, uri uri.URI, query string) []protocol.SymbolInformation {
 	var symbols []protocol.SymbolInformation
 
 	for _, dir := range journal.Directives {
@@ -85,7 +86,7 @@ func extractSymbols(journal *ast.Journal, uri uri.URI, query string) []protocol.
 					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: d.Account.Name, Kind: protocol.SymbolKindClass},
 					Location: protocol.Location{
 						URI:   uri,
-						Range: *astRangeToProtocol(d.Account.Range),
+						Range: mappers.rangeIn(uriToPath(uri), d.Account.Range),
 					},
 				})
 			}
@@ -95,7 +96,7 @@ func extractSymbols(journal *ast.Journal, uri uri.URI, query string) []protocol.
 					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: d.Commodity.Symbol, Kind: protocol.SymbolKindEnum},
 					Location: protocol.Location{
 						URI:   uri,
-						Range: *astRangeToProtocol(d.Commodity.Range),
+						Range: mappers.rangeIn(uriToPath(uri), d.Commodity.Range),
 					},
 				})
 			}
@@ -113,7 +114,7 @@ func extractSymbols(journal *ast.Journal, uri uri.URI, query string) []protocol.
 					BaseSymbolInformation: protocol.BaseSymbolInformation{Name: payee, Kind: protocol.SymbolKindFunction},
 					Location: protocol.Location{
 						URI:   uri,
-						Range: *astRangeToProtocol(payeeRange(tx, payee)),
+						Range: mappers.rangeIn(uriToPath(uri), payeeRange(tx, payee)),
 					},
 				})
 			}

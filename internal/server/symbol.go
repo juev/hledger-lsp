@@ -10,6 +10,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/rules"
 )
 
@@ -31,22 +32,23 @@ func (s *Server) documentSymbols(
 		return nil
 	}
 
+	mapper := lsputil.NewPositionMapper(doc)
 	symbols := make([]protocol.DocumentSymbol, 0, len(journal.Transactions)+len(journal.Directives)+len(journal.Includes))
 
-	symbols = append(symbols, groupTransactionsByMonth(journal.Transactions)...)
+	symbols = append(symbols, groupTransactionsByMonth(mapper, journal.Transactions)...)
 
 	for _, dir := range journal.Directives {
-		symbols = append(symbols, directiveToSymbol(dir))
+		symbols = append(symbols, directiveToSymbol(mapper, dir))
 	}
 
 	for _, inc := range journal.Includes {
-		symbols = append(symbols, includeToSymbol(inc))
+		symbols = append(symbols, includeToSymbol(mapper, inc))
 	}
 
 	return symbols
 }
 
-func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.DocumentSymbol {
+func groupTransactionsByMonth(mapper *lsputil.PositionMapper, transactions []ast.Transaction) []protocol.DocumentSymbol {
 	if len(transactions) == 0 {
 		return nil
 	}
@@ -70,7 +72,7 @@ func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.Documen
 			order = append(order, key)
 		}
 		g.last = tx
-		g.children = append(g.children, transactionToSymbol(tx))
+		g.children = append(g.children, transactionToSymbol(mapper, tx))
 	}
 
 	sort.Strings(order)
@@ -78,7 +80,7 @@ func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.Documen
 	result := make([]protocol.DocumentSymbol, 0, len(order))
 	for _, key := range order {
 		g := groups[key]
-		rng := *astRangeToProtocol(ast.Range{
+		rng := astRangeToLSP(mapper, ast.Range{
 			Start: g.first.Range.Start,
 			End:   g.last.Range.End,
 		})
@@ -93,8 +95,8 @@ func groupTransactionsByMonth(transactions []ast.Transaction) []protocol.Documen
 	return result
 }
 
-func includeToSymbol(inc ast.Include) protocol.DocumentSymbol {
-	rng := *astRangeToProtocol(inc.Range)
+func includeToSymbol(mapper *lsputil.PositionMapper, inc ast.Include) protocol.DocumentSymbol {
+	rng := astRangeToLSP(mapper, inc.Range)
 	return protocol.DocumentSymbol{
 		Name:           "include " + inc.Path,
 		Kind:           protocol.SymbolKindModule,
@@ -103,9 +105,9 @@ func includeToSymbol(inc ast.Include) protocol.DocumentSymbol {
 	}
 }
 
-func transactionToSymbol(tx ast.Transaction) protocol.DocumentSymbol {
+func transactionToSymbol(mapper *lsputil.PositionMapper, tx ast.Transaction) protocol.DocumentSymbol {
 	name := formatTransactionName(tx)
-	rng := *astRangeToProtocol(tx.Range)
+	rng := astRangeToLSP(mapper, tx.Range)
 
 	return protocol.DocumentSymbol{
 		Name:           name,
@@ -123,7 +125,7 @@ func formatTransactionName(tx ast.Transaction) string {
 	return date
 }
 
-func directiveToSymbol(dir ast.Directive) protocol.DocumentSymbol {
+func directiveToSymbol(mapper *lsputil.PositionMapper, dir ast.Directive) protocol.DocumentSymbol {
 	var name string
 	var kind protocol.SymbolKind
 
@@ -146,7 +148,7 @@ func directiveToSymbol(dir ast.Directive) protocol.DocumentSymbol {
 		kind = protocol.SymbolKindVariable
 	}
 
-	rng := *astRangeToProtocol(dir.GetRange())
+	rng := astRangeToLSP(mapper, dir.GetRange())
 	return protocol.DocumentSymbol{
 		Name:           name,
 		Kind:           kind,

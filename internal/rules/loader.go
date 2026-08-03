@@ -9,17 +9,8 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
-
-// normalizeLineEndings converts \r\n and \r to \n.
-// The rules lexer assumes \n-only input. Files read from disk on Windows may
-// have CRLF. (Mirrors the copy in internal/include/loader.go; kept local to
-// avoid a cross-package dependency for a trivial two-line helper.)
-func normalizeLineEndings(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	return s
-}
 
 const (
 	defaultMaxFileSizeBytes = 10 * 1024 * 1024
@@ -146,7 +137,7 @@ func (l *Loader) LoadWithOptions(path string, options LoadOptions) (*ResolvedRul
 	if rootErr != nil {
 		return nil, []LoadError{*rootErr}
 	}
-	rootContent = normalizeLineEndings(rootContent)
+	rootContent = textutil.NormalizeLineEndings(rootContent)
 
 	// Expand textually.
 	expander := &textExpander{
@@ -427,7 +418,7 @@ func (e *textExpander) expand(
 			errors = append(errors, *readErr)
 			continue
 		}
-		childContent = normalizeLineEndings(childContent)
+		childContent = textutil.NormalizeLineEndings(childContent)
 
 		// Recursively expand child.
 		expandedStart := out.Len()

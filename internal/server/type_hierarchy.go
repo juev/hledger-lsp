@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"os"
 	"sort"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 type typeHierarchyData struct {
@@ -45,7 +45,7 @@ func (s *Server) prepareTypeHierarchy(_ context.Context, params *protocol.TypeHi
 	if !ok {
 		return nil, nil
 	}
-	doc = normalizeLineEndings(doc)
+	doc = textutil.NormalizeLineEndings(doc)
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	mapper := lsputil.NewPositionMapper(doc)
 	for _, account := range hierarchyAccounts(journal) {
@@ -207,7 +207,7 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []type
 			}
 		}
 	} else if doc, ok := s.GetDocument(origin); ok {
-		journal, _ := s.cachedJournal(origin, normalizeLineEndings(doc))
+		journal, _ := s.cachedJournal(origin, textutil.NormalizeLineEndings(doc))
 		occurrences = append(occurrences, include.JournalOccurrence{Path: uriToPath(origin), Journal: journal})
 	}
 
@@ -223,7 +223,7 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []type
 		}
 		mapper := mappers[docURI]
 		if mapper == nil {
-			content, ok := s.typeHierarchySource(docURI)
+			content, ok := s.documentSource(docURI)
 			if !ok {
 				continue
 			}
@@ -240,17 +240,6 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []type
 		}
 	}
 	return candidates
-}
-
-func (s *Server) typeHierarchySource(docURI uri.URI) (string, bool) {
-	if content, ok := s.GetDocument(docURI); ok {
-		return normalizeLineEndings(content), true
-	}
-	content, err := os.ReadFile(uriToPath(docURI))
-	if err != nil {
-		return "", false
-	}
-	return normalizeLineEndings(string(content)), true
 }
 
 func (s *Server) typeHierarchyItem(candidate typeHierarchyCandidate, origin uri.URI, rootPath string) protocol.TypeHierarchyItem {

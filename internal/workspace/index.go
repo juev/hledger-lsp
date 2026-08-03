@@ -12,6 +12,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 type TransactionEntry struct {
@@ -349,7 +350,7 @@ func copyNestedIntMap(source map[string]map[string]int) map[string]map[string]in
 }
 
 func BuildFileIndexFromContent(path, content string) (*FileIndex, *ast.Journal, []string) {
-	journal, parseErrs := parser.Parse(normalizeLineEndings(content))
+	journal, parseErrs := parser.Parse(textutil.NormalizeLineEndings(content))
 	var errors []string
 	for _, err := range parseErrs {
 		errors = append(errors, err.Message)

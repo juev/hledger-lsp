@@ -145,6 +145,30 @@ func TestPositionMapper_LineUTF16Len(t *testing.T) {
 	assert.Equal(t, 0, mapper.LineUTF16Len(10)) // out of bounds
 }
 
+func TestPositionMapper_LineEndPosition(t *testing.T) {
+	mapper := NewPositionMapper("hello\nПривет\na\U00010400b")
+
+	assert.Equal(t, protocol.Position{Line: 0, Character: 5}, mapper.LineEndPosition(0))
+	assert.Equal(t, protocol.Position{Line: 1, Character: 6}, mapper.LineEndPosition(1))
+	assert.Equal(t, protocol.Position{Line: 2, Character: 4}, mapper.LineEndPosition(2), "surrogate pair counts as two UTF-16 units")
+
+	crlf := NewPositionMapper("hello\r\nworld\r\n")
+	assert.Equal(t, protocol.Position{Line: 0, Character: 5}, crlf.LineEndPosition(0), "carriage return is not part of the line")
+	assert.Equal(t, protocol.Position{Line: 1, Character: 5}, crlf.LineEndPosition(1))
+
+	assert.Equal(t, protocol.Position{Line: 0, Character: 0}, mapper.LineEndPosition(-1))
+	assert.Equal(t, protocol.Position{Line: 10, Character: 0}, mapper.LineEndPosition(10))
+}
+
+func TestRuneOffsetToUTF16Offset(t *testing.T) {
+	assert.Equal(t, 0, RuneOffsetToUTF16Offset("hello", 0))
+	assert.Equal(t, 5, RuneOffsetToUTF16Offset("hello", 5))
+	assert.Equal(t, 5, RuneOffsetToUTF16Offset("hello", 99), "clamped to the end of the string")
+	assert.Equal(t, 0, RuneOffsetToUTF16Offset("hello", -1))
+	assert.Equal(t, 6, RuneOffsetToUTF16Offset("Привет:x", 6))
+	assert.Equal(t, 3, RuneOffsetToUTF16Offset("a\U00010400b", 2), "a supplementary rune spans two UTF-16 units")
+}
+
 func TestPositionMapper_LSPToByte(t *testing.T) {
 	content := "hello\nАктивы:Кошелек  100\nworld"
 	mapper := NewPositionMapper(content)

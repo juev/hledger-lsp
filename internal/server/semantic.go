@@ -337,8 +337,16 @@ type semanticToken struct {
 	modifiers uint32
 }
 
+// semanticCol converts a lexer position to the UTF-16 column LSP expects.
+// The lexer counts columns in runes, so a token that follows an emoji on the
+// same line would otherwise be reported one unit too far left.
+func semanticCol(mapper *lsputil.PositionMapper, pos parser.Position) uint32 {
+	return mapper.ByteToLSP(pos.Offset).Character
+}
+
 func tokenizeForSemantics(content string) []semanticToken {
 	lexer := parser.NewLexer(content)
+	mapper := lsputil.NewPositionMapper(content)
 	var tokens []semanticToken
 
 	inDirective := false
@@ -369,14 +377,14 @@ func tokenizeForSemantics(content string) []semanticToken {
 					inCommentBlock = false
 					tokens = append(tokens, semanticToken{
 						line:      uint32(tok.Pos.Line - 1),
-						col:       uint32(tok.Pos.Column - 1),
+						col:       semanticCol(mapper, tok.Pos),
 						length:    uint32(lsputil.UTF16Len(tok.Value)),
 						tokenType: TokenTypeDirective,
 						modifiers: 0,
 					})
 					tokens = append(tokens, semanticToken{
 						line:      uint32(next.Pos.Line - 1),
-						col:       uint32(next.Pos.Column - 1),
+						col:       semanticCol(mapper, next.Pos),
 						length:    uint32(lsputil.UTF16Len(next.Value)),
 						tokenType: TokenTypeDirective,
 						modifiers: 0,
@@ -386,7 +394,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 				// Not "end comment" — emit "end" as comment, then handle next token
 				tokens = append(tokens, semanticToken{
 					line:      uint32(tok.Pos.Line - 1),
-					col:       uint32(tok.Pos.Column - 1),
+					col:       semanticCol(mapper, tok.Pos),
 					length:    uint32(lsputil.UTF16Len(tok.Value)),
 					tokenType: TokenTypeComment,
 					modifiers: 0,
@@ -408,7 +416,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 			}
 			tokens = append(tokens, semanticToken{
 				line:      uint32(tok.Pos.Line - 1),
-				col:       uint32(tok.Pos.Column - 1),
+				col:       semanticCol(mapper, tok.Pos),
 				length:    length,
 				tokenType: TokenTypeComment,
 				modifiers: 0,
@@ -432,7 +440,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 					// Emit "comment" directive token
 					tokens = append(tokens, semanticToken{
 						line:      uint32(tok.Pos.Line - 1),
-						col:       uint32(tok.Pos.Column - 1),
+						col:       semanticCol(mapper, tok.Pos),
 						length:    uint32(lsputil.UTF16Len(tok.Value)),
 						tokenType: TokenTypeDirective,
 						modifiers: 0,
@@ -457,14 +465,14 @@ func tokenizeForSemantics(content string) []semanticToken {
 				strings.TrimSpace(next.Value) == "comment" {
 				tokens = append(tokens, semanticToken{
 					line:      uint32(tok.Pos.Line - 1),
-					col:       uint32(tok.Pos.Column - 1),
+					col:       semanticCol(mapper, tok.Pos),
 					length:    uint32(lsputil.UTF16Len(tok.Value)),
 					tokenType: TokenTypeDirective,
 					modifiers: 0,
 				})
 				tokens = append(tokens, semanticToken{
 					line:      uint32(next.Pos.Line - 1),
-					col:       uint32(next.Pos.Column - 1),
+					col:       semanticCol(mapper, next.Pos),
 					length:    uint32(lsputil.UTF16Len(next.Value)),
 					tokenType: TokenTypeDirective,
 					modifiers: 0,
@@ -476,7 +484,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 			if ok {
 				tokens = append(tokens, semanticToken{
 					line:      uint32(tok.Pos.Line - 1),
-					col:       uint32(tok.Pos.Column - 1),
+					col:       semanticCol(mapper, tok.Pos),
 					length:    uint32(lsputil.UTF16Len(tok.Value)),
 					tokenType: semType,
 					modifiers: 0,
@@ -514,7 +522,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 				pendingNegative = true
 				tokens = append(tokens, semanticToken{
 					line:      uint32(tok.Pos.Line - 1),
-					col:       uint32(tok.Pos.Column - 1),
+					col:       semanticCol(mapper, tok.Pos),
 					length:    uint32(lsputil.UTF16Len(tok.Value)),
 					tokenType: TokenTypeAmount,
 					modifiers: 1 << ModifierNegative,
@@ -566,7 +574,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 
 		// Handle comments with tags - extract tag tokens
 		if tok.Type == parser.TokenComment {
-			tagTokens := extractTagTokensFromComment(tok)
+			tagTokens := extractTagTokensFromComment(mapper, tok)
 			if len(tagTokens) > 0 {
 				tokens = append(tokens, tagTokens...)
 				continue
@@ -586,7 +594,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 
 		tokens = append(tokens, semanticToken{
 			line:      uint32(tok.Pos.Line - 1),
-			col:       uint32(tok.Pos.Column - 1),
+			col:       semanticCol(mapper, tok.Pos),
 			length:    length,
 			tokenType: semType,
 			modifiers: modifiers,
@@ -596,14 +604,14 @@ func tokenizeForSemantics(content string) []semanticToken {
 	return tokens
 }
 
-func extractTagTokensFromComment(tok parser.Token) []semanticToken {
+func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Token) []semanticToken {
 	commentText := tok.Value
 	if !strings.Contains(commentText, ":") {
 		return nil
 	}
 
 	baseLine := uint32(tok.Pos.Line - 1)
-	baseCol := uint32(tok.Pos.Column - 1)
+	baseCol := semanticCol(mapper, tok.Pos)
 
 	// Tag/value spans are collected as UTF-16 offsets from the ';' marker.
 	// Offset 0 is the ';' itself; the comment text begins at offset 1.

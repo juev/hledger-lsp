@@ -7,6 +7,8 @@ import (
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func (s *Server) prepareRename(_ context.Context, params *protocol.PrepareRenameParams) (protocol.PrepareRenameResult, error) {
@@ -16,7 +18,7 @@ func (s *Server) prepareRename(_ context.Context, params *protocol.PrepareRename
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
-	target := findDefinitionTarget(journal, params.Position)
+	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}
@@ -35,7 +37,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
-	target := findDefinitionTarget(journal, params.Position)
+	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, params.Position)
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}
@@ -43,7 +45,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
-	locations := findReferences(target, resolved, currentPath, journal, true)
+	locations := findReferences(target, resolved, currentPath, journal, true, s.newMapperCache())
 	if len(locations) == 0 {
 		return nil, nil
 	}
