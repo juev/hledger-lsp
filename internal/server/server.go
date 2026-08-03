@@ -549,19 +549,14 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 
 func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagnostic {
 	journal, parseErrs := s.cachedJournal(docURI, content)
+	mapper := lsputil.NewPositionMapper(content)
 
 	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
 	for _, err := range parseErrs {
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{
-				Start: protocol.Position{
-					Line:      uint32(max(0, err.Pos.Line-1)),
-					Character: uint32(max(0, err.Pos.Column-1)),
-				},
-				End: protocol.Position{
-					Line:      uint32(max(0, err.End.Line-1)),
-					Character: uint32(max(0, err.End.Column-1)),
-				},
+				Start: mapper.ByteToLSP(err.Pos.Offset),
+				End:   mapper.ByteToLSP(err.End.Offset),
 			},
 			Severity: protocol.DiagnosticSeverityError,
 			Source:   protocol.NewOptional("hledger-lsp"),
@@ -588,7 +583,7 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 			continue
 		}
 		diagnostics = append(diagnostics, protocol.Diagnostic{
-			Range:    *astRangeToProtocol(diag.Range),
+			Range:    astRangeToLSP(mapper, diag.Range),
 			Severity: toProtocolSeverity(diag.Severity),
 			Source:   protocol.NewOptional("hledger-lsp"),
 			Message:  protocol.String(diag.Message),

@@ -26,24 +26,24 @@ func (s *Server) References(ctx context.Context, params *protocol.ReferenceParam
 	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
-	return findReferences(target, resolved, currentPath, journal, params.Context.IncludeDeclaration), nil
+	return findReferences(target, resolved, currentPath, journal, params.Context.IncludeDeclaration, s.newMapperCache()), nil
 }
 
-func findReferences(target *definitionTarget, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool) []protocol.Location {
+func findReferences(target *definitionTarget, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool, mappers *mapperCache) []protocol.Location {
 	switch target.context {
 	case DefContextAccount:
-		return findAccountReferences(target.name, resolved, currentPath, currentJournal, includeDeclaration)
+		return findAccountReferences(target.name, resolved, currentPath, currentJournal, includeDeclaration, mappers)
 	case DefContextCommodity:
-		return findCommodityReferences(target.name, resolved, currentPath, currentJournal, includeDeclaration)
+		return findCommodityReferences(target.name, resolved, currentPath, currentJournal, includeDeclaration, mappers)
 	case DefContextPayee:
 		// Payees don't have declarations (no directive), so includeDeclaration is ignored
-		return findPayeeReferences(target.name, resolved, currentPath, currentJournal)
+		return findPayeeReferences(target.name, resolved, currentPath, currentJournal, mappers)
 	default:
 		return nil
 	}
 }
 
-func findAccountReferences(name string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool) []protocol.Location {
+func findAccountReferences(name string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool, mappers *mapperCache) []protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 	var locations []protocol.Location
 
@@ -56,7 +56,7 @@ func findAccountReferences(name string, resolved *include.ResolvedJournal, curre
 					if ad.Account.Name == name {
 						locations = append(locations, protocol.Location{
 							URI:   pathToURI(filePath),
-							Range: *astRangeToProtocol(computeAccountRange(&ad.Account)),
+							Range: mappers.rangeIn(filePath, computeAccountRange(&ad.Account)),
 						})
 					}
 				}
@@ -70,7 +70,7 @@ func findAccountReferences(name string, resolved *include.ResolvedJournal, curre
 				if p.Account.Name == name {
 					locations = append(locations, protocol.Location{
 						URI:   pathToURI(filePath),
-						Range: *astRangeToProtocol(computeAccountRange(&p.Account)),
+						Range: mappers.rangeIn(filePath, computeAccountRange(&p.Account)),
 					})
 				}
 			}
@@ -80,7 +80,7 @@ func findAccountReferences(name string, resolved *include.ResolvedJournal, curre
 	return sortAndDedup(locations)
 }
 
-func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool) []protocol.Location {
+func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, includeDeclaration bool, mappers *mapperCache) []protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 	var locations []protocol.Location
 
@@ -93,7 +93,7 @@ func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, c
 					if cd.Commodity.Symbol == symbol {
 						locations = append(locations, protocol.Location{
 							URI:   pathToURI(filePath),
-							Range: *astRangeToProtocol(cd.Commodity.Range),
+							Range: mappers.rangeIn(filePath, cd.Commodity.Range),
 						})
 					}
 				}
@@ -107,7 +107,7 @@ func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, c
 				if p.Amount != nil && p.Amount.Commodity.Symbol == symbol {
 					locations = append(locations, protocol.Location{
 						URI:   pathToURI(filePath),
-						Range: *astRangeToProtocol(p.Amount.Commodity.Range),
+						Range: mappers.rangeIn(filePath, p.Amount.Commodity.Range),
 					})
 				}
 			}
@@ -117,7 +117,7 @@ func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, c
 	return sortAndDedup(locations)
 }
 
-func findPayeeReferences(payee string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal) []protocol.Location {
+func findPayeeReferences(payee string, resolved *include.ResolvedJournal, currentPath string, currentJournal *ast.Journal, mappers *mapperCache) []protocol.Location {
 	journals := allJournalsWithPaths(resolved, currentPath, currentJournal)
 	var locations []protocol.Location
 
@@ -130,7 +130,7 @@ func findPayeeReferences(payee string, resolved *include.ResolvedJournal, curren
 			if txPayee == payee {
 				locations = append(locations, protocol.Location{
 					URI:   pathToURI(filePath),
-					Range: *astRangeToProtocol(payeeRange(tx, payee)),
+					Range: mappers.rangeIn(filePath, payeeRange(tx, payee)),
 				})
 			}
 		}

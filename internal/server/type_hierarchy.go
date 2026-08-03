@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"os"
 	"sort"
 	"strings"
 
@@ -224,7 +223,7 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []type
 		}
 		mapper := mappers[docURI]
 		if mapper == nil {
-			content, ok := s.typeHierarchySource(docURI)
+			content, ok := s.documentSource(docURI)
 			if !ok {
 				continue
 			}
@@ -241,17 +240,6 @@ func (s *Server) typeHierarchyCandidates(origin uri.URI, rootPath string) []type
 		}
 	}
 	return candidates
-}
-
-func (s *Server) typeHierarchySource(docURI uri.URI) (string, bool) {
-	if content, ok := s.GetDocument(docURI); ok {
-		return textutil.NormalizeLineEndings(content), true
-	}
-	content, err := os.ReadFile(uriToPath(docURI))
-	if err != nil {
-		return "", false
-	}
-	return textutil.NormalizeLineEndings(string(content)), true
 }
 
 func (s *Server) typeHierarchyItem(candidate typeHierarchyCandidate, origin uri.URI, rootPath string) protocol.TypeHierarchyItem {

@@ -43,7 +43,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	resolved := s.getWorkspaceResolved(params.TextDocument.URI)
 	currentPath := uriToPath(params.TextDocument.URI)
 
-	locations := findReferences(target, resolved, currentPath, journal, true)
+	locations := findReferences(target, resolved, currentPath, journal, true, s.newMapperCache())
 	if len(locations) == 0 {
 		return nil, nil
 	}
