@@ -3796,7 +3796,7 @@ func TestParser_BalanceAssertionWithAllAnnotationsCRLF(t *testing.T) {
 }
 
 func TestParseWithContext_OrdersEveryJournalNodeAndResolvesIncludes(t *testing.T) {
-	input := "; before\r\nY 2024\r\n2024-01-01 one\r\n    assets:cash\r\n~ monthly two\r\n    assets:cash\r\n= account:assets three\r\n    assets:cash\r\naccount Активы:Банк\r\ninclude child.journal\r\n; after\r\n"
+	input := strings.ReplaceAll("; before\r\nY 2024\r\n2024-01-01 one\r\n    assets:cash\r\n~ monthly two\r\n    assets:cash\r\n= account:assets three\r\n    assets:cash\r\naccount Активы:Банк\r\ninclude child.journal\r\n; after\r\n", "\r\n", "\n")
 
 	result, errs := ParseWithContext(input, Context{}, func(site IncludeSite) ContextExports {
 		assert.Equal(t, "child.journal", site.Include.Path)

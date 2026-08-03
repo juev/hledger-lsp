@@ -21,6 +21,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/rules"
+	"github.com/juev/hledger-lsp/internal/textutil"
 	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
@@ -110,8 +111,11 @@ func (s *Server) SetClient(client protocol.Client) {
 	s.client = client
 }
 
+// StoreDocument records document content, normalizing line endings the same
+// way the didOpen/didChange handlers do. Everything downstream — AST offsets,
+// PositionMapper, the rope in internal/document — assumes LF-only text.
 func (s *Server) StoreDocument(uri uri.URI, content string) {
-	s.documents.Store(uri, content)
+	s.documents.Store(uri, textutil.NormalizeLineEndings(content))
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -294,7 +298,7 @@ func (s *Server) Exit(ctx context.Context) error {
 }
 
 func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
-	content := normalizeLineEndings(params.TextDocument.Text)
+	content := textutil.NormalizeLineEndings(params.TextDocument.Text)
 	s.documents.Store(params.TextDocument.URI, content)
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.invalidateDocText(params.TextDocument.URI)
@@ -321,13 +325,13 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 				if change == nil {
 					continue
 				}
-				content = normalizeLineEndings(change.Text)
+				content = textutil.NormalizeLineEndings(change.Text)
 				s.invalidateDocText(params.TextDocument.URI)
 			case *protocol.TextDocumentContentChangePartial:
 				if change == nil {
 					continue
 				}
-				content = s.applyChange(params.TextDocument.URI, content, change.Range, normalizeLineEndings(change.Text))
+				content = s.applyChange(params.TextDocument.URI, content, change.Range, textutil.NormalizeLineEndings(change.Text))
 			}
 		}
 		s.documents.Store(params.TextDocument.URI, content)
@@ -352,12 +356,6 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 	return nil
 }
 
-func normalizeLineEndings(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	return s
-}
-
 func syncKindPtr(value protocol.TextDocumentSyncKind) *protocol.TextDocumentSyncKind { return &value }
 
 func (s *Server) clearAlignmentCache() {
@@ -377,7 +375,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, normalizeLineEndings(string(data)))
+				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
 				s.loader.InvalidateFile(path)
 			}
 		}
@@ -394,7 +392,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 			if content, ok := s.GetDocument(params.TextDocument.URI); ok {
 				s.workspace.UpdateFile(path, content)
 			} else if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, normalizeLineEndings(string(data)))
+				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
 			}
 			s.loader.InvalidateFile(path)
 		}
@@ -772,7 +770,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 		if change.Type == protocol.FileChangeTypeChanged || change.Type == protocol.FileChangeTypeCreated {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, normalizeLineEndings(string(data)))
+				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
 			}
 		}
 

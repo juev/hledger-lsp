@@ -1457,50 +1457,15 @@ func TestServer_BalanceTolerance(t *testing.T) {
 	})
 }
 
-func TestNormalizeLineEndings(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "LF unchanged",
-			input:    "line1\nline2\nline3",
-			expected: "line1\nline2\nline3",
-		},
-		{
-			name:     "CRLF to LF",
-			input:    "line1\r\nline2\r\nline3",
-			expected: "line1\nline2\nline3",
-		},
-		{
-			name:     "bare CR to LF",
-			input:    "line1\rline2\rline3",
-			expected: "line1\nline2\nline3",
-		},
-		{
-			name:     "mixed line endings",
-			input:    "line1\r\nline2\nline3\rline4",
-			expected: "line1\nline2\nline3\nline4",
-		},
-		{
-			name:     "empty string",
-			input:    "",
-			expected: "",
-		},
-		{
-			name:     "no line endings",
-			input:    "hello",
-			expected: "hello",
-		},
-	}
+func TestServer_StoreDocument_NormalizesCRLF(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := normalizeLineEndings(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
+	srv.StoreDocument(docURI, "2024-01-15 test\r\n    expenses:food  $50\r\n    assets:cash\r")
+
+	doc, ok := srv.GetDocument(docURI)
+	require.True(t, ok)
+	assert.NotContains(t, doc, "\r", "every write into the document map must land LF-only")
 }
 
 func TestServer_DidOpen_NormalizesCRLF(t *testing.T) {
@@ -1558,7 +1523,7 @@ func TestServer_Format_CRLFDocumentNoBlankLines(t *testing.T) {
 	uri := uri.URI("file:///test.journal")
 	content := "2024-01-15 购买基金\r\n    资产:微信wx  $50  ;date:2026-02-21\r\n    资产:待报销费用bx\r\n"
 
-	srv.documents.Store(uri, normalizeLineEndings(content))
+	srv.StoreDocument(uri, content)
 
 	params := &protocol.DocumentFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},

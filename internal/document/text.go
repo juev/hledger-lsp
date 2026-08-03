@@ -19,6 +19,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 // node is one line in an implicit treap ordered by line index. size is the
@@ -92,17 +93,12 @@ type Text struct {
 
 // NewText builds a Text from content, normalizing CRLF/CR line endings to LF.
 func NewText(content string) *Text {
-	content = normalizeLF(content)
+	content = textutil.NormalizeLineEndings(content)
 	t := &Text{}
 	for _, line := range strings.Split(content, "\n") {
 		t.root = merge(t.root, newNode(line))
 	}
 	return t
-}
-
-func normalizeLF(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	return strings.ReplaceAll(s, "\r", "\n")
 }
 
 // LineCount returns the number of lines.
