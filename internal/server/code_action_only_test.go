@@ -17,6 +17,9 @@ func onlyKinds(t *testing.T, only []protocol.CodeActionKind) []protocol.CodeActi
 
 	ts := newTestServer()
 	ts.clientCapabilities.supportsCodeActionLiterals = true
+	// source.hledger actions are gated on the CLI being present; a fake keeps
+	// the filtering under test independent of what is installed.
+	ts.cliClient = &fakeCLIClient{available: true}
 	docURI := uri.URI("file:///test.journal")
 	content := "2026-08-03 Good\n    Expenses:Test  -20.50 USD\n    Expenses:Food\n"
 	require.NoError(t, ts.openDocument(docURI, content))
