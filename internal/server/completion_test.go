@@ -1446,6 +1446,13 @@ func TestExtractQueryText_Payee(t *testing.T) {
 			char:     18,
 			expected: "* Groc",
 		},
+		{
+			name:     "several spaces around status mark",
+			content:  "2024-01-15    *    Groc",
+			line:     0,
+			char:     23,
+			expected: "Groc",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2743,6 +2750,8 @@ func TestCompletion_PayeeAfterStatusMark(t *testing.T) {
 		{"status without space", "2024-01-17 *Groc", 16, 12},
 		{"status and transaction code", "2024-01-17 * (CHK1) ", 20, 20},
 		{"transaction code only", "2024-01-17 (INV-1) Groc", 23, 19},
+		{"spaces around status mark", "2024-01-17    *    ", 19, 19},
+		{"spaces around status mark with prefix", "2024-01-17    *    Groc", 23, 19},
 	}
 
 	for _, tt := range tests {
