@@ -386,6 +386,42 @@ func indexFirstWhitespace(s string) int {
 	return -1
 }
 
+// payeeStartOffset returns the byte offset where the payee text of a transaction
+// header begins, skipping the date, an optional status mark and an optional
+// transaction code (hledger: DATE [STATUS] [(CODE)] DESCRIPTION). Only the bytes
+// before byteCol are inspected, so a header the user is still typing works too:
+// an unterminated code is left in place, because the cursor is still inside it.
+func payeeStartOffset(line string, byteCol int) int {
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+	head := line[:byteCol]
+
+	wsIdx := indexFirstWhitespace(head)
+	if wsIdx == -1 {
+		return byteCol
+	}
+
+	start := skipSpacesAndTabs(head, wsIdx+1)
+	if start < len(head) && (head[start] == '*' || head[start] == '!') {
+		start = skipSpacesAndTabs(head, start+1)
+	}
+	if start < len(head) && head[start] == '(' {
+		if closeIdx := strings.IndexByte(head[start:], ')'); closeIdx != -1 {
+			start = skipSpacesAndTabs(head, start+closeIdx+1)
+		}
+	}
+
+	return start
+}
+
+func skipSpacesAndTabs(s string, i int) int {
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	return i
+}
+
 func isDigitOrSign(c byte) bool {
 	return (c >= '0' && c <= '9') || c == '-' || c == '+'
 }
@@ -846,13 +882,7 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 			startByte = findCommodityStart(line, byteCol)
 		}
 	case ContextPayee:
-		wsIdx := indexFirstWhitespace(line[:byteCol])
-		if wsIdx != -1 {
-			startByte = wsIdx + 1
-			for startByte < byteCol && (line[startByte] == ' ' || line[startByte] == '\t' || line[startByte] == '*' || line[startByte] == '!') {
-				startByte++
-			}
-		}
+		startByte = payeeStartOffset(line, byteCol)
 	case ContextTagName:
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
@@ -1001,11 +1031,7 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		return trimmed
 
 	case ContextPayee:
-		wsIdx := indexFirstWhitespace(beforeCursor)
-		if wsIdx == -1 {
-			return ""
-		}
-		return strings.TrimLeft(beforeCursor[wsIdx+1:], " \t")
+		return beforeCursor[payeeStartOffset(line, byteCol):]
 
 	case ContextCommodity:
 		if after, found := strings.CutPrefix(beforeCursor, directiveCommodity); found {
