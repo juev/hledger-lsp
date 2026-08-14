@@ -1362,6 +1362,90 @@ func TestExtractQueryText_Payee(t *testing.T) {
 			char:     11,
 			expected: "",
 		},
+		{
+			name:     "after cleared status mark",
+			content:  "2024-01-15 * ",
+			line:     0,
+			char:     13,
+			expected: "",
+		},
+		{
+			name:     "partial payee after pending status mark",
+			content:  "2024-01-15 ! Groc",
+			line:     0,
+			char:     17,
+			expected: "Groc",
+		},
+		{
+			name:     "status mark not followed by space",
+			content:  "2024-01-15 *Groc",
+			line:     0,
+			char:     16,
+			expected: "Groc",
+		},
+		{
+			name:     "cursor right after status mark",
+			content:  "2024-01-15 *",
+			line:     0,
+			char:     12,
+			expected: "",
+		},
+		{
+			name:     "cursor before status mark",
+			content:  "2024-01-15 * Groc",
+			line:     0,
+			char:     11,
+			expected: "",
+		},
+		{
+			name:     "status mark and transaction code",
+			content:  "2024-01-15 * (CHK1) Groc",
+			line:     0,
+			char:     24,
+			expected: "Groc",
+		},
+		{
+			name:     "transaction code without status mark",
+			content:  "2024-01-15 (INV-1) Groc",
+			line:     0,
+			char:     23,
+			expected: "Groc",
+		},
+		{
+			name:     "unclosed transaction code",
+			content:  "2024-01-15 * (CH",
+			line:     0,
+			char:     16,
+			expected: "(CH",
+		},
+		{
+			name:     "secondary date with status mark",
+			content:  "2024-01-15=2024-01-20 * Groc",
+			line:     0,
+			char:     28,
+			expected: "Groc",
+		},
+		{
+			name:     "cyrillic payee after status mark",
+			content:  "2024-01-15 * Пятёроч",
+			line:     0,
+			char:     20,
+			expected: "Пятёроч",
+		},
+		{
+			name:     "cjk payee after status mark",
+			content:  "2024-01-15 * 食料品店",
+			line:     0,
+			char:     17,
+			expected: "食料品店",
+		},
+		{
+			name:     "only one status mark skipped",
+			content:  "2024-01-15 ** Groc",
+			line:     0,
+			char:     18,
+			expected: "* Groc",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2644,6 +2728,79 @@ func TestCompletion_PayeeWithTab(t *testing.T) {
 	}
 }
 
+func TestCompletion_PayeeAfterStatusMark(t *testing.T) {
+	const history = "2024-01-15 Grocery Store\n    expenses:food  $50\n    assets:cash\n\n"
+
+	tests := []struct {
+		name      string
+		header    string
+		char      uint32
+		wantStart uint32
+	}{
+		{"cleared status", "2024-01-17 * ", 13, 13},
+		{"pending status", "2024-01-17 ! ", 13, 13},
+		{"status with partial payee", "2024-01-17 * Groc", 17, 13},
+		{"status without space", "2024-01-17 *Groc", 16, 12},
+		{"status and transaction code", "2024-01-17 * (CHK1) ", 20, 20},
+		{"transaction code only", "2024-01-17 (INV-1) Groc", 23, 19},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			srv.StoreDocument(uri.URI("file:///test.journal"), history+tt.header)
+
+			params := &protocol.CompletionParams{
+				TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+					TextDocument: protocol.TextDocumentIdentifier{
+						URI: "file:///test.journal",
+					},
+					Position: protocol.Position{Line: 4, Character: tt.char},
+				},
+			}
+
+			result, err := srv.completion(context.Background(), params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			labels := extractLabels(result.Items)
+			require.Contains(t, labels, "Grocery Store", "status mark must not suppress payee completion")
+
+			for _, item := range result.Items {
+				if item.Label != "Grocery Store" {
+					continue
+				}
+				edit := completionTextEdit(item)
+				require.NotNil(t, edit, "TextEdit should be set")
+				assert.Equal(t, tt.wantStart, edit.Range.Start.Character, "TextEdit should start at the payee")
+				assert.Equal(t, tt.char, edit.Range.End.Character, "TextEdit should end at cursor")
+			}
+		})
+	}
+}
+
+func TestCompletion_PayeeAfterStatusMarkCRLF(t *testing.T) {
+	srv := NewServer()
+	content := "2024-01-15 Grocery Store\r\n    expenses:food  $50\r\n    assets:cash\r\n\r\n2024-01-17 * Groc"
+
+	srv.StoreDocument(uri.URI("file:///test.journal"), content)
+
+	params := &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{
+				URI: "file:///test.journal",
+			},
+			Position: protocol.Position{Line: 4, Character: 17},
+		},
+	}
+
+	result, err := srv.completion(context.Background(), params)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Contains(t, extractLabels(result.Items), "Grocery Store")
+}
+
 func TestExtractQueryText_PayeeWithTab(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -2653,7 +2810,8 @@ func TestExtractQueryText_PayeeWithTab(t *testing.T) {
 	}{
 		{"tab separator", "2024-01-15\tgrocery", 18, "grocery"},
 		{"tab then empty", "2024-01-15\t", 11, ""},
-		{"tab with status marker", "2024-01-15\t* grocery", 20, "* grocery"},
+		{"tab with status marker", "2024-01-15\t* grocery", 20, "grocery"},
+		{"tabs around status marker", "2024-01-15\t*\tgrocery", 20, "grocery"},
 	}
 
 	for _, tt := range tests {
@@ -2675,6 +2833,70 @@ func TestCalculateTextEditRange_PayeeWithTab(t *testing.T) {
 	}{
 		{"tab separator", "2024-01-15\tgrocery", 18, 11, 18},
 		{"tab then status marker", "2024-01-15\t* grocery", 20, 13, 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pos := protocol.Position{Line: 0, Character: tt.char}
+			r := calculateTextEditRange(tt.content, pos, ContextPayee)
+			require.NotNil(t, r)
+			assert.Equal(t, tt.wantStart, r.Start.Character)
+			assert.Equal(t, tt.wantEnd, r.End.Character)
+		})
+	}
+}
+
+func TestPayeeStartOffset(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		byteCol  int
+		expected int
+	}{
+		{"no whitespace before cursor", "2024-01-15", 10, 10},
+		{"plain payee", "2024-01-15 Groc", 15, 11},
+		{"cleared status", "2024-01-15 * Groc", 17, 13},
+		{"pending status", "2024-01-15 ! Groc", 17, 13},
+		{"status without space", "2024-01-15 *G", 13, 12},
+		{"cursor right after status", "2024-01-15 * ", 13, 13},
+		{"status and code", "2024-01-15 * (CHK1) Groc", 24, 20},
+		{"code without status", "2024-01-15 (INV-1) Groc", 23, 19},
+		{"unclosed code", "2024-01-15 * (CH", 16, 13},
+		{"cursor inside code", "2024-01-15 * (CHK1) Groc", 17, 13},
+		{"tabs around status", "2024-01-15\t*\tGroc", 17, 13},
+		{"cursor before status", "2024-01-15 * Groc", 11, 11},
+		{"secondary date", "2024-01-15=2024-01-20 * Groc", 28, 24},
+		{"multiple spaces", "2024-01-15   *   Groc", 21, 17},
+		{"only one status mark skipped", "2024-01-15 ** Groc", 18, 12},
+		{"cyrillic payee", "2024-01-15 * Продукты", 29, 13},
+		{"byteCol past end of line", "2024-01-15 * Groc", 99, 13},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, payeeStartOffset(tt.line, tt.byteCol))
+		})
+	}
+}
+
+func TestCalculateTextEditRange_PayeeWithStatus(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		char      uint32
+		wantStart uint32
+		wantEnd   uint32
+	}{
+		{"status mark then space", "2024-01-15 * grocery", 20, 13, 20},
+		{"status mark without space", "2024-01-15 *grocery", 19, 12, 19},
+		{"cursor right after status mark", "2024-01-15 *", 12, 12, 12},
+		{"status mark and transaction code", "2024-01-15 * (CHK1) grocery", 27, 20, 27},
+		{"transaction code without status mark", "2024-01-15 (INV-1) grocery", 26, 19, 26},
+		{"unclosed transaction code", "2024-01-15 * (CH", 16, 13, 16},
+		{"cyrillic payee after status mark", "2024-01-15 * Пятёроч", 20, 13, 20},
+		{"cursor mid payee", "2024-01-15 * Grocery Store", 17, 13, 26},
+		{"payee with trailing comment", "2024-01-15 * Groc ; note", 17, 13, 17},
+		{"no whitespace before cursor", "2024-01-15", 10, 10, 10},
 	}
 
 	for _, tt := range tests {
