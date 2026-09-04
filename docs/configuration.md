@@ -21,6 +21,10 @@ Enable or disable specific LSP features.
 | `hledger.features.codeLens` | `false` | Balance check indicators on transactions |
 | `hledger.features.inlayHints` | `true` | Inlay hints for inferred amounts and optional balance facts |
 
+Inline completion chooses the posting pattern used most often in the last 50
+transactions for the payee. Suggestions refresh after document edits and
+watched journal-file changes; saving is not required.
+
 ## Inlay hints
 
 | Setting | Default | Description |

@@ -644,6 +644,41 @@ func TestInlineCompletion_CacheInvalidatedOnSave(t *testing.T) {
 		"should return updated second posting after DidSave invalidates cache")
 }
 
+func TestInlineCompletion_CacheInvalidatedOnChange(t *testing.T) {
+	ts := newTestServer()
+	uri := uri.URI("file:///test.journal")
+	content1 := `2024-01-10 Grocery Store
+    expenses:food:groceries  $50.00
+    assets:cash
+
+2024-01-15 Grocery Store
+`
+	require.NoError(t, ts.openDocument(uri, content1))
+
+	params := inlineCompletionParams(uri, 5, 0)
+	result1, err := ts.InlineCompletion(context.Background(), params)
+	require.NoError(t, err)
+	require.Len(t, inlineCompletionItems(t, result1), 1)
+	assert.Contains(t, inlineCompletionItems(t, result1)[0].InsertText, "expenses:food:groceries")
+
+	content2 := `2024-01-10 Grocery Store
+    expenses:food:supermarket  $100.00
+    assets:bank
+
+2024-01-15 Grocery Store
+`
+	content2 = strings.ReplaceAll(content2, "\n", "\r\n")
+	require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{
+		&protocol.TextDocumentContentChangeWholeDocument{Text: content2},
+	}))
+
+	result2, err := ts.InlineCompletion(context.Background(), params)
+	require.NoError(t, err)
+	require.Len(t, inlineCompletionItems(t, result2), 1)
+	assert.Contains(t, inlineCompletionItems(t, result2)[0].InsertText, "expenses:food:supermarket")
+	assert.Contains(t, inlineCompletionItems(t, result2)[0].InsertText, "assets:bank")
+}
+
 func TestInlineCompletion_DeterministicResults(t *testing.T) {
 	srv := NewServer()
 

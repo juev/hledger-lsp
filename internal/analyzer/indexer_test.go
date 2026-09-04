@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -483,6 +485,28 @@ func TestCollectPayeeTemplates_MostFrequentNotLast(t *testing.T) {
 		"Should select most frequent pattern (assets:cash 3 times) not last (assets:bank)")
 	assert.Equal(t, "30", postings[0].Amount,
 		"Should use amount from the LAST transaction with the most frequent pattern")
+}
+
+func TestCollectPayeeTemplates_PrefersMostFrequentRecentPattern(t *testing.T) {
+	var input strings.Builder
+	for i := range 120 {
+		fmt.Fprintf(&input, "2024-01-%02d Store\n    expenses:food  $10\n    assets:cash\n\n", i%28+1)
+	}
+	for i := range 30 {
+		fmt.Fprintf(&input, "2024-02-%02d Store\n    expenses:food  $20\n    assets:bank\n\n", i%28+1)
+	}
+
+	journal, errs := parser.Parse(input.String())
+	require.Empty(t, errs)
+
+	templates := CollectPayeeTemplates(journal)
+
+	require.Contains(t, templates, "Store")
+	postings := templates["Store"]
+	require.Len(t, postings, 2)
+	assert.Equal(t, "assets:bank", postings[1].Account,
+		"assets:bank appears most often in the last 50 Store transactions")
+	assert.Equal(t, "20", postings[0].Amount)
 }
 
 func TestCollectPayeeTemplates_DeterministicWithMultiplePatterns(t *testing.T) {
