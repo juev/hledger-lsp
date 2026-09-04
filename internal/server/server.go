@@ -300,6 +300,7 @@ func (s *Server) Exit(ctx context.Context) error {
 func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
 	content := textutil.NormalizeLineEndings(params.TextDocument.Text)
 	s.documents.Store(params.TextDocument.URI, content)
+	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.invalidateDocText(params.TextDocument.URI)
 	if s.workspace != nil && s.loader.FileSizeError(content) == nil {
@@ -335,6 +336,7 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 			}
 		}
 		s.documents.Store(params.TextDocument.URI, content)
+		s.payeeTemplatesCache.Clear()
 		s.alignmentCache.Delete(params.TextDocument.URI)
 		if s.workspace != nil {
 			if path := uriToPath(params.TextDocument.URI); path != "" {
@@ -368,6 +370,7 @@ func (s *Server) clearAlignmentCache() {
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
 	s.cancelDiagnostics(params.TextDocument.URI)
 	s.documents.Delete(params.TextDocument.URI)
+	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
 	s.invalidateParseCache(params.TextDocument.URI)
@@ -384,7 +387,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 }
 
 func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocumentParams) error {
-	s.payeeTemplatesCache.Delete(params.TextDocument.URI)
+	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 
 	if s.workspace != nil {
@@ -768,6 +771,9 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		}
 
 		s.loader.InvalidateFile(path)
+		if filetype.IsJournalPath(path) {
+			s.payeeTemplatesCache.Clear()
+		}
 		if filetype.IsRules(path) {
 			s.rulesLoader.InvalidateFile(path)
 		}

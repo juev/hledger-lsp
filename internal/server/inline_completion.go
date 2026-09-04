@@ -19,6 +19,11 @@ import (
 // - Secondary date after = is handled separately by space detection
 var dateRegex = regexp.MustCompile(`^(\d{4}[-/\.])?\d{1,2}[-/\.]\d{1,2}`)
 
+type cachedPayeeTemplates struct {
+	content   string
+	templates map[string][]analyzer.PostingTemplate
+}
+
 func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
 	content, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
@@ -59,8 +64,7 @@ func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineComp
 
 	// Compute alignment columns from the current document so ghost text
 	// targets the same columns that Format Document would produce. Parsing
-	// here is independent of the payee-template path (which is cached and
-	// may not reflect the latest content); for inline completion latency,
+	// here is independent of the payee-template path; for inline completion latency,
 	// this is the same Parse cost as the cache-miss path of getPayeeTemplates.
 	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
 	commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
@@ -85,20 +89,38 @@ func emptyInlineCompletionList() *protocol.InlineCompletionList {
 
 func (s *Server) getPayeeTemplates(uri uri.URI, content string) map[string][]analyzer.PostingTemplate {
 	if cached, ok := s.payeeTemplatesCache.Load(uri); ok {
-		if templates, ok := cached.(map[string][]analyzer.PostingTemplate); ok {
-			return templates
+		if cachedTemplates, ok := cached.(*cachedPayeeTemplates); ok && cachedTemplates.content == content {
+			return cachedTemplates.templates
 		}
 	}
 
 	var result *analyzer.AnalysisResult
-	if resolved := s.getWorkspaceResolved(uri); resolved != nil {
-		result = s.analyzer.AnalyzeResolved(resolved)
-	} else {
-		journal, _ := s.cachedJournal(uri, content)
-		result = s.analyzer.Analyze(journal)
+	if s.workspace != nil {
+		resolved := s.workspace.GetResolvedForFile(uriToPath(uri))
+		if resolved != nil {
+			result = s.analyzer.AnalyzeResolved(resolved)
+		}
+	}
+	if result == nil {
+		path := uriToPath(uri)
+		if path == "" {
+			journal, _ := s.cachedJournal(uri, content)
+			result = s.analyzer.Analyze(journal)
+		} else {
+			resolved, _ := s.loader.LoadFromContent(path, content)
+			if resolved != nil {
+				result = s.analyzer.AnalyzeResolved(resolved)
+			} else {
+				journal, _ := s.cachedJournal(uri, content)
+				result = s.analyzer.Analyze(journal)
+			}
+		}
 	}
 
-	s.payeeTemplatesCache.Store(uri, result.PayeeTemplates)
+	s.payeeTemplatesCache.Store(uri, &cachedPayeeTemplates{
+		content:   content,
+		templates: result.PayeeTemplates,
+	})
 	return result.PayeeTemplates
 }
 

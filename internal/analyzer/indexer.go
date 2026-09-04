@@ -8,6 +8,8 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 )
 
+const recentTemplateTransactionLimit = 50
+
 func CollectAccounts(journal *ast.Journal) *AccountIndex {
 	idx := NewAccountIndex()
 	seen := make(map[string]bool)
@@ -214,7 +216,9 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 		patternCount := make(map[string]int)
 		patternLastIdx := make(map[string]int)
 
-		for i, tx := range txs {
+		firstRecentIdx := max(0, len(txs)-recentTemplateTransactionLimit)
+		for i := firstRecentIdx; i < len(txs); i++ {
+			tx := txs[i]
 			patternCount[tx.pattern]++
 			patternLastIdx[tx.pattern] = i
 		}
