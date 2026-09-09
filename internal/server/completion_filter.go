@@ -3,11 +3,26 @@ package server
 import (
 	"maps"
 
+	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
 )
+
+func filterNonzeroAccountCompletions(items []protocol.CompletionItem, balances analyzer.AccountBalances) []protocol.CompletionItem {
+	filtered := items[:0]
+	for _, item := range items {
+		for _, balance := range balances[item.Label] {
+			if !balance.IsZero() {
+				filtered = append(filtered, item)
+				break
+			}
+		}
+	}
+	return filtered
+}
 
 func findCurrentTransactionIndex(transactions []ast.Transaction, lspLine int) int {
 	astLine := lspLine + 1

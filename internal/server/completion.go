@@ -10,6 +10,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/rules"
@@ -69,16 +70,19 @@ func (s *Server) completion(_ context.Context, params *protocol.CompletionParams
 	}
 
 	var result *analyzer.AnalysisResult
+	var transactions []ast.Transaction
 	cursorLine := int(params.Position.Line)
 
 	if resolved := s.getWorkspaceResolved(params.TextDocument.URI); resolved != nil {
 		filtered := resolvedWithoutTransaction(resolved, cursorLine, params.TextDocument.URI)
 		result = s.analyzer.AnalyzeResolved(filtered)
+		transactions = filtered.AllTransactions()
 	} else {
 		journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 		txIdx := findCurrentTransactionIndex(journal.Transactions, cursorLine)
 		filtered := journalWithoutTransaction(journal, txIdx)
 		result = s.analyzer.Analyze(filtered)
+		transactions = filtered.Transactions
 	}
 
 	settings := s.getSettings()
@@ -94,6 +98,10 @@ func (s *Server) completion(_ context.Context, params *protocol.CompletionParams
 	}
 
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts, settings.Completion)
+	if completionCtx == ContextAccount || completionCtx == ContextUnknown {
+		balances := analyzer.CalculateAccountBalancesFromTransactions(transactions)
+		items = filterNonzeroAccountCompletions(items, balances)
+	}
 	attachResolveData(items, completionCtx, params.TextDocument.URI)
 
 	editRange := calculateTextEditRange(doc, params.Position, completionCtx)

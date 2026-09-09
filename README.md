@@ -10,7 +10,7 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 ## 🎯 Features
 
 ### Completions
-- **Accounts** — Fuzzy matching with frequency-based ranking
+- **Accounts** — Fuzzy matching with frequency-based ranking; only accounts with a nonzero balance in at least one commodity are suggested. Balances include journal files loaded through `include` and exclude the transaction being edited. Unused declared accounts are omitted.
 - **Payees** — From transaction history with usage counts
 - **Commodities** — From directives and usage
 - **Tags** — Name and value completion from existing tags

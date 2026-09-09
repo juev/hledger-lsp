@@ -23,7 +23,10 @@ account expenses:food
 
 2024-01-15 test
     expenses:food  $50
-    assets:cash`
+    assets:cash
+
+2024-01-16 new
+    `
 
 	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
@@ -32,7 +35,7 @@ account expenses:food
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 5, Character: 4},
+			Position: protocol.Position{Line: 8, Character: 4},
 		},
 	}
 
@@ -148,7 +151,10 @@ account assets:cash
 2024-01-15 test
     expenses:food:groceries  $30
     expenses:food:restaurant  $20
-    assets:cash`
+    assets:cash
+
+2024-01-16 new
+    expenses:`
 
 	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
@@ -157,7 +163,7 @@ account assets:cash
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 5, Character: 14},
+			Position: protocol.Position{Line: 10, Character: 13},
 		},
 		Context: protocol.CompletionContext{
 			TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
@@ -292,6 +298,10 @@ func TestCompletion_MaxResults(t *testing.T) {
 	content := `account assets:cash
 account expenses:food
 
+2024-01-14 previous
+    expenses:food  $50
+    assets:cash
+
 2024-01-15 test
     `
 
@@ -302,7 +312,7 @@ account expenses:food
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 4, Character: 4},
+			Position: protocol.Position{Line: 8, Character: 4},
 		},
 	}
 
@@ -1780,6 +1790,10 @@ func TestCompletion_DirectiveAccount(t *testing.T) {
 	content := `account assets:cash
 account expenses:food
 
+2024-01-15 previous
+    expenses:food  $50
+    assets:cash
+
 account `
 
 	srv.StoreDocument(uri.URI("file:///test.journal"), content)
@@ -1789,7 +1803,7 @@ account `
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 3, Character: 8},
+			Position: protocol.Position{Line: 7, Character: 8},
 		},
 	}
 
@@ -1867,6 +1881,10 @@ func TestCompletion_TextEditForAccount(t *testing.T) {
 	content := `account assets:cash
 account expenses:food
 
+2024-01-14 previous
+    expenses:food  $50
+    assets:cash
+
 2024-01-15 test
     exp`
 
@@ -1877,7 +1895,7 @@ account expenses:food
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 4, Character: 7},
+			Position: protocol.Position{Line: 8, Character: 7},
 		},
 	}
 
@@ -1899,15 +1917,21 @@ account expenses:food
 
 	textEdit := completionTextEdit(*foodItem)
 
-	assert.Equal(t, uint32(4), textEdit.Range.Start.Line)
+	assert.Equal(t, uint32(8), textEdit.Range.Start.Line)
 	assert.Equal(t, uint32(4), textEdit.Range.Start.Character, "TextEdit should start at column 4 (after indent)")
-	assert.Equal(t, uint32(4), textEdit.Range.End.Line)
+	assert.Equal(t, uint32(8), textEdit.Range.End.Line)
 	assert.Equal(t, uint32(7), textEdit.Range.End.Character, "TextEdit should end at cursor position")
 }
 
 func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 	srv := NewServer()
-	content := "account expenses:food:supermarket\naccount expenses:food:electronics\n\n2024-01-15 test\n    expenses:food:supermarket"
+	content := `2024-01-14 previous
+    expenses:food:supermarket  $10
+    expenses:food:electronics  $20
+    assets:cash
+
+2024-01-15 test
+    expenses:food:supermarket`
 
 	srv.StoreDocument(uri.URI("file:///test.journal"), content)
 
@@ -1917,7 +1941,7 @@ func TestCompletion_AccountMidWord_ReplacesFullToken(t *testing.T) {
 			TextDocument: protocol.TextDocumentIdentifier{
 				URI: "file:///test.journal",
 			},
-			Position: protocol.Position{Line: 4, Character: 18},
+			Position: protocol.Position{Line: 6, Character: 18},
 		},
 		Context: protocol.CompletionContext{
 			TriggerCharacter: stringPtr(":"),
@@ -3261,7 +3285,7 @@ func TestCompletion_CursorBetweenTransactions(t *testing.T) {
 	_ = labels
 }
 
-func TestCompletion_DirectivesSurviveExclusion(t *testing.T) {
+func TestCompletion_UnusedDeclaredAccountsAreOmitted(t *testing.T) {
 	srv := NewServer()
 	content := `account expenses:food
 account assets:cash
@@ -3284,9 +3308,7 @@ account assets:cash
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	labels := extractLabels(result.Items)
-	assert.Contains(t, labels, "expenses:food", "account from directive survives when only transaction excluded")
-	assert.Contains(t, labels, "assets:cash", "account from directive survives when only transaction excluded")
+	assert.Empty(t, result.Items, "declared accounts without a balance are not suggested")
 }
 
 func TestFindTokenEnd(t *testing.T) {
