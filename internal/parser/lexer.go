@@ -507,6 +507,9 @@ func (l *Lexer) scanAt() Token {
 func (l *Lexer) scanEquals() Token {
 	startPos := l.position()
 	l.advance()
+	// A balance assertion starts a new amount, possibly with a prefix commodity.
+	l.afterNumber = false
+	l.afterSign = false
 
 	if l.pos < len(l.input) && l.peek() == '=' {
 		l.advance()

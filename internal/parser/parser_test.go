@@ -750,6 +750,29 @@ func TestParser_BalanceAssertion(t *testing.T) {
 	assert.True(t, p.BalanceAssertion.Amount.Quantity.Equal(decimal.NewFromInt(1000)))
 }
 
+func TestParser_BalanceAssertionCommodityPrefix(t *testing.T) {
+	for _, operator := range []string{"=", "==", "=*", "==*"} {
+		for _, amount := range []string{"USD5.00", "5.00 USD", "5.00", ""} {
+			for _, balance := range []string{"USD10.00", "USD 10.00"} {
+				t.Run(amount+operator+balance, func(t *testing.T) {
+					input := "2024-01-15 check balance\n    Assets:Cash   " + amount + " " + operator + " " + balance + "\n    Equity:Opening"
+					journal, errs := Parse(input)
+					require.Empty(t, errs)
+					require.Len(t, journal.Transactions, 1)
+					require.Len(t, journal.Transactions[0].Postings, 2)
+					ba := journal.Transactions[0].Postings[0].BalanceAssertion
+					require.NotNil(t, ba)
+					assert.Equal(t, operator == "==" || operator == "==*", ba.IsStrict)
+					assert.Equal(t, operator == "=*" || operator == "==*", ba.IsInclusive)
+					assert.Equal(t, "USD", ba.Amount.Commodity.Symbol)
+					assert.Equal(t, ast.CommodityLeft, ba.Amount.Commodity.Position)
+					assert.True(t, ba.Amount.Quantity.Equal(decimal.NewFromInt(10)))
+				})
+			}
+		}
+	}
+}
+
 func TestParser_StrictBalanceAssertion(t *testing.T) {
 	input := `2024-01-15 check balance
     assets:checking  $100 == $1000
