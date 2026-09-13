@@ -3,6 +3,7 @@ package server
 import (
 	"maps"
 
+	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
@@ -14,14 +15,20 @@ import (
 func filterNonzeroAccountCompletions(items []protocol.CompletionItem, balances analyzer.AccountBalances) []protocol.CompletionItem {
 	filtered := items[:0]
 	for _, item := range items {
-		for _, balance := range balances[item.Label] {
-			if !balance.IsZero() {
-				filtered = append(filtered, item)
-				break
-			}
+		if hasNonzeroAccountBalance(balances[item.Label]) {
+			filtered = append(filtered, item)
 		}
 	}
 	return filtered
+}
+
+func hasNonzeroAccountBalance(balances map[string]decimal.Decimal) bool {
+	for _, balance := range balances {
+		if !balance.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 func findCurrentTransactionIndex(transactions []ast.Transaction, lspLine int) int {

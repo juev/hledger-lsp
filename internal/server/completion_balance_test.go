@@ -100,7 +100,9 @@ func TestCompletion_NonzeroAccountBalancesAcrossIncludes(t *testing.T) {
 	for _, lineEnding := range []string{"\n", "\r\n"} {
 		t.Run(map[string]string{"\n": "LF", "\r\n": "CRLF"}[lineEnding], func(t *testing.T) {
 			dir := t.TempDir()
-			childContent := `2024-01-01 Opening
+			childContent := `account 資産:未使用
+
+2024-01-01 Opening
     активы:закрыт  10 USD
     資産:現金  5 USD
     equity:opening
@@ -126,6 +128,13 @@ include child.journal
 			result, err := ts.completion(docURI, 9, 4)
 			require.NoError(t, err)
 			assert.ElementsMatch(t, []string{"資産:現金", "equity:opening"}, extractLabels(result.Items))
+			full := requestScopedCompletion(t, ts.Server, &protocol.CompletionParams{
+				TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+					Position:     protocol.Position{Line: 9, Character: 4},
+				},
+			}, "all")
+			assert.ElementsMatch(t, []string{"資産:現金", "equity:opening", "активы:закрыт", "資産:未使用"}, extractLabels(full.CompletionList.Items))
 		})
 	}
 }
