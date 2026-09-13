@@ -75,7 +75,7 @@ func TestServer_Initialize_CapabilityProfiles(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.wantSnapshot, srv.clientCapabilities)
-			assert.Empty(t, result.Capabilities.Experimental)
+			assert.NotContains(t, string(result.Capabilities.Experimental), "inlineCompletionProvider")
 			require.IsType(t, &protocol.InlineCompletionOptions{}, result.Capabilities.InlineCompletionProvider)
 
 			if tt.wantRenameOptions {

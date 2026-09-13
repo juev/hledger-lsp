@@ -59,14 +59,27 @@ var directiveCompletions = []directiveDef{
 	{"year", "year ", "Directive"},
 }
 
-func (s *Server) completion(_ context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
+func (s *Server) completion(ctx context.Context, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
+	result, err := s.completionWithScope(ctx, params, false)
+	if err != nil {
+		return nil, err
+	}
+	return result.CompletionList, nil
+}
+
+func (s *Server) completionWithScope(ctx context.Context, params *protocol.CompletionParams, allAccounts bool) (*ScopedCompletionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	response := &ScopedCompletionResult{CompletionList: &protocol.CompletionList{Items: []protocol.CompletionItem{}}}
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
-		return &protocol.CompletionList{Items: []protocol.CompletionItem{}}, nil
+		return response, nil
 	}
 
 	if filetype.IsRules(string(params.TextDocument.URI)) {
-		return s.rulesCompletion(doc, params)
+		response.CompletionList = s.rulesCompletion(doc, params)
+		return response, nil
 	}
 
 	var result *analyzer.AnalysisResult
@@ -98,13 +111,20 @@ func (s *Server) completion(_ context.Context, params *protocol.CompletionParams
 	}
 
 	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts, settings.Completion)
-	if completionCtx == ContextAccount || completionCtx == ContextUnknown {
-		balances := analyzer.CalculateAccountBalancesFromTransactions(transactions)
-		items = filterNonzeroAccountCompletions(items, balances)
+	isAccount := completionCtx == ContextAccount || completionCtx == ContextUnknown
+	var balances analyzer.AccountBalances
+	if isAccount {
+		balances = analyzer.CalculateAccountBalancesFromTransactions(transactions)
+		if !allAccounts {
+			items = filterNonzeroAccountCompletions(items, balances)
+		}
 	}
 	attachResolveData(items, completionCtx, params.TextDocument.URI)
 
 	editRange := calculateTextEditRange(doc, params.Position, completionCtx)
+	if isAccount {
+		response.AccountRange = editRange
+	}
 	if editRange != nil {
 		for i := range items {
 			text := items[i].Label
@@ -121,15 +141,25 @@ func (s *Server) completion(_ context.Context, params *protocol.CompletionParams
 	query := extractQueryText(doc, params.Position, completionCtx)
 	scored := filterAndScoreFuzzyMatch(items, query, settings.Completion.FuzzyMatching)
 	items = rankCompletionItemsByScore(scored, counts, query, recency)
+	if isAccount && allAccounts {
+		// Preserve the ordinary ranking within each balance group.
+		sort.SliceStable(items, func(i, j int) bool {
+			return hasNonzeroAccountBalance(balances[items[i].Label]) && !hasNonzeroAccountBalance(balances[items[j].Label])
+		})
+		for i := range items {
+			items[i].SortText.Set(fmt.Sprintf("%06d_%s", i, items[i].Label))
+		}
+	}
 
-	if settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
+	if (!isAccount || !allAccounts) && settings.Completion.MaxResults > 0 && len(items) > settings.Completion.MaxResults {
 		items = items[:settings.Completion.MaxResults]
 	}
 
-	return &protocol.CompletionList{
+	response.CompletionList = &protocol.CompletionList{
 		IsIncomplete: true, // prevents VSCode from caching and re-sorting by fuzzy matching
 		Items:        items,
-	}, nil
+	}
+	return response, nil
 }
 
 func getCountsForContext(ctxType CompletionContextType, result *analyzer.AnalysisResult, settings completionSettings) map[string]int {
@@ -1229,7 +1259,7 @@ func rulesTextEditRange(line string, lineNum, col int) *protocol.Range {
 	}
 }
 
-func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) (*protocol.CompletionList, error) {
+func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) *protocol.CompletionList {
 	lines := strings.Split(doc, "\n")
 	line := ""
 	lineNum := int(params.Position.Line)
@@ -1276,5 +1306,5 @@ func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) 
 	return &protocol.CompletionList{
 		IsIncomplete: true,
 		Items:        items,
-	}, nil
+	}
 }

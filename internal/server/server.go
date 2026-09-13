@@ -171,6 +171,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 	}
 
 	if settings.Features.Completion {
+		caps.Experimental = protocol.LSPAny(`{"hledgerCompletion":{"accountScope":true}}`)
 		caps.CompletionProvider = &protocol.CompletionOptions{
 			TriggerCharacters: []string{":", "@", "=", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
 			ResolveProvider:   boolPtr(true),

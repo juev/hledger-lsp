@@ -65,6 +65,13 @@ func (s *Server) Subtypes(ctx context.Context, params *protocol.TypeHierarchySub
 }
 
 func (s *Server) Request(ctx context.Context, method string, params any) (any, error) {
+	if method == "hledger/completion" {
+		result, err := s.scopedCompletionRequest(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
 	if method != "hledger/payeeAccountHistory" {
 		return s.UnimplementedServer.Request(ctx, method, params)
 	}

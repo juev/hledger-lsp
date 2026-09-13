@@ -11,6 +11,7 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 
 ### Completions
 - **Accounts** — Fuzzy matching with frequency-based ranking; only accounts with a nonzero balance in at least one commodity are suggested. Balances include journal files loaded through `include` and exclude the transaction being edited. Unused declared accounts are omitted.
+- Clients can explicitly request [all matching accounts](docs/account-completion.md), including zero balances and unused declarations, without changing subsequent standard completions.
 - **Payees** — From transaction history with usage counts
 - **Commodities** — From directives and usage
 - **Tags** — Name and value completion from existing tags
