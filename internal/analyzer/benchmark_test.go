@@ -91,6 +91,14 @@ func BenchmarkAnalyze_Large(b *testing.B) {
 	}
 }
 
+// Completion recomputes account balances on every request, so this walk must
+// stay allocation-light: it used to snapshot all balances after each posting.
+func BenchmarkCalculateAccountBalances(b *testing.B) {
+	for b.Loop() {
+		CalculateAccountBalances(largeJournal)
+	}
+}
+
 func BenchmarkCheckBalance(b *testing.B) {
 	tx := &ast.Transaction{
 		Postings: []ast.Posting{

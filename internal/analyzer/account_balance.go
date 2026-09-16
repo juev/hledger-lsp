@@ -19,8 +19,20 @@ func CalculateAccountBalances(journal *ast.Journal) AccountBalances {
 // A single posting per transaction may omit its amount; that elided amount is
 // inferred to balance the transaction (per the hledger journal format) so the
 // account still reflects the implicit posting.
+//
+// Balances are accumulated directly rather than taken from
+// calculatePostingEffectsFromTransactions: that walk snapshots the whole balance
+// map after every posting for inlay hints, so reusing it here copies every
+// account once per posting. Completion calls this once per keystroke.
 func CalculateAccountBalancesFromTransactions(transactions []ast.Transaction) AccountBalances {
-	_, balances := calculatePostingEffectsFromTransactions(transactions)
+	balances := make(AccountBalances)
+	for transactionIndex := range transactions {
+		transaction := &transactions[transactionIndex]
+		inferred := inferredAmountsByPosting(transaction.Postings)
+		for postingIndex := range transaction.Postings {
+			addPostingBalance(balances, &transaction.Postings[postingIndex], inferred[postingIndex])
+		}
+	}
 	return balances
 }
 
