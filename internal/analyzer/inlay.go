@@ -34,14 +34,7 @@ func calculatePostingEffectsFromTransactions(transactions []ast.Transaction) ([]
 
 		for postingIndex := range transaction.Postings {
 			posting := &transaction.Postings[postingIndex]
-			if posting.Amount != nil {
-				addAccountBalance(balances, posting.Account.GetResolvedName(), posting.Amount.Commodity.Symbol, posting.Amount.Quantity)
-			}
-			if amounts := inferred[postingIndex]; amounts != nil {
-				for commodity, quantity := range amounts {
-					addAccountBalance(balances, posting.Account.GetResolvedName(), commodity, quantity)
-				}
-			}
+			addPostingBalance(balances, posting, inferred[postingIndex])
 
 			effects = append(effects, PostingEffect{
 				TransactionIndex: transactionIndex,
@@ -89,6 +82,17 @@ func costContribution(posting *ast.Posting) map[string]decimal.Decimal {
 		return make(map[string]decimal.Decimal)
 	}
 	return sumByCommodity([]ast.Posting{*posting})
+}
+
+// addPostingBalance adds one posting's explicit amount and any amount inferred
+// for an elided posting to the running balances.
+func addPostingBalance(balances AccountBalances, posting *ast.Posting, inferred map[string]decimal.Decimal) {
+	if posting.Amount != nil {
+		addAccountBalance(balances, posting.Account.GetResolvedName(), posting.Amount.Commodity.Symbol, posting.Amount.Quantity)
+	}
+	for commodity, quantity := range inferred {
+		addAccountBalance(balances, posting.Account.GetResolvedName(), commodity, quantity)
+	}
 }
 
 func addAccountBalance(balances AccountBalances, account, commodity string, quantity decimal.Decimal) {
