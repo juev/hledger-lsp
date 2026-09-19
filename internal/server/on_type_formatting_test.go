@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 func (ts *testServer) onTypeFormatting(uri uri.URI, line uint32, ch string) ([]protocol.TextEdit, error) {
@@ -342,6 +345,18 @@ func TestOnTypeFormatting_AfterCommodityDirective(t *testing.T) {
 	assert.Nil(t, edits)
 }
 
+// visualColumnAfterEdit returns the display column the cursor reaches once the
+// edit is applied, expanding tabs with the client's tab size. Character counts
+// are not comparable on tab-indented lines.
+func visualColumnAfterEdit(t *testing.T, content string, edit protocol.TextEdit, tabSize int) int {
+	t.Helper()
+
+	lines := strings.Split(content, "\n")
+	line := lines[edit.Range.Start.Line]
+	byteOffset := lsputil.UTF16OffsetToByteOffset(line, int(edit.Range.Start.Character))
+	return formatter.DisplayWidthInLine(line, byteOffset, tabSize) + len(edit.NewText)
+}
+
 func (ts *testServer) onTypeFormattingTab(uri uri.URI, line, character uint32) ([]protocol.TextEdit, error) {
 	params := &protocol.DocumentOnTypeFormattingParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
@@ -354,19 +369,20 @@ func (ts *testServer) onTypeFormattingTab(uri uri.URI, line, character uint32) (
 func TestOnTypeFormatting_Tab_OnPostingLine(t *testing.T) {
 	ts := newTestServer()
 	uri := uri.URI("file:///test.journal")
-	content := "2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n"
+	// The client does not insert the tab before asking, so the document holds the
+	// posting text and the cursor sits right after the account.
+	content := "2024-01-15 grocery store\n    expenses:food\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
 
-	edits, err := ts.onTypeFormattingTab(uri, 1, 18)
+	edits, err := ts.onTypeFormattingTab(uri, 1, 17)
 	require.NoError(t, err)
 	require.Len(t, edits, 1)
 
 	assert.Equal(t, uint32(1), edits[0].Range.Start.Line)
-	assert.Equal(t, uint32(18), edits[0].Range.Start.Character)
-	assert.Equal(t, uint32(18), edits[0].Range.End.Character)
-	assert.True(t, len(edits[0].NewText) > 0)
-	assert.True(t, strings.TrimSpace(edits[0].NewText) == "")
+	assert.Equal(t, uint32(17), edits[0].Range.Start.Character)
+	assert.Equal(t, uint32(17), edits[0].Range.End.Character)
+	assert.Equal(t, "  ", edits[0].NewText, "two spaces reach the natural column 19 (4+13+2)")
 }
 
 func TestOnTypeFormatting_Tab_NotOnPostingLine(t *testing.T) {
@@ -412,9 +428,9 @@ func TestOnTypeFormatting_Tab_UsesGlobalAlignment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edits2, 1)
 
-	col1 := int(edits1[0].Range.Start.Character) + len(edits1[0].NewText)
-	col2 := int(edits2[0].Range.Start.Character) + len(edits2[0].NewText)
-	assert.Equal(t, col1, col2, "both postings should align to the same global column")
+	col1 := visualColumnAfterEdit(t, content, edits1[0], 0)
+	col2 := visualColumnAfterEdit(t, content, edits2[0], 0)
+	assert.Equal(t, col1, col2, "both postings should align to the same display column")
 }
 
 func TestOnTypeFormatting_Tab_UsesFixedLeftAlignmentColumn(t *testing.T) {
@@ -437,10 +453,10 @@ func TestOnTypeFormatting_Tab_UsesFixedLeftAlignmentColumn(t *testing.T) {
 	assert.Equal(t, 30, endCol)
 }
 
-// Emoji-bearing accounts: cursor position from LSP is in UTF-16 units, where
-// emoji (codepoint > 0xFFFF) take 2 units. The server's alignment column is
-// rune-based. Without conversion, mixing units causes off-by-one for every
-// emoji on the line. This test pins down the conversion behavior.
+// Emoji- and CJK-bearing accounts: the cursor arrives in UTF-16 units while the
+// alignment column counts display cells, so the cursor position must be measured
+// in display cells: emoji take two cells (and two UTF-16 units), CJK takes two
+// cells but one UTF-16 unit.
 func TestOnTypeFormatting_Tab_EmojiAccountAlignment(t *testing.T) {
 	ts := newTestServer()
 	settings := ts.getSettings()
@@ -449,22 +465,45 @@ func TestOnTypeFormatting_Tab_EmojiAccountAlignment(t *testing.T) {
 
 	uri := uri.URI("file:///test.journal")
 	// Posting line:    "    🍕:food"
+	// Display cells:    4 + 2 + 1 + 4 = 11
+	// UTF-16 units:     4 + 2 + 1 + 4 = 11
 	// Runes:            4 + 1 + 1 + 4 = 10
-	// UTF-16 units:     4 + 2 + 1 + 4 = 11 (🍕 = surrogate pair)
-	// Bytes:            4 + 4 + 1 + 4 = 13
 	content := "2024-01-15 lunch\n    🍕:food\n    assets:cash\n"
 
 	ts.StoreDocument(uri, content)
 
-	// Cursor at end of "    🍕:food" in UTF-16 units = char 11.
-	// In runes that's col 10. alignCol with MinAlignmentColumn=30 → floor 29.
-	// spacesNeeded = 29 - 10 = 19 (in chars/runes/utf16 since spaces are ASCII).
+	// Cursor at end of "    🍕:food" = UTF-16 char 11 = display cell 11.
+	// alignCol with MinAlignmentColumn=30 → floor 29.
+	// spacesNeeded = 29 - 11 = 18.
 	edits, err := ts.onTypeFormattingTab(uri, 1, 11)
 	require.NoError(t, err)
 	require.Len(t, edits, 1)
 
-	assert.Equal(t, 19, len(edits[0].NewText),
-		"spacesNeeded must be computed in runes (alignCol=29 - cursorRune=10 = 19), not in mixed units")
+	assert.Equal(t, 18, len(edits[0].NewText),
+		"spacesNeeded counts display cells (alignCol 29 − cursor cell 11 = 18)")
+}
+
+func TestOnTypeFormatting_Tab_CJKAccountAlignment(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Formatting.MinAlignmentColumn = 30
+	ts.setSettings(settings)
+
+	uri := uri.URI("file:///test.journal")
+	// Posting line:    "    費用:food"
+	// Display cells:    4 + 4 + 1 + 4 = 13 (CJK is two cells wide)
+	// UTF-16 units:     4 + 2 + 1 + 4 = 11
+	content := "2024-01-15 lunch\n    費用:food\n    assets:cash\n"
+
+	ts.StoreDocument(uri, content)
+
+	// Cursor at end of "    費用:food" = UTF-16 char 11 = display cell 13.
+	edits, err := ts.onTypeFormattingTab(uri, 1, 11)
+	require.NoError(t, err)
+	require.Len(t, edits, 1)
+
+	assert.Equal(t, 16, len(edits[0].NewText),
+		"spacesNeeded counts display cells (alignCol 29 − cursor cell 13 = 16), not runes")
 }
 
 // Smart alignment detection: when the file already has hand-formatted
@@ -538,8 +577,17 @@ func TestOnTypeFormatting_Tab_RespectsMinAlignment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edits, 1)
 
-	endCol := int(edits[0].Range.Start.Character) + len(edits[0].NewText)
-	assert.Equal(t, 49, endCol)
+	// The line is tab-indented, so the visual column is the tab-expanded display
+	// column of the cursor plus the inserted spaces.
+	visualColumn := formatter.DisplayWidthInLine(contentLine(1), 18, 4) + len(edits[0].NewText)
+	assert.Equal(t, 49, visualColumn, "the amount must land on the alignment column")
+}
+
+// contentLine returns the n-th line (1-based) of the tab-indented fixture used by
+// TestOnTypeFormatting_Tab_RespectsMinAlignment.
+func contentLine(n int) string {
+	lines := strings.Split("2024-01-15 grocery store\n    expenses:food\t\n    assets:cash\n", "\n")
+	return lines[n]
 }
 
 func TestOnTypeFormatting_Tab_NoTransactions(t *testing.T) {
@@ -585,4 +633,90 @@ func TestOnTypeFormatting_Tab_BeyondDocumentEnd(t *testing.T) {
 	edits, err := ts.onTypeFormattingTab(uri, 100, 10)
 	require.NoError(t, err)
 	assert.Nil(t, edits)
+}
+
+// onTypeFormattingWithOptions calls on-type formatting with the client's
+// formatting options, which carry the indent style.
+func (ts *testServer) onTypeFormattingWithOptions(uriValue uri.URI, line uint32, ch string, options protocol.FormattingOptions) ([]protocol.TextEdit, error) {
+	params := &protocol.DocumentOnTypeFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: uriValue},
+		Position:     protocol.Position{Line: line, Character: 0},
+		Ch:           ch,
+		Options:      options,
+	}
+	return ts.OnTypeFormatting(context.Background(), params)
+}
+
+// lastIndentEdit returns the edit that writes the new line's indentation.
+func lastIndentEdit(t *testing.T, edits []protocol.TextEdit) protocol.TextEdit {
+	t.Helper()
+	require.NotEmpty(t, edits)
+	return edits[len(edits)-1]
+}
+
+func TestOnTypeEnter_HonoursClientIndentOptions(t *testing.T) {
+	uriValue := uri.URI("file:///test.journal")
+
+	t.Run("tab indentation", func(t *testing.T) {
+		ts := newTestServer()
+		ts.StoreDocument(uriValue, "2024-01-15 grocery store\n")
+
+		edits, err := ts.onTypeFormattingWithOptions(uriValue, 1, "\n", protocol.FormattingOptions{
+			TabSize:      4,
+			InsertSpaces: false,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "\t", lastIndentEdit(t, edits).NewText,
+			"a tab-indented document must not be rewritten with spaces")
+	})
+
+	t.Run("two-space indentation", func(t *testing.T) {
+		ts := newTestServer()
+		ts.StoreDocument(uriValue, "2024-01-15 grocery store\n")
+
+		edits, err := ts.onTypeFormattingWithOptions(uriValue, 1, "\n", protocol.FormattingOptions{
+			TabSize:      2,
+			InsertSpaces: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "  ", lastIndentEdit(t, edits).NewText)
+	})
+
+	t.Run("server setting when the client reports nothing", func(t *testing.T) {
+		ts := newTestServer()
+		ts.StoreDocument(uriValue, "2024-01-15 grocery store\n")
+
+		edits, err := ts.onTypeFormatting(uriValue, 1, "\n")
+		require.NoError(t, err)
+		assert.Equal(t, "    ", lastIndentEdit(t, edits).NewText)
+	})
+}
+
+func TestOnTypeEnter_KeepsCommentIndentation(t *testing.T) {
+	ts := newTestServer()
+	uriValue := uri.URI("file:///comments.journal")
+	content := "    ; first comment line\n"
+
+	ts.StoreDocument(uriValue, content)
+
+	edits, err := ts.onTypeFormatting(uriValue, 1, "\n")
+	require.NoError(t, err)
+	assert.Equal(t, "    ", lastIndentEdit(t, edits).NewText,
+		"continuing a comment keeps its indentation instead of collapsing it")
+}
+
+func TestOnTypeFormatting_SkipsRulesFiles(t *testing.T) {
+	ts := newTestServer()
+	rulesURI := uri.URI("file:///import/visa.rules")
+	content := "skip 1\nfields date, description, amount\n"
+
+	ts.StoreDocument(rulesURI, content)
+
+	edits, err := ts.onTypeFormatting(rulesURI, 1, "\n")
+	require.NoError(t, err)
+	assert.Nil(t, edits, "on-type formatting must not touch a CSV rules file")
+
+	tabEdits, err := ts.onTypeFormatting(rulesURI, 1, "\t")
+	require.NoError(t, err)
+	assert.Nil(t, tabEdits)
 }

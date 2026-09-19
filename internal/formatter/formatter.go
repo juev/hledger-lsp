@@ -27,6 +27,41 @@ var widthCondition = runewidth.NewCondition()
 // full-width CJK characters count as two cells, unlike utf8.RuneCountInString
 // which counts them as one. Use it for visual alignment column math; keep
 // RuneCountInString for positional/UTF-16 arithmetic.
+// DefaultTabSize is the tab stop used when a client does not report one.
+const DefaultTabSize = 4
+
+// DisplayWidth returns the terminal cell width of s: full-width CJK characters
+// and other East Asian wide runes count as two cells. Alignment arithmetic uses
+// this metric, never the rune count.
+func DisplayWidth(s string) int {
+	return displayWidth(s)
+}
+
+// DisplayWidthInLine returns the display column of the first byteOffset bytes of
+// line, expanding tab characters to the next tab stop of tabSize cells. Cursor
+// positions in tab-indented journals need this to land on the alignment column.
+func DisplayWidthInLine(line string, byteOffset, tabSize int) int {
+	if byteOffset > len(line) {
+		byteOffset = len(line)
+	}
+	if byteOffset < 0 {
+		byteOffset = 0
+	}
+	if tabSize <= 0 {
+		tabSize = DefaultTabSize
+	}
+
+	column := 0
+	for _, r := range line[:byteOffset] {
+		if r == '\t' {
+			column += tabSize - column%tabSize
+			continue
+		}
+		column += runewidth.RuneWidth(r)
+	}
+	return column
+}
+
 func displayWidth(s string) int {
 	return widthCondition.StringWidth(s)
 }
@@ -71,6 +106,10 @@ func DefaultOptions() Options {
 type AlignmentInfo struct {
 	AccountCol int
 	DecimalCol int
+	// CommentColumn, when > 0, is the display column where inline posting
+	// comments start. It preserves a hand-aligned comment column instead of
+	// pulling every comment to two spaces after its amount.
+	CommentColumn int
 	// AmountEndCol, when > 0, enables true right-alignment: amounts are
 	// padded so that the column right after the last rune of the rendered
 	// amount equals AmountEndCol. Used when AmountAlignmentMode = "right"
@@ -102,15 +141,27 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 
 	postingLines := make(map[int]bool)
 
-	if len(journal.Transactions) > 0 {
-		alignment := ComputeAlignment(journal, commodityFormats, opts)
+	postings := AllPostings(journal)
+	if len(postings) > 0 {
+		alignment := ComputeAlignment(journal, content, commodityFormats, opts)
+
+		for i := range postings {
+			postingLines[postings[i].Range.Start.Line-1] = true
+		}
 
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
-			for j := range tx.Postings {
-				postingLines[tx.Postings[j].Range.Start.Line-1] = true
-			}
-			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, opts)
+			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
+			edits = append(edits, txEdits...)
+		}
+		for i := range journal.PeriodicTransactions {
+			tx := &journal.PeriodicTransactions[i]
+			txEdits := formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
+			edits = append(edits, txEdits...)
+		}
+		for i := range journal.AutoPostingRules {
+			rule := &journal.AutoPostingRules[i]
+			txEdits := formatPostingsWithOpts(rule.Postings, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
 			edits = append(edits, txEdits...)
 		}
 	}
@@ -128,8 +179,12 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 // Reused by both the formatter and inline completion (ghost text) so the
 // columns ghost text targets always match what Format Document would produce
 // for the same document.
-func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
-	if journal == nil || len(journal.Transactions) == 0 || !opts.AlignAmounts {
+func ComputeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
+	return computeAlignment(journal, content, commodityFormats, opts)
+}
+
+func computeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
+	if journal == nil || len(AllPostings(journal)) == 0 || !opts.AlignAmounts {
 		return AlignmentInfo{}
 	}
 
@@ -140,7 +195,7 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
 
-	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, indentSize)
+	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(AllPostings(journal), indentSize)
 	globalAccountCol := naturalAccountCol
 	if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 		globalAccountCol = opts.MinAlignmentColumn - 1
@@ -153,25 +208,25 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 		if opts.AmountAlignmentColumn > 0 {
 			globalDecimalCol = opts.AmountAlignmentColumn
 		} else {
-			globalDecimalCol = CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, globalAccountCol, target)
-			if detected := DetectExistingDecimalColumn(journal.Transactions, commodityFormats, target); detected > globalDecimalCol {
+			globalDecimalCol = CalculateGlobalDecimalCol(AllPostings(journal), commodityFormats, globalAccountCol, target)
+			if detected := DetectExistingDecimalColumn(content, AllPostings(journal), commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
 		}
 	case "left":
 		if opts.AmountAlignmentColumn > 0 {
 			globalAccountCol = opts.AmountAlignmentColumn
-		} else if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+		} else if detected := DetectExistingAmountColumn(content, AllPostings(journal)); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
 	default:
 		// Smart detection: if the file already has hand-aligned
 		// amounts, use the most common existing start column as the
 		// base. Decimal mode uses decimal-target detection instead.
-		if detected := DetectExistingAmountColumn(journal.Transactions); detected > globalAccountCol {
+		if detected := DetectExistingAmountColumn(content, AllPostings(journal)); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
-		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(journal.Transactions) {
+		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(AllPostings(journal)) {
 			globalAmountEndCol = opts.AmountAlignmentColumn
 			break
 		}
@@ -183,19 +238,121 @@ func ComputeAlignment(journal *ast.Journal, commodityFormats map[string]Commodit
 		// MinAlignmentColumn also falls back to start-column —
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
-		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(journal.Transactions) {
-			if endCol := DetectExistingAmountEndColumn(journal.Transactions, commodityFormats, target); endCol > 0 {
-				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(journal.Transactions, commodityFormats, target)
+		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(AllPostings(journal)) {
+			if endCol := DetectExistingAmountEndColumn(content, AllPostings(journal), commodityFormats, target); endCol > 0 {
+				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(AllPostings(journal), commodityFormats, target)
 				globalAmountEndCol = max(naturalEndCol, endCol)
 			}
 		}
 	}
 
-	return AlignmentInfo{
+	alignment := AlignmentInfo{
 		AccountCol:   globalAccountCol,
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
+	alignment.CommentColumn = commentColumn(content, AllPostings(journal))
+	return alignment
+}
+
+// AllPostings returns every posting of a journal in document order: regular
+// transactions first, then periodic transactions and auto posting rules. hledger
+// formats and folds those blocks like ordinary postings, so alignment must take
+// their account names into account too.
+func AllPostings(journal *ast.Journal) []ast.Posting {
+	if journal == nil {
+		return nil
+	}
+
+	total := len(journal.Transactions) + len(journal.PeriodicTransactions) + len(journal.AutoPostingRules)
+	result := make([]ast.Posting, 0, total)
+	for i := range journal.Transactions {
+		result = append(result, journal.Transactions[i].Postings...)
+	}
+	for i := range journal.PeriodicTransactions {
+		result = append(result, journal.PeriodicTransactions[i].Postings...)
+	}
+	for i := range journal.AutoPostingRules {
+		result = append(result, journal.AutoPostingRules[i].Postings...)
+	}
+	return result
+}
+
+// commentColumn preserves a hand-aligned block of inline comments: when at least
+// two comments already share a column, formatting keeps them there instead of
+// pulling each one to two spaces after its own amount. A lone comment keeps the
+// default two-space gap, so a one-off comment does not end up detached from its
+// posting.
+//
+// The writer still enforces a two-space minimum, so a preserved column can never
+// make a comment collide with the amount, assertion or cost text.
+func commentColumn(content string, postings []ast.Posting) int {
+	var columns []int
+	for i := range postings {
+		if postings[i].Comment == "" {
+			continue
+		}
+		if column := displayColumn(content, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column); column > 0 {
+			columns = append(columns, column)
+		}
+	}
+	if len(columns) < 2 {
+		return 0
+	}
+
+	detected := selectModalColumn(columns)
+	if columnCount(columns, detected) < 2 {
+		return 0
+	}
+	return detected
+}
+
+func columnCount(columns []int, column int) int {
+	count := 0
+	for _, candidate := range columns {
+		if candidate == column {
+			count++
+		}
+	}
+	return count
+}
+
+// displayColumn converts a 1-indexed rune column on a line into a display column,
+// which is the metric alignment arithmetic uses.
+func displayColumn(content string, line, column int) int {
+	if column <= 1 {
+		return 0
+	}
+
+	text := lineText(content, line)
+	runes := []rune(text)
+	if column-1 > len(runes) {
+		column = len(runes) + 1
+	}
+	return displayWidth(string(runes[:column-1]))
+}
+
+func lineText(content string, line int) string {
+	if line <= 0 {
+		return ""
+	}
+
+	current := 1
+	start := 0
+	for i := 0; i < len(content); i++ {
+		if content[i] != '\n' {
+			continue
+		}
+		if current == line {
+			return content[start:i]
+		}
+		current++
+		start = i + 1
+	}
+	if current == line {
+		return content[start:]
+	}
+	return ""
 }
 
 func trimTrailingSpacesEdits(content string, mapper *lsputil.PositionMapper, postingLines map[int]bool) []protocol.TextEdit {
@@ -292,8 +449,15 @@ func extractCommodityFormats(journal *ast.Journal) map[string]CommodityFormat {
 	return ExtractCommodityFormats(journal.Directives)
 }
 
-func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, opts Options) []protocol.TextEdit {
-	if len(tx.Postings) == 0 {
+func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, globalCommentCol int, opts Options) []protocol.TextEdit {
+	return formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, globalAccountCol, globalDecimalCol, globalAmountEndCol, globalCommentCol, opts)
+}
+
+// formatPostingsWithOpts renders a list of postings that share one alignment,
+// which is how transactions, periodic transactions and auto posting rules are
+// formatted.
+func formatPostingsWithOpts(postings []ast.Posting, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, globalCommentCol int, opts Options) []protocol.TextEdit {
+	if len(postings) == 0 {
 		return nil
 	}
 
@@ -302,7 +466,7 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 
 	var alignment AlignmentInfo
 	if opts.AlignAmounts {
-		alignment = CalculateAlignmentWithGlobal(tx.Postings, commodityFormats, globalAccountCol)
+		alignment = CalculateAlignmentWithGlobal(postings, commodityFormats, globalAccountCol)
 		if globalDecimalCol > 0 {
 			alignment.DecimalCol = globalDecimalCol
 		}
@@ -310,18 +474,21 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 			alignment.AmountEndCol = globalAmountEndCol
 		}
 	}
+	if globalCommentCol > 0 {
+		alignment.CommentColumn = globalCommentCol
+	}
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
 
-	for i := range tx.Postings {
-		posting := &tx.Postings[i]
+	for i := range postings {
+		posting := &postings[i]
 		if posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
 			// The parser did not understand part of this line (for example the
 			// `:=` balance assignment hledger 1.52 rejects). Rebuilding the line
 			// from the AST would silently drop that text, so leave it alone.
 			continue
 		}
-		formatted := formatPostingWithOpts(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target)
+		formatted := appendPostingComment(formatPostingBody(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target), posting, alignment)
 		line := posting.Range.Start.Line - 1
 
 		edit := protocol.TextEdit{
@@ -376,13 +543,11 @@ func CalculateGlobalAlignmentColumn(transactions []ast.Transaction) int {
 
 // CalculateGlobalAlignmentColumnWithIndent returns the column at which amounts
 // should be aligned, using the given indentSize instead of the default indent.
-func CalculateGlobalAlignmentColumnWithIndent(transactions []ast.Transaction, indentSize int) int {
+func CalculateGlobalAlignmentColumnWithIndent(postings []ast.Posting, indentSize int) int {
 	maxLen := 0
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			if accountLen := calculateAccountDisplayLength(&transactions[i].Postings[j]); accountLen > maxLen {
-				maxLen = accountLen
-			}
+	for i := range postings {
+		if accountLen := calculateAccountDisplayLength(&postings[i]); accountLen > maxLen {
+			maxLen = accountLen
 		}
 	}
 	return indentSize + maxLen + minSpaces
@@ -405,26 +570,24 @@ func selectModalColumn(columns []int) int {
 	return bestCol
 }
 
-// DetectExistingAmountColumn returns the most common 0-indexed rune column
-// where an amount currently begins across all postings, or 0 if no posting has
-// an amount. Ties choose the larger column to avoid compressing hand-formatted
-// files. Used for "smart" alignment detection: when a file already has a
-// dominant visual layout, this column becomes a floor for new postings via Tab
-// and full document formatting.
+// DetectExistingAmountColumn returns the most common display (terminal cell)
+// column where an amount currently begins across all postings, or 0 if no
+// posting has an amount. Ties choose the larger column to avoid compressing
+// hand-formatted files. Used for "smart" alignment detection: when a file
+// already has a dominant visual layout, this column becomes a floor for new
+// postings via Tab and full document formatting.
 //
-// AST positions from the parser are 1-indexed runes; this function returns
-// 0-indexed runes for direct compatibility with CalculateGlobalAlignmentColumnWithIndent.
-func DetectExistingAmountColumn(transactions []ast.Transaction) int {
+// The parser reports 1-indexed rune columns, so the content is needed to convert
+// a column into display cells: a CJK or emoji account name before the amount
+// occupies more cells than it has runes.
+func DetectExistingAmountColumn(content string, postings []ast.Posting) int {
 	var columns []int
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			p := &transactions[i].Postings[j]
-			if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
-				continue
-			}
-			col := p.Amount.Range.Start.Column - 1 // 1-indexed → 0-indexed
-			columns = append(columns, col)
+	for i := range postings {
+		p := &postings[i]
+		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
+			continue
 		}
+		columns = append(columns, displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column))
 	}
 	return selectModalColumn(columns)
 }
@@ -445,36 +608,32 @@ func DetectExistingAmountColumn(transactions []ast.Transaction) int {
 // fixed column regardless of sign or integer-part width. Commodity-left
 // amounts are ignored — those are aligned by start column via the sibling
 // DetectExistingAmountColumn so the commodity symbol (e.g. $) stays put.
-func DetectExistingAmountEndColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
+func DetectExistingAmountEndColumn(content string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			p := &transactions[i].Postings[j]
-			if p.Amount == nil || p.Amount.Commodity.Position != ast.CommodityRight {
-				continue
-			}
-			if p.Amount.Range.Start.Column <= 0 {
-				continue
-			}
-			startCol := p.Amount.Range.Start.Column - 1
-			endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats, target)
-			columns = append(columns, endCol)
+	for i := range postings {
+		p := &postings[i]
+		if p.Amount == nil || p.Amount.Commodity.Position != ast.CommodityRight {
+			continue
 		}
+		if p.Amount.Range.Start.Column <= 0 {
+			continue
+		}
+		startCol := displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats, target)
+		columns = append(columns, endCol)
 	}
 	return selectModalColumn(columns)
 }
 
-func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
+func DetectExistingDecimalColumn(content string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			p := &transactions[i].Postings[j]
-			if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
-				continue
-			}
-			startCol := p.Amount.Range.Start.Column - 1
-			columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
+	for i := range postings {
+		p := &postings[i]
+		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
+			continue
 		}
+		startCol := displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
 	}
 	return selectModalColumn(columns)
 }
@@ -483,21 +642,19 @@ func DetectExistingDecimalColumn(transactions []ast.Transaction, commodityFormat
 // amount has a right-position commodity. Used as a guard for end-column
 // alignment — mixed positions fall back to start-column semantics so
 // commodity-left amounts (`$10.00`) keep their `$` column aligned.
-func allAmountsCommodityRight(transactions []ast.Transaction) bool {
+func allAmountsCommodityRight(postings []ast.Posting) bool {
 	seenAny := false
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			p := &transactions[i].Postings[j]
-			if p.Amount == nil {
-				continue
-			}
-			seenAny = true
-			if p.Amount.Commodity.Symbol == "" {
-				continue
-			}
-			if p.Amount.Commodity.Position != ast.CommodityRight {
-				return false
-			}
+	for i := range postings {
+		p := &postings[i]
+		if p.Amount == nil {
+			continue
+		}
+		seenAny = true
+		if p.Amount.Commodity.Symbol == "" {
+			continue
+		}
+		if p.Amount.Commodity.Position != ast.CommodityRight {
+			return false
 		}
 	}
 	return seenAny
@@ -522,15 +679,12 @@ func CalculateAlignmentWithGlobal(_ []ast.Posting, _ map[string]CommodityFormat,
 // The alignment anchor depends on target: with AlignTargetCost the cost amount's
 // decimal prefix is used for cost-notation postings; with AlignTargetPosting only
 // the posting amount's decimal prefix is considered and the cost annotation trails.
-func CalculateGlobalDecimalCol(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, accountCol int, target string) int {
+func CalculateGlobalDecimalCol(postings []ast.Posting, commodityFormats map[string]CommodityFormat, accountCol int, target string) int {
 	maxPrefix := 0
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			p := &transactions[i].Postings[j]
-			if p.Amount != nil {
-				prefix := calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target)
-				maxPrefix = max(maxPrefix, prefix)
-			}
+	for i := range postings {
+		if postings[i].Amount != nil {
+			prefix := calculateAlignmentTargetDecimalPrefix(&postings[i], commodityFormats, target)
+			maxPrefix = max(maxPrefix, prefix)
 		}
 	}
 	if maxPrefix > 0 {
@@ -559,12 +713,10 @@ func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[stri
 	return length
 }
 
-func calculateGlobalAlignmentTargetLen(transactions []ast.Transaction, commodityFormats map[string]CommodityFormat, target string) int {
+func calculateGlobalAlignmentTargetLen(postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	maxLen := 0
-	for i := range transactions {
-		for j := range transactions[i].Postings {
-			maxLen = max(maxLen, calculateAlignmentTargetLen(&transactions[i].Postings[j], commodityFormats, target))
-		}
+	for i := range postings {
+		maxLen = max(maxLen, calculateAlignmentTargetLen(&postings[i], commodityFormats, target))
 	}
 	return maxLen
 }
@@ -781,11 +933,33 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		}
 	}
 
-	if posting.Comment != "" {
-		sb.WriteString("  ; ")
-		sb.WriteString(strings.TrimLeft(posting.Comment, " \t"))
+	return sb.String()
+}
+
+// formatPostingBody renders a posting without its inline comment, so the caller
+// can place the comment at the document's comment column.
+func formatPostingBody(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
+	body := formatPostingWithOpts(posting, alignment, commodityFormats, indent, alignAmounts, target)
+	return body
+}
+
+// appendPostingComment appends the inline comment at alignment.CommentColumn
+// (two spaces after the body when no column is known).
+func appendPostingComment(body string, posting *ast.Posting, alignment AlignmentInfo) string {
+	if posting.Comment == "" {
+		return body
 	}
 
+	spaces := minSpaces
+	if alignment.CommentColumn > 0 {
+		spaces = max(alignment.CommentColumn-displayWidth(body), minSpaces)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(body)
+	sb.WriteString(strings.Repeat(" ", spaces))
+	sb.WriteString("; ")
+	sb.WriteString(strings.TrimLeft(posting.Comment, " \t"))
 	return sb.String()
 }
 

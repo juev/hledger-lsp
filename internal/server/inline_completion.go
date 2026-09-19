@@ -67,8 +67,13 @@ func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineComp
 	// here is independent of the payee-template path; for inline completion latency,
 	// this is the same Parse cost as the cache-miss path of getPayeeTemplates.
 	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
+	// Use the document's include tree for commodity formats, so ghost text aligns
+	// like Format Document does when the `commodity` directives live elsewhere.
 	commodityFormats := formatter.ExtractCommodityFormats(journal.Directives)
-	alignment := formatter.ComputeAlignment(journal, commodityFormats, formatterOptionsFrom(settings.Formatting))
+	if workspaceFormats := s.commodityFormatsForDocument(params.TextDocument.URI); workspaceFormats != nil {
+		commodityFormats = workspaceFormats
+	}
+	alignment := formatter.ComputeAlignment(journal, content, commodityFormats, formatterOptionsFrom(settings.Formatting))
 
 	insertText := buildInlinePostingsText(postings, settings.Formatting, alignment)
 
@@ -218,7 +223,9 @@ func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting for
 
 		amountText := renderInlineAmount(p)
 		if amountText != "" {
-			accountEnd := utf8.RuneCountInString(indent) + utf8.RuneCountInString(p.Account)
+			// Alignment columns are display cells, so the account prefix must be
+			// measured the same way or CJK/emoji accounts shift ghost text.
+			accountEnd := formatter.DisplayWidth(indent) + formatter.DisplayWidth(p.Account)
 			spaces := amountSpacesFromAlignment(accountEnd, amountText, alignment, formatting)
 			sb.WriteString(strings.Repeat(" ", spaces))
 			sb.WriteString(amountText)
@@ -266,7 +273,7 @@ func amountSpacesFromAlignment(accountEnd int, amountText string, alignment form
 	default:
 		// "right" (default): prefer end-column anchoring when available.
 		if alignment.AmountEndCol > 0 {
-			amountLen := utf8.RuneCountInString(amountText)
+			amountLen := formatter.DisplayWidth(amountText)
 			return max(alignment.AmountEndCol-accountEnd-amountLen, minSpaces)
 		}
 	}
@@ -279,11 +286,11 @@ func amountSpacesFromAlignment(accountEnd int, amountText string, alignment form
 
 func inlineDecimalPrefix(amountText string) int {
 	if idx := strings.Index(amountText, "."); idx >= 0 {
-		return utf8.RuneCountInString(amountText[:idx])
+		return formatter.DisplayWidth(amountText[:idx])
 	}
 	fields := strings.Fields(amountText)
 	if len(fields) == 0 {
-		return utf8.RuneCountInString(amountText)
+		return formatter.DisplayWidth(amountText)
 	}
 	return utf8.RuneCountInString(fields[0])
 }

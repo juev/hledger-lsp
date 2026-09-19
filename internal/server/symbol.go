@@ -36,6 +36,8 @@ func (s *Server) documentSymbols(
 	symbols := make([]protocol.DocumentSymbol, 0, len(journal.Transactions)+len(journal.Directives)+len(journal.Includes))
 
 	symbols = append(symbols, groupTransactionsByMonth(mapper, journal.Transactions)...)
+	symbols = append(symbols, periodicTransactionSymbols(mapper, journal.PeriodicTransactions)...)
+	symbols = append(symbols, autoPostingRuleSymbols(mapper, journal.AutoPostingRules)...)
 
 	for _, dir := range journal.Directives {
 		symbols = append(symbols, directiveToSymbol(mapper, dir))
@@ -93,6 +95,55 @@ func groupTransactionsByMonth(mapper *lsputil.PositionMapper, transactions []ast
 		})
 	}
 	return result
+}
+
+// periodicTransactionSymbols lists `~` blocks in the outline. Their postings are
+// ordinary postings, so hiding them from the outline would make the file look
+// incomplete.
+func periodicTransactionSymbols(mapper *lsputil.PositionMapper, periodic []ast.PeriodicTransaction) []protocol.DocumentSymbol {
+	symbols := make([]protocol.DocumentSymbol, 0, len(periodic))
+	for i := range periodic {
+		ptx := &periodic[i]
+
+		name := "~ " + ptx.Period
+		if ptx.Description != "" {
+			name += " " + ptx.Description
+		}
+		if ptx.Period == "" {
+			name = "~ periodic transaction"
+		}
+
+		rng := astRangeToLSP(mapper, ptx.Range)
+		symbols = append(symbols, protocol.DocumentSymbol{
+			Name:           name,
+			Kind:           protocol.SymbolKindFunction,
+			Range:          rng,
+			SelectionRange: rng,
+		})
+	}
+	return symbols
+}
+
+// autoPostingRuleSymbols lists `=` rules in the outline.
+func autoPostingRuleSymbols(mapper *lsputil.PositionMapper, rules []ast.AutoPostingRule) []protocol.DocumentSymbol {
+	symbols := make([]protocol.DocumentSymbol, 0, len(rules))
+	for i := range rules {
+		rule := &rules[i]
+
+		name := "= " + rule.Query
+		if rule.Query == "" {
+			name = "= auto posting rule"
+		}
+
+		rng := astRangeToLSP(mapper, rule.Range)
+		symbols = append(symbols, protocol.DocumentSymbol{
+			Name:           name,
+			Kind:           protocol.SymbolKindFunction,
+			Range:          rng,
+			SelectionRange: rng,
+		})
+	}
+	return symbols
 }
 
 func includeToSymbol(mapper *lsputil.PositionMapper, inc ast.Include) protocol.DocumentSymbol {

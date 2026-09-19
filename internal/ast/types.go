@@ -81,9 +81,12 @@ type Posting struct {
 	Cost             *Cost
 	LotPrice         *LotPrice
 	Comment          string
-	Tags             []Tag
-	Virtual          VirtualType
-	Range            Range
+	// CommentRange is the range of the inline comment token, used to preserve a
+	// hand-aligned comment column.
+	CommentRange Range
+	Tags         []Tag
+	Virtual      VirtualType
+	Range        Range
 	// UnparsedTail marks text on the posting line that the parser did not
 	// consume (for example `:=` balance assignment, which hledger 1.52 rejects).
 	// The formatter leaves such lines untouched instead of rebuilding them from

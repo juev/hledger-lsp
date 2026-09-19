@@ -7,6 +7,7 @@ import (
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
+	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 )
@@ -65,6 +66,12 @@ func classifyLine(line string) lineKind {
 }
 
 func (s *Server) OnTypeFormatting(ctx context.Context, params *protocol.DocumentOnTypeFormattingParams) ([]protocol.TextEdit, error) {
+	// CSV rules files are a different format: journal formatting must not touch
+	// them (full-document Format refuses them too).
+	if filetype.IsRules(string(params.TextDocument.URI)) {
+		return nil, nil
+	}
+
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
@@ -95,11 +102,28 @@ func (s *Server) onTypeNewline(doc string, params *protocol.DocumentOnTypeFormat
 	settings := s.getSettings()
 	indent := strings.Repeat(" ", settings.Formatting.IndentSize)
 
+	// The client tells us how it indents: a tab-indented document or a client with
+	// tabSize 2 must not be rewritten with spaces from the server's setting.
+	indentUnit := indent
+	insertSpaces := true
+	if params.Options.TabSize > 0 {
+		if !params.Options.InsertSpaces {
+			insertSpaces = false
+		}
+		indentUnit = strings.Repeat(" ", int(params.Options.TabSize))
+	}
+	if !insertSpaces {
+		indentUnit = "\t"
+	}
+
 	kind := classifyLine(prevLine)
 	var newIndent string
 	switch kind {
 	case lineTransactionHeader, linePosting:
-		newIndent = indent
+		newIndent = indentUnit
+	case lineComment:
+		// Keep the indentation of the comment we are continuing.
+		newIndent = leadingWhitespace(prevLine)
 	default:
 		newIndent = ""
 	}
@@ -186,13 +210,17 @@ func (s *Server) onTypeTab(doc string, params *protocol.DocumentOnTypeFormatting
 	// (ASCII, Latin, Cyrillic, CJK) the two are 1:1. For supplementary characters
 	// (emoji, codepoint > 0xFFFF) one rune = 2 UTF-16 units, so we must convert
 	// the cursor position to runes before comparing with alignCol.
-	cursorRune := lsputil.UTF16OffsetToRuneOffset(lines[line], int(params.Position.Character))
+	// alignCol counts display cells, so the cursor position must be measured the
+	// same way: a CJK or emoji prefix before the cursor occupies more cells than
+	// it has runes (or UTF-16 units), and tabs advance to the client's tab stops.
+	byteOffset := lsputil.UTF16OffsetToByteOffset(lines[line], int(params.Position.Character))
+	cursorDisplay := formatter.DisplayWidthInLine(lines[line], byteOffset, int(params.Options.TabSize))
 
-	if cursorRune >= alignCol {
+	if cursorDisplay >= alignCol {
 		return nil, nil
 	}
 
-	spacesNeeded := alignCol - cursorRune
+	spacesNeeded := alignCol - cursorDisplay
 
 	// TextEdit Range stays in LSP UTF-16 (the inserted ASCII spaces have
 	// identical length in runes and UTF-16, so cursor advances correctly).
@@ -213,16 +241,17 @@ func (s *Server) getAlignmentColumn(doc string, uri uri.URI) int {
 	}
 
 	journal, _ := s.cachedJournal(uri, doc)
-	if len(journal.Transactions) == 0 {
+	postings := formatter.AllPostings(journal)
+	if len(postings) == 0 {
 		return 0
 	}
 
 	settings := s.getSettings()
-	alignCol := formatter.CalculateGlobalAlignmentColumnWithIndent(journal.Transactions, settings.Formatting.IndentSize)
+	alignCol := formatter.CalculateGlobalAlignmentColumnWithIndent(postings, settings.Formatting.IndentSize)
 	// Smart detection: if the file already has hand-aligned amounts, use the
 	// most common existing column as the base. This preserves the file's visual
 	// layout for new postings via Tab and full document formatting.
-	if detected := formatter.DetectExistingAmountColumn(journal.Transactions); detected > alignCol {
+	if detected := formatter.DetectExistingAmountColumn(doc, postings); detected > alignCol {
 		alignCol = detected
 	}
 	if settings.Formatting.MinAlignmentColumn > 0 && alignCol < settings.Formatting.MinAlignmentColumn-1 {
@@ -238,7 +267,7 @@ func (s *Server) getAlignmentColumn(doc string, uri uri.URI) int {
 		if wf := s.commodityFormatsForDocument(uri); wf != nil {
 			commodityFormats = wf
 		}
-		decimalCol := formatter.CalculateGlobalDecimalCol(journal.Transactions, commodityFormats, alignCol, settings.Formatting.AmountAlignmentTarget)
+		decimalCol := formatter.CalculateGlobalDecimalCol(postings, commodityFormats, alignCol, settings.Formatting.AmountAlignmentTarget)
 		if decimalCol > 0 {
 			alignCol = decimalCol
 		}
@@ -246,4 +275,13 @@ func (s *Server) getAlignmentColumn(doc string, uri uri.URI) int {
 
 	s.alignmentCache.Store(uri, alignCol)
 	return alignCol
+}
+
+// leadingWhitespace returns the leading spaces and tabs of a line.
+func leadingWhitespace(line string) string {
+	index := 0
+	for index < len(line) && (line[index] == ' ' || line[index] == '\t') {
+		index++
+	}
+	return line[:index]
 }

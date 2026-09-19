@@ -104,3 +104,18 @@ func TestRangeFormat_DocumentNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, edits)
 }
+
+func TestRangeFormat_SkipsRulesFiles(t *testing.T) {
+	ts := newTestServer()
+	rulesURI := uri.URI("file:///import/visa.rules")
+	content := "skip 1\nfields date, description, amount\n"
+
+	ts.StoreDocument(rulesURI, content)
+
+	edits, err := ts.RangeFormat(context.Background(), &protocol.DocumentRangeFormattingParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: rulesURI},
+		Range:        protocol.Range{},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, edits, "journal range formatting must not touch a CSV rules file")
+}

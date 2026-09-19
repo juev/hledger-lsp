@@ -111,18 +111,18 @@ func TestComputeAlignment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ComputeAlignment(journal, commodityFormats, tt.opts)
+			got := ComputeAlignment(journal, input, commodityFormats, tt.opts)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 
 	t.Run("nil journal returns zero", func(t *testing.T) {
-		got := ComputeAlignment(nil, nil, Options{IndentSize: 4, AlignAmounts: true})
+		got := ComputeAlignment(nil, "", nil, Options{IndentSize: 4, AlignAmounts: true})
 		assert.Equal(t, AlignmentInfo{}, got)
 	})
 
 	t.Run("empty journal returns zero", func(t *testing.T) {
-		got := ComputeAlignment(&ast.Journal{}, nil, Options{IndentSize: 4, AlignAmounts: true})
+		got := ComputeAlignment(&ast.Journal{}, "", nil, Options{IndentSize: 4, AlignAmounts: true})
 		assert.Equal(t, AlignmentInfo{}, got)
 	})
 }
@@ -287,7 +287,7 @@ func TestDetectExistingAmountColumn(t *testing.T) {
 			journal, errs := parser.Parse(tt.input)
 			require.Empty(t, errs)
 
-			col := DetectExistingAmountColumn(journal.Transactions)
+			col := DetectExistingAmountColumn(tt.input, AllPostings(journal))
 			assert.Equal(t, tt.expected, col)
 		})
 	}
@@ -3761,7 +3761,7 @@ func TestCalculateGlobalDecimalCol(t *testing.T) {
 	require.Empty(t, errs)
 
 	accountCol := CalculateAlignmentColumn(journal.Transactions[0].Postings)
-	decimalCol := CalculateGlobalDecimalCol(journal.Transactions, nil, accountCol, AlignTargetCost)
+	decimalCol := CalculateGlobalDecimalCol(AllPostings(journal), nil, accountCol, AlignTargetCost)
 
 	// DecimalCol should be accountCol + maxPrefix (4 for "1000")
 	assert.Equal(t, accountCol+4, decimalCol, "DecimalCol should account for longest integer part")
@@ -3840,7 +3840,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     food  -12.60 USD`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		col := DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost)
+		col := DetectExistingAmountEndColumn(input, AllPostings(journal), nil, AlignTargetCost)
 		// Amount ends after "USD" at 1-indexed col 21 → 0-indexed 20.
 		assert.Equal(t, 20, col)
 	})
@@ -3851,7 +3851,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     cash   12.00 USD`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		col := DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost)
+		col := DetectExistingAmountEndColumn(input, AllPostings(journal), nil, AlignTargetCost)
 		// Both end at the same user-formatted column — MAX equals that col.
 		assert.Equal(t, 20, col)
 	})
@@ -3861,7 +3861,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     food
     cash`
 		journal, _ := parser.Parse(input)
-		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost))
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(input, AllPostings(journal), nil, AlignTargetCost))
 	})
 
 	t.Run("commodity-left amounts are ignored", func(t *testing.T) {
@@ -3870,7 +3870,7 @@ func TestDetectExistingAmountEndColumn(t *testing.T) {
     cash  $-10.00`
 		journal, errs := parser.Parse(input)
 		require.Empty(t, errs)
-		assert.Equal(t, 0, DetectExistingAmountEndColumn(journal.Transactions, nil, AlignTargetCost))
+		assert.Equal(t, 0, DetectExistingAmountEndColumn(input, AllPostings(journal), nil, AlignTargetCost))
 	})
 }
 

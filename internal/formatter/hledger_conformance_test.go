@@ -84,3 +84,132 @@ func TestFormatDocument_IdempotentForFixedLotCost(t *testing.T) {
 
 	assert.Equal(t, once, twice, "format(format(x)) must equal format(x)")
 }
+
+func TestFormatDocument_PreservesAlignedCommentColumn(t *testing.T) {
+	// A hand-aligned block of inline comments must keep its column: formatting
+	// used to pull every comment to two spaces after its own amount.
+	input := "2024-01-01 test\n" +
+		"    expenses:food  $50        ; groceries\n" +
+		"    assets:cash    $-50       ; cash\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+	lines := strings.Split(formatted, "\n")
+
+	assert.Equal(t, 30, displayColumnOf(t, lines[1], "; groceries"), "comment column is preserved")
+	assert.Equal(t, 30, displayColumnOf(t, lines[2], "; cash"), "both comments stay in one column")
+
+	second, errs2 := parser.Parse(formatted)
+	require.Empty(t, errs2)
+	assert.Equal(t, formatted, applyLineEdits(t, formatted, FormatDocument(second, formatted)),
+		"format(format(x)) must equal format(x)")
+}
+
+func TestFormatDocument_LoneCommentKeepsTwoSpaces(t *testing.T) {
+	// With a single comment there is no column to preserve, so the comment stays
+	// two spaces after its posting body.
+	input := "2024-01-01 test\n" +
+		"    expenses:food  $50  ; groceries\n" +
+		"    assets:cash    $-50\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+	lines := strings.Split(formatted, "\n")
+	assert.Contains(t, lines[1], "$50  ; groceries")
+}
+
+func TestFormatDocument_CommentColumnSurvivesCJKAccounts(t *testing.T) {
+	// The preserved column is a display column, so wide characters before the
+	// comment must not shift it.
+	input := "2024-01-01 test\n" +
+		"    费用:食物  $50             ; groceries\n" +
+		"    資産:現金  $-50            ; cash\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+	lines := strings.Split(formatted, "\n")
+
+	first := displayColumnOf(t, lines[1], "; groceries")
+	second := displayColumnOf(t, lines[2], "; cash")
+	assert.Equal(t, first, second, "comments stay in one display column")
+	assert.Equal(t, 31, first)
+}
+
+func TestFormatDocument_CJKJournalSettlesAfterOnePass(t *testing.T) {
+	// A CJK-only journal has no ASCII sibling to fall back on, so mixing rune
+	// columns with display columns used to make every save shift the amounts.
+	input := "2024-01-01 test\n" +
+		"    資産:現金         100 CNY\n" +
+		"    費用:food         20 CNY\n" +
+		"    資産:銀行         -120 CNY\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	first := applyLineEdits(t, input, FormatDocument(journal, input))
+
+	second, errs2 := parser.Parse(first)
+	require.Empty(t, errs2)
+	assert.Equal(t, first, applyLineEdits(t, first, FormatDocument(second, first)),
+		"format(format(x)) must equal format(x) for a CJK-only journal")
+
+	lines := strings.Split(first, "\n")
+	require.Len(t, lines, 5, "three postings and the trailing empty line")
+	for _, line := range lines[1:4] {
+		assert.Regexp(t, `\S {2,}\S`, line, "amount stays at least two spaces from the account: %q", line)
+	}
+}
+
+func TestDetectExistingAmountColumn_UsesDisplayColumns(t *testing.T) {
+	// The parser reports rune columns, so "資産:現金" before the amount must be
+	// converted into display cells: the amount starts at display column 22 while
+	// its rune column is 19.
+	input := "2024-01-01 test\n    資産:現金         100 CNY\n    費用:food         20 CNY\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	assert.Equal(t, 22, DetectExistingAmountColumn(input, AllPostings(journal)),
+		"detection must return a display column")
+}
+
+func TestDetectExistingAmountEndColumn_UsesDisplayColumns(t *testing.T) {
+	input := "2024-01-01 test\n    資産:現金         100 CNY\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	// "100 CNY" starts at display column 22 and is 7 cells wide.
+	assert.Equal(t, 29, DetectExistingAmountEndColumn(input, AllPostings(journal), nil, AlignTargetCost))
+}
+
+func TestFormatDocument_FormatsPeriodicAndAutoRulePostings(t *testing.T) {
+	input := "~ monthly\n" +
+		"    expenses:food  $500\n" +
+		"    assets:cash\n" +
+		"\n" +
+		"= expenses:food\n" +
+		"    (budget:food)  $500\n" +
+		"\n" +
+		"2024-01-01 real\n" +
+		"    expenses:food  $10\n" +
+		"    assets:cash\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+	lines := strings.Split(formatted, "\n")
+
+	amountColumn := displayColumnOf(t, lines[1], "$500")
+	assert.Equal(t, amountColumn, displayColumnOf(t, lines[5], "$500"),
+		"periodic and auto-rule postings align with the transaction's postings")
+	assert.Equal(t, amountColumn, displayColumnOf(t, lines[8], "$10"))
+	assert.Contains(t, lines[1], "expenses:food  $500", "amount stays two spaces from the account")
+}

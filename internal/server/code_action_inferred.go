@@ -45,7 +45,7 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 			if workspaceFormats := s.commodityFormatsForDocument(params.TextDocument.URI); workspaceFormats != nil {
 				commodityFormats = workspaceFormats
 			}
-			alignment = formatter.ComputeAlignment(journal, commodityFormats, formatterOptionsFrom(settings.Formatting))
+			alignment = formatter.ComputeAlignment(journal, doc, commodityFormats, formatterOptionsFrom(settings.Formatting))
 			alignmentComputed = true
 		}
 		return alignment
