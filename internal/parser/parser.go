@@ -45,6 +45,7 @@ type Context struct {
 	decimalMarkExplicit         bool
 	defaultCommodityDecimalMark string
 	defaultCommoditySymbol      string
+	defaultCommodityPosition    ast.CommodityPosition
 	commodityDecimalMarks       map[string]string
 	accountPrefixes             []string
 	basicAliases                []basicAlias
@@ -111,6 +112,7 @@ type Parser struct {
 	commodityDecimalMarks        map[string]string
 	defaultCommodityDecimalMark  string
 	defaultCommoditySymbol       string
+	defaultCommodityPosition     ast.CommodityPosition
 	inputLen                     int
 	accountPrefixes              []string // stack for nested apply account directives
 	basicAliases                 []basicAlias
@@ -149,6 +151,7 @@ func ParseWithContext(input string, initial Context, resolve IncludeResolver) (P
 		decimalMarkExplicit:          context.decimalMarkExplicit,
 		defaultCommodityDecimalMark:  context.defaultCommodityDecimalMark,
 		defaultCommoditySymbol:       context.defaultCommoditySymbol,
+		defaultCommodityPosition:     context.defaultCommodityPosition,
 		commodityDecimalMarks:        context.commodityDecimalMarks,
 		accountPrefixes:              context.accountPrefixes,
 		basicAliases:                 context.basicAliases,
@@ -753,6 +756,15 @@ func (p *Parser) parseAmount() *ast.Amount {
 				},
 			}
 			p.advance()
+		} else if p.defaultCommoditySymbol != "" {
+			// hledger reads a bare number as the default commodity set by the
+			// D directive. Keep Inferred so the amount can still be rendered
+			// the way it was written.
+			amount.Commodity = ast.Commodity{
+				Symbol:   p.defaultCommoditySymbol,
+				Inferred: true,
+				Position: p.defaultCommodityPosition,
+			}
 		}
 	}
 
@@ -1276,16 +1288,38 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		}
 	}
 
+	// The default commodity applies to every amount written without a symbol
+	// from here on — including amounts in files included later, because
+	// hledger's directive state flows into an include — so record it even when
+	// the decimal mark is already known. A D directive without a symbol clears
+	// it again.
+	p.defaultCommoditySymbol = dir.Symbol
+	p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
+
 	if !p.decimalMarkExplicit && numberStr != "" {
 		if mark := inferDecimalMark(numberStr); mark != "" {
 			p.defaultCommodityDecimalMark = mark
-			p.defaultCommoditySymbol = dir.Symbol
 		}
 	}
 
 	dir.Range.End = toASTPosition(p.current.Pos)
 	p.skipToNextLine()
 	return dir
+}
+
+// defaultCommodityPositionOf reports where a D directive writes its commodity
+// symbol, so that bare amounts inherit the same layout: `D $1,000.00` is
+// commodity-left, `D 1.000,00 RUB` is commodity-right.
+func defaultCommodityPositionOf(format, symbol string) ast.CommodityPosition {
+	if symbol == "" {
+		return ast.CommodityLeft
+	}
+	symbolIdx := strings.Index(format, symbol)
+	digitIdx := strings.IndexFunc(format, unicode.IsDigit)
+	if symbolIdx >= 0 && digitIdx >= 0 && symbolIdx < digitIdx {
+		return ast.CommodityLeft
+	}
+	return ast.CommodityRight
 }
 
 func (p *Parser) parseDecimalMarkDirective(startPos Position) ast.Directive {
@@ -1736,6 +1770,7 @@ func (p *Parser) context() Context {
 		decimalMarkExplicit:         p.decimalMarkExplicit,
 		defaultCommodityDecimalMark: p.defaultCommodityDecimalMark,
 		defaultCommoditySymbol:      p.defaultCommoditySymbol,
+		defaultCommodityPosition:    p.defaultCommodityPosition,
 		commodityDecimalMarks:       p.commodityDecimalMarks,
 		accountPrefixes:             p.accountPrefixes,
 		basicAliases:                p.basicAliases,
@@ -1772,6 +1807,7 @@ func cloneContext(context Context) Context {
 		decimalMarkExplicit:         context.decimalMarkExplicit,
 		defaultCommodityDecimalMark: context.defaultCommodityDecimalMark,
 		defaultCommoditySymbol:      context.defaultCommoditySymbol,
+		defaultCommodityPosition:    context.defaultCommodityPosition,
 		commodityDecimalMarks:       cloneStringMap(context.commodityDecimalMarks),
 		accountPrefixes:             append([]string(nil), context.accountPrefixes...),
 		basicAliases:                append([]basicAlias(nil), context.basicAliases...),

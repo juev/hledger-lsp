@@ -484,3 +484,67 @@ func TestCheckJournalBalance_ResidualEqualToToleranceIsBalanced(t *testing.T) {
 `})
 	assert.Len(t, CheckJournalBalance(beyond, decimal.Zero), 1, "5.00 exceeds the 0.5 tolerance")
 }
+
+func TestCheckJournalBalance_DefaultCommodityMakesBareActivityMatchAssertions(t *testing.T) {
+	// The clopen workflow the user journals follow: a year file records activity
+	// as bare numbers while the closing and opening entries assert RUB amounts.
+	// hledger reads every bare number as RUB because of the D directive, so the
+	// assertions hold.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `D 1.000,00 RUB
+commodity RUB
+
+2019-06-01 salary
+    Активы:Наличные        1.755,00
+    income:salary
+
+2019-12-31 closing balances  ; clopen:
+    Активы:Наличные      -1.755,00 RUB = 0,00 RUB
+    equity:closing
+
+2020-01-01 opening balances  ; clopen:
+    Активы:Наличные       1.755,00 RUB = 1.755,00 RUB
+    equity:opening
+
+2020-01-02 groceries
+    expenses:food          -200,00
+    Активы:Наличные         200,00
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero),
+		"bare amounts must be checked as the default commodity, got %v", codesOf(CheckJournalBalance(resolved, decimal.Zero)))
+}
+
+func TestCheckJournalBalance_DefaultCommodityStillRejectsOtherCommodities(t *testing.T) {
+	// Control: inheriting the default commodity must not make every commodity
+	// equal to every other one. hledger rejects this journal.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `D 1.000,00 RUB
+
+2024-01-01 opening
+    assets:cash   1.000,00 = 1.000,00 USD
+    equity
+`})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Contains(t, diagnostics[0].Message, "balance assertion failed in assets:cash")
+}
+
+func TestCheckJournalBalance_DefaultCommodityAppliesToBareAssertions(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `D 1.000,00 RUB
+
+2024-01-01 opening
+    assets:cash   1.000,00 = 1.000,00
+    equity
+
+2024-01-02 spend
+    assets:cash   -200,00
+    expenses       200,00
+
+2024-01-03 check
+    assets:cash   = 800,00
+    equity
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}

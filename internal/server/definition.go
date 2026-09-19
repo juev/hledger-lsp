@@ -113,7 +113,7 @@ func findDefinitionTarget(mapper *lsputil.PositionMapper, journal *ast.Journal, 
 				}
 			}
 
-			if p.Amount != nil && p.Amount.Commodity.Symbol != "" {
+			if p.Amount != nil && p.Amount.Commodity.WrittenSymbol() != "" {
 				if positionInRange(pos, p.Amount.Commodity.Range) {
 					return &definitionTarget{
 						context:     DefContextCommodity,
@@ -217,7 +217,7 @@ func findFirstCommodityUsageResolved(symbol string, journals map[string]*ast.Jou
 			tx := &journal.Transactions[i]
 			for j := range tx.Postings {
 				p := &tx.Postings[j]
-				if p.Amount != nil && p.Amount.Commodity.Symbol == symbol {
+				if p.Amount != nil && p.Amount.Commodity.WrittenSymbol() == symbol {
 					if earliestDate == nil || compareDates(tx.Date, *earliestDate) < 0 {
 						earliestDate = &tx.Date
 						earliest = &protocol.Location{

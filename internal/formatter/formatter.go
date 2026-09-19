@@ -964,6 +964,12 @@ func appendPostingComment(body string, posting *ast.Posting, alignment Alignment
 }
 
 func resolveCommodityDisplay(amount *ast.Amount, commodityFormats map[string]CommodityFormat) (position ast.CommodityPosition, spaceBetween bool) {
+	// An amount written without a symbol renders bare, so a declared format for
+	// the inherited commodity must not add a space where the symbol would be.
+	if commoditySymbolDisplay(&amount.Commodity) == "" {
+		return ast.CommodityRight, false
+	}
+
 	position = amount.Commodity.Position
 	spaceBetween = DefaultSpaceBetween(position, amount.Commodity.Symbol)
 
@@ -1001,11 +1007,15 @@ func IsSymbolCommodity(symbol string) bool {
 	return lastRune != utf8.RuneError && unicode.Is(unicode.Sc, lastRune)
 }
 
+// commoditySymbolDisplay returns the commodity text to render. An amount that
+// was written without a symbol, inheriting the journal's default commodity,
+// has no symbol text of its own and therefore stays bare when rendered.
 func commoditySymbolDisplay(c *ast.Commodity) string {
-	if c.Quoted {
-		return `"` + c.Symbol + `"`
+	symbol := c.WrittenSymbol()
+	if c.Quoted && symbol != "" {
+		return `"` + symbol + `"`
 	}
-	return c.Symbol
+	return symbol
 }
 
 func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) {

@@ -87,6 +87,48 @@ func TestOracle_AssertionVerdictsMatchHledger(t *testing.T) {
     [c]  $5
     [d]
 `,
+		// hledger reads a bare number as the commodity of the D directive, so
+		// clopen-style journals keep balancing when activity is written bare
+		// and the closing and opening entries assert symbol amounts.
+		"bare amounts inherit the default commodity": `D 1.000,00 RUB
+commodity RUB
+
+2019-06-01 salary
+    Активы:Наличные        1.755,00
+    income:salary
+
+2019-12-31 closing balances  ; clopen:
+    Активы:Наличные       -1.755,00 RUB = 0,00 RUB
+    equity:closing
+
+2020-01-01 opening balances  ; clopen:
+    Активы:Наличные        1.755,00 RUB = 1.755,00 RUB
+    equity:opening
+
+2020-01-02 groceries
+    expenses:food           -200,00
+    Активы:Наличные          200,00
+`,
+		"bare assertions inherit the default commodity": `D 1.000,00 RUB
+commodity RUB
+
+2024-01-01 opening
+    assets:cash   1.000,00 = 1.000,00
+    equity
+
+2024-01-02 check
+    assets:cash   = 1.000,00
+    equity
+`,
+		// The default commodity is not a wildcard: a non-zero assertion in
+		// another commodity still fails in hledger.
+		"default commodity does not match another commodity": `D 1.000,00 RUB
+commodity RUB
+
+2024-01-01 opening
+    assets:cash   1.000,00 = 1.000,00 USD
+    equity
+`,
 	}
 
 	for name, input := range cases {

@@ -398,20 +398,22 @@ func buildAmountHover(amount *ast.Amount, cost *ast.Cost, commodityFormats map[s
 }
 
 func formatAmountForHover(amount *ast.Amount, commodityFormats map[string]formatter.CommodityFormat, defaultSymbol string) string {
-	if amount.Commodity.Symbol != "" {
-		if _, ok := commodityFormats[amount.Commodity.Symbol]; ok {
-			return formatter.FormatAmount(amount, commodityFormats)
+	// Hover names the commodity the amount belongs to even when the journal
+	// writes it bare, so an inherited default commodity is never hidden.
+	displayAmount := *amount
+	displayAmount.Commodity.Inferred = false
+
+	if displayAmount.Commodity.Symbol == "" {
+		if defaultSymbol == "" {
+			return formatter.FormatAmount(&displayAmount, nil)
 		}
-		return formatter.FormatAmount(amount, nil)
+		displayAmount.Commodity.Symbol = defaultSymbol
 	}
 
-	if defaultSymbol != "" {
-		displayAmount := *amount
-		displayAmount.Commodity.Symbol = defaultSymbol
+	if _, ok := commodityFormats[displayAmount.Commodity.Symbol]; ok {
 		return formatter.FormatAmount(&displayAmount, commodityFormats)
 	}
-
-	return formatter.FormatAmount(amount, nil)
+	return formatter.FormatAmount(&displayAmount, nil)
 }
 
 func buildPayeeHoverWithTransactions(payee string, transactions []ast.Transaction) string {

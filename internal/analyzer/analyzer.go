@@ -654,24 +654,36 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 		}
 	}
 
-	for _, posting := range tx.Postings {
-		if posting.Amount != nil {
-			checkCommodity(posting.Amount.Commodity.Symbol, posting.Amount.Commodity.Range)
+	// An amount written without a symbol inherits the default commodity, but has
+	// no commodity text to point at: report the amount itself, the way hledger
+	// underlines the bare number.
+	checkAmountCommodity := func(amount *ast.Amount) {
+		if amount == nil {
+			return
 		}
+		r := amount.Commodity.Range
+		if amount.Commodity.Inferred {
+			r = amount.Range
+		}
+		checkCommodity(amount.Commodity.Symbol, r)
+	}
+
+	for _, posting := range tx.Postings {
+		checkAmountCommodity(posting.Amount)
 		if posting.Cost != nil {
-			checkCommodity(posting.Cost.Amount.Commodity.Symbol, posting.Cost.Amount.Commodity.Range)
+			checkAmountCommodity(&posting.Cost.Amount)
 		}
 		if posting.BalanceAssertion != nil {
-			checkCommodity(posting.BalanceAssertion.Amount.Commodity.Symbol, posting.BalanceAssertion.Amount.Commodity.Range)
+			checkAmountCommodity(&posting.BalanceAssertion.Amount)
 			if posting.BalanceAssertion.Cost != nil {
-				checkCommodity(posting.BalanceAssertion.Cost.Amount.Commodity.Symbol, posting.BalanceAssertion.Cost.Amount.Commodity.Range)
+				checkAmountCommodity(&posting.BalanceAssertion.Cost.Amount)
 			}
 			if posting.BalanceAssertion.LotPrice != nil && posting.BalanceAssertion.LotPrice.Cost != nil {
-				checkCommodity(posting.BalanceAssertion.LotPrice.Cost.Commodity.Symbol, posting.BalanceAssertion.LotPrice.Cost.Commodity.Range)
+				checkAmountCommodity(posting.BalanceAssertion.LotPrice.Cost)
 			}
 		}
 		if posting.LotPrice != nil && posting.LotPrice.Cost != nil {
-			checkCommodity(posting.LotPrice.Cost.Commodity.Symbol, posting.LotPrice.Cost.Commodity.Range)
+			checkAmountCommodity(posting.LotPrice.Cost)
 		}
 	}
 	return diags
