@@ -769,7 +769,11 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 
 	numberStr := strings.ReplaceAll(rawNumberStr, " ", "")
-	mark := p.resolveDecimalMark(amount.Commodity.Symbol)
+	// A bare number is read with the D directive's number format, not with the
+	// style of the commodity it inherits: `D 1.000,00 RUB` makes `1.234` mean
+	// 1234 even when `commodity 1,000.00 RUB` declares a different style for
+	// explicitly written RUB amounts (hledger 1.52.4).
+	mark := p.resolveDecimalMark(amount.Commodity.WrittenSymbol())
 	numberStr = normalizeNumber(numberStr, mark)
 
 	qty, err := decimal.NewFromString(numberStr)
