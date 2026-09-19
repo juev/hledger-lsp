@@ -4,7 +4,10 @@ The server reads settings from the `hledger` section of your LSP client configur
 
 ## Features
 
-Enable or disable specific LSP features.
+Enable or disable specific LSP features. Feature flags are read per request, so a change takes
+effect immediately for everything the server answers. The capability set advertised during
+`initialize` is fixed by the protocol, so a client that shows or hides its own menus may need a
+restart to refresh them.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -44,14 +47,31 @@ or a transaction contains a posting-level `date:` or `date2:` tag.
 | `hledger.completion.fuzzyMatching` | `true` | Enable fuzzy matching |
 | `hledger.completion.showCounts` | `true` | Show usage counts in completion details |
 | `hledger.completion.includeNotes` | `true` | Include notes in payee completions |
+| `hledger.completion.accountScope` | `"nonzero"` | `"nonzero"` hides accounts whose balance is zero in every commodity; `"all"` keeps closed and unused accounts, which standard clients cannot request through the experimental scope otherwise |
 
 ## Diagnostics
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `hledger.diagnostics.undeclaredAccounts` | `true` | Report undeclared accounts |
-| `hledger.diagnostics.undeclaredCommodities` | `true` | Report undeclared commodities |
-| `hledger.diagnostics.unbalancedTransactions` | `true` | Report unbalanced transactions |
+| `hledger.diagnostics.accountCheck` | `"off"` | Account declaration check: `"off"`, `"lint"` (soft check, sibling of the old boolean) or `"strict"` (mirrors `hledger --strict`: every account needs its own `account` directive) |
+| `hledger.diagnostics.undeclaredAccounts` | — | Legacy boolean. `true` maps to `accountCheck: "lint"` unless `accountCheck` is set explicitly |
+| `hledger.diagnostics.undeclaredCommodities` | `false` | Report amounts whose commodity has no `commodity` directive (hledger itself only requires this under `--strict`) |
+| `hledger.diagnostics.unbalancedTransactions` | `true` | Report unbalanced transactions and transactions with more than one amount-less posting |
+| `hledger.diagnostics.balanceAssertions` | `true` | Evaluate `=`, `==`, `=*` and `==*` balance assertions over the whole include tree in date order |
+| `hledger.diagnostics.balanceTolerance` | `0` | Additional user tolerance for balance checks, on top of the per-commodity precision |
+| `hledger.diagnostics.debounceMs` | `100` | Delay before diagnostics are recomputed while typing |
+
+Defaults follow hledger: a journal loads without any `account` or `commodity` directive unless
+`--strict` is requested, so both declaration checks are opt-in. Balance rules match hledger 1.52.4,
+including the currency-conversion inference for transactions with two residual commodities of
+opposite signs and no explicit cost, and the rule that cost amounts do not tighten the tolerance of
+the commodity they convert into.
+
+Diagnostics for included files are published against those files, so a syntax error in
+`2024.journal` is reported in that file rather than in the file that includes it.
+
+Values the server cannot use (an unknown enum value, a non-positive number) are reported through
+`window/showMessage` and replaced with the documented default.
 
 ## Formatting
 
@@ -140,7 +160,19 @@ With `"posting"`, the posting (first) amount is aligned and the cost annotation 
 
 `"posting"` keeps the anchor short, so amounts still align even when a long account name would otherwise push the cost-anchored amount against the 2-space minimum.
 
-The same alignment settings are used by document/range formatting, format-on-type for Enter after a posting line, and inline completion ghost text when amount data is available.
+The same alignment settings are used by document/range formatting, format-on-type for Enter after a
+posting line, and inline completion ghost text when amount data is available.
+
+Inline comments keep a hand-aligned column: when two or more comments already share a display column,
+formatting preserves it instead of pulling each comment to two spaces after its amount. A lone
+comment keeps the default two-space gap, and comments never collide with an amount (the two-space
+minimum wins).
+
+Periodic transactions (`~ monthly`) and auto posting rules (`= expenses:food`) are formatted, folded
+and listed in the document outline like ordinary transactions.
+
+On-type formatting honours the client's `tabSize` and `insertSpaces` when it indents a new line, and
+keeping a comment's indentation when a comment line is continued.
 
 ## CLI
 

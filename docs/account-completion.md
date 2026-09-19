@@ -74,3 +74,19 @@ not change settings. Clients decide how long to keep sending `all`. A missing
 scope, an unsupported scope, a missing document URI, or malformed parameters
 produces JSON-RPC `InvalidParams` (`-32602`). An unopened document returns an
 empty list. Clients without this capability should use standard completion.
+
+## Zero balances without a custom request
+
+The experimental `hledger/completion` request with `accountScope: "all"` exists for extensions that
+stage their own suggestions. Standard clients reach the same list through the
+`hledger.completion.accountScope` setting:
+
+```json
+{
+  "hledger.completion.accountScope": "all"
+}
+```
+
+`"nonzero"` (the default) hides accounts whose balance is zero in every commodity, including
+declared-but-unused accounts. `"all"` keeps them, which matters for closed accounts that are still
+worth completing.

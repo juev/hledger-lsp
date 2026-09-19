@@ -141,3 +141,14 @@ read path causes broken parsing on Windows.
 | Parse errors in include | File still added to resolved, errors shown as diagnostics |
 | No journal in folder | `resolved = nil`, falls back to per-document mode |
 | Multi-owner reload | Edit of shared source reloads all owning roots atomically |
+
+## Limitations
+
+- Only the first workspace folder is indexed. The server declares
+  `workspace.workspaceFolders.supported = false` so clients do not expect multi-root indexing.
+- Deleting an included file invalidates the loader cache and republishes diagnostics for the open
+  journals that included it, so the missing include shows up as `INCLUDE_NOT_FOUND` in the file that
+  contains the directive. Indexed symbol lists are refreshed when the file is created or changed
+  again.
+- An open editor buffer is the source of truth for its file: an external change to a file that is
+  open in the editor does not replace the buffer content, which is what the user sees.
