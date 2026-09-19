@@ -34,11 +34,22 @@ type inlayHintSettings struct {
 	CostExpansion   bool
 }
 
+// Account scope values for completion.accountScope.
+const (
+	accountScopeNonzero = "nonzero"
+	accountScopeAll     = "all"
+)
+
 type completionSettings struct {
 	MaxResults    int
 	FuzzyMatching bool
 	ShowCounts    bool
 	IncludeNotes  bool
+	// AccountScope selects whether account completion hides accounts whose
+	// balance is zero in every commodity. hledger users often keep closed
+	// accounts around, so "all" is available without the experimental
+	// request-local scope.
+	AccountScope string
 }
 
 // Account declaration check modes. hledger only requires every account to be
@@ -106,6 +117,7 @@ func defaultServerSettings() serverSettings {
 			FuzzyMatching: true,
 			ShowCounts:    true,
 			IncludeNotes:  true,
+			AccountScope:  accountScopeNonzero,
 		},
 		Diagnostics: diagnosticsSettings{
 			AccountCheck:           accountCheckOff,
@@ -154,6 +166,12 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 	}
 	if settings.Limits.MaxIncludeDepth <= 0 {
 		settings.Limits.MaxIncludeDepth = defaults.Limits.MaxIncludeDepth
+	}
+	switch settings.Completion.AccountScope {
+	case accountScopeNonzero, accountScopeAll:
+		// valid
+	default:
+		settings.Completion.AccountScope = defaults.Completion.AccountScope
 	}
 	switch settings.Diagnostics.AccountCheck {
 	case accountCheckOff, accountCheckLint, accountCheckStrict:
@@ -369,6 +387,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(completionRaw["includeNotes"]); ok {
 			settings.Completion.IncludeNotes = value
 		}
+		if value, ok := toString(completionRaw["accountScope"]); ok {
+			settings.Completion.AccountScope = value
+		}
 	}
 	if value, ok := toInt(raw["completion.maxResults"]); ok {
 		settings.Completion.MaxResults = value
@@ -381,6 +402,9 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["completion.includeNotes"]); ok {
 		settings.Completion.IncludeNotes = value
+	}
+	if value, ok := toString(raw["completion.accountScope"]); ok {
+		settings.Completion.AccountScope = value
 	}
 
 	// Diagnostics. The legacy boolean undeclaredAccounts is still honoured: it

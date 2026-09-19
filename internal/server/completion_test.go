@@ -333,35 +333,35 @@ func extractLabels(items []protocol.CompletionItem) []string {
 func TestDetermineContext_TagName(t *testing.T) {
 	content := `2024-01-15 test  ; `
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 19}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 19})
 	assert.Equal(t, ContextTagName, ctx)
 }
 
 func TestDetermineContext_TagName_AfterComma(t *testing.T) {
 	content := `2024-01-15 test  ; project:alpha, `
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 34}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 34})
 	assert.Equal(t, ContextTagName, ctx)
 }
 
 func TestDetermineContext_TagValue(t *testing.T) {
 	content := `2024-01-15 test  ; project:`
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 27}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 27})
 	assert.Equal(t, ContextTagValue, ctx)
 }
 
 func TestDetermineContext_TagValue_AfterComma(t *testing.T) {
 	content := `2024-01-15 test  ; project:alpha, status:`
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 41}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 41})
 	assert.Equal(t, ContextTagValue, ctx)
 }
 
 func TestDetermineContext_Date(t *testing.T) {
 	content := ``
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 0}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 0})
 	assert.Equal(t, ContextDate, ctx)
 }
 
@@ -372,7 +372,7 @@ func TestDetermineContext_Date_EmptyLine(t *testing.T) {
 
 `
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0})
 	assert.Equal(t, ContextDate, ctx)
 }
 
@@ -383,12 +383,7 @@ func TestDetermineContext_Date_EmptyLine_SpaceTrigger(t *testing.T) {
 
 `
 
-	completionCtx := &protocol.CompletionContext{
-		TriggerKind:      protocol.CompletionTriggerKindTriggerCharacter,
-		TriggerCharacter: stringPtr(" "),
-	}
-
-	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, completionCtx)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0})
 	assert.Equal(t, ContextDate, ctx, "empty line with space trigger should return ContextDate")
 }
 
@@ -399,11 +394,7 @@ func TestDetermineContext_Date_EmptyLine_Invoked(t *testing.T) {
 
 `
 
-	completionCtx := &protocol.CompletionContext{
-		TriggerKind: protocol.CompletionTriggerKindInvoked,
-	}
-
-	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0}, completionCtx)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 4, Character: 0})
 	assert.Equal(t, ContextDate, ctx, "empty line with invoked trigger should return ContextDate")
 }
 
@@ -1726,7 +1717,7 @@ func TestDetermineContext_CommodityInPosting(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pos := protocol.Position{Line: tt.line, Character: tt.char}
-			ctx := determineCompletionContext(tt.content, pos, nil)
+			ctx := determineCompletionContext(tt.content, pos)
 			assert.Equal(t, tt.expected, ctx, "context should be %v but got %v", tt.expected, ctx)
 		})
 	}
@@ -1735,21 +1726,21 @@ func TestDetermineContext_CommodityInPosting(t *testing.T) {
 func TestDetermineContext_Directive_Account(t *testing.T) {
 	content := `account assets:b`
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 16}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 16})
 	assert.Equal(t, ContextAccount, ctx, "directive 'account' should return ContextAccount")
 }
 
 func TestDetermineContext_Directive_Commodity(t *testing.T) {
 	content := `commodity U`
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 11}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 11})
 	assert.Equal(t, ContextCommodity, ctx, "directive 'commodity' should return ContextCommodity")
 }
 
 func TestDetermineContext_Directive_ApplyAccount(t *testing.T) {
 	content := `apply account expenses:`
 
-	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 23}, nil)
+	ctx := determineCompletionContext(content, protocol.Position{Line: 0, Character: 23})
 	assert.Equal(t, ContextAccount, ctx, "directive 'apply account' should return ContextAccount")
 }
 
@@ -2293,7 +2284,7 @@ func TestDetermineContext_PartialDate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.char}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.char})
 			assert.Equal(t, tt.expected, ctx)
 		})
 	}
@@ -2317,7 +2308,7 @@ func TestDetermineContext_IndentedPosting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: tt.line, Character: tt.char}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: tt.line, Character: tt.char})
 			assert.Equal(t, tt.expected, ctx)
 		})
 	}
@@ -2698,7 +2689,7 @@ func TestDetermineContext_PrefixCommodity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			pos := protocol.Position{Line: tt.line, Character: tt.char}
-			ctx := determineCompletionContext(tt.content, pos, nil)
+			ctx := determineCompletionContext(tt.content, pos)
 			assert.Equal(t, tt.expected, ctx, "context for %q at char %d", tt.content, tt.char)
 		})
 	}
@@ -2999,7 +2990,7 @@ func TestDetermineContext_PayeeWithTab(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.char}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.char})
 			assert.Equal(t, tt.expected, ctx)
 		})
 	}
@@ -3691,7 +3682,7 @@ func TestDetermineContext_Directive_PartialKeyword(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col})
 			assert.Equal(t, ContextDirective, ctx)
 		})
 	}
@@ -3714,7 +3705,7 @@ func TestDetermineContext_Directive_DoesNotAffectExistingContexts(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: tt.line, Character: tt.col}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: tt.line, Character: tt.col})
 			assert.Equal(t, tt.expected, ctx)
 		})
 	}
@@ -3734,7 +3725,7 @@ func TestDetermineContext_Directive_CommentLinesNotDirective(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col})
 			assert.Equal(t, tt.expected, ctx)
 			assert.NotEqual(t, ContextDirective, ctx)
 		})
@@ -3918,7 +3909,7 @@ func TestDetermineContext_Directive_PeriodicAndAutoNotDirective(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col})
 			assert.NotEqual(t, ContextDirective, ctx)
 		})
 	}
@@ -3936,7 +3927,7 @@ func TestDetermineContext_Directive_Unicode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col}, nil)
+			ctx := determineCompletionContext(tt.content, protocol.Position{Line: 0, Character: tt.col})
 			assert.Equal(t, ContextDirective, ctx)
 		})
 	}

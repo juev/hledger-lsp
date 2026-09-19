@@ -167,13 +167,13 @@ func BenchmarkCompletion_Commodity(b *testing.B) {
 
 func BenchmarkDetermineContext_Posting(b *testing.B) {
 	for b.Loop() {
-		determineCompletionContext(largeContent, protocol.Position{Line: 1, Character: 4}, nil)
+		determineCompletionContext(largeContent, protocol.Position{Line: 1, Character: 4})
 	}
 }
 
 func BenchmarkDetermineContext_Transaction(b *testing.B) {
 	for b.Loop() {
-		determineCompletionContext(largeContent, protocol.Position{Line: 0, Character: 11}, nil)
+		determineCompletionContext(largeContent, protocol.Position{Line: 0, Character: 11})
 	}
 }
 

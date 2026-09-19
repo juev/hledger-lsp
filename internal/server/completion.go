@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.lsp.dev/protocol"
 
@@ -33,6 +34,8 @@ const (
 	directiveAccount      = "account "
 	directiveApplyAccount = "apply account "
 	directiveCommodity    = "commodity "
+	directivePayee        = "payee "
+	directiveTag          = "tag "
 )
 
 type directiveDef struct {
@@ -99,23 +102,28 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 	}
 
 	settings := s.getSettings()
-	completionCtx := determineCompletionContext(doc, params.Position, &params.Context)
-	counts := getCountsForContext(completionCtx, result, settings.Completion)
+	completionCtx := determineCompletionContext(doc, params.Position)
+	displayCounts := getCountsForContext(completionCtx, result, settings.Completion)
 
+	// Ranking counts may be boosted by the payee on the line; the counts shown in
+	// the popup must stay the real usage counts.
+	rankCounts := displayCounts
 	var recency map[string]string
 	if completionCtx == ContextAccount {
 		if payee := extractPayeeForCompletion(doc, cursorLine); payee != "" {
-			counts = payeeBoostedCounts(result, payee, counts)
+			rankCounts = payeeBoostedCounts(result, payee, displayCounts)
 			recency = payeeRecency(result, payee)
 		}
 	}
 
-	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, counts, settings.Completion)
+	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, displayCounts, settings.Completion)
 	isAccount := completionCtx == ContextAccount || completionCtx == ContextUnknown
 	var balances analyzer.AccountBalances
 	if isAccount {
 		balances = analyzer.CalculateAccountBalancesFromTransactions(transactions)
-		if !allAccounts {
+		// The non-zero filter keeps the list short, but closed or unused accounts
+		// stay unreachable without a way to turn it off.
+		if !allAccounts && settings.Completion.AccountScope != accountScopeAll {
 			items = filterNonzeroAccountCompletions(items, balances)
 		}
 	}
@@ -140,7 +148,7 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 
 	query := extractQueryText(doc, params.Position, completionCtx)
 	scored := filterAndScoreFuzzyMatch(items, query, settings.Completion.FuzzyMatching)
-	items = rankCompletionItemsByScore(scored, counts, query, recency)
+	items = rankCompletionItemsByScore(scored, rankCounts, query, recency)
 	if isAccount && allAccounts {
 		// Preserve the ordinary ranking within each balance group.
 		sort.SliceStable(items, func(i, j int) bool {
@@ -254,7 +262,7 @@ func payeeRecency(result *analyzer.AnalysisResult, payee string) map[string]stri
 	return recency
 }
 
-func determineCompletionContext(content string, pos protocol.Position, ctx *protocol.CompletionContext) CompletionContextType {
+func determineCompletionContext(content string, pos protocol.Position) CompletionContextType {
 	lines := strings.Split(content, "\n")
 	if int(pos.Line) >= len(lines) {
 		return ContextDate
@@ -266,33 +274,35 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return tagCtx
 	}
 
-	if ctx != nil && ctx.TriggerCharacter != nil && *ctx.TriggerCharacter == ":" {
-		return ContextAccount
-	}
-
-	if ctx != nil && ctx.TriggerCharacter != nil && (*ctx.TriggerCharacter == "@" || *ctx.TriggerCharacter == "=") {
-		return ContextCommodity
-	}
-
 	if line == "" {
 		return ContextDate
 	}
 
-	if strings.HasPrefix(line, directiveAccount) {
-		return ContextAccount
-	}
-	if strings.HasPrefix(line, directiveCommodity) {
-		return ContextCommodity
-	}
-	if strings.HasPrefix(line, directiveApplyAccount) {
-		return ContextAccount
-	}
-
-	if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+	// An indented line is a posting. The trigger character only decides which
+	// field of that posting the cursor sits in, so a ':', '=' or '@' inside a
+	// transaction header or a directive line cannot open the wrong completion.
+	if line[0] == ' ' || line[0] == '\t' {
 		return determinePostingContext(line, pos)
 	}
 
-	if len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
+	switch {
+	case strings.HasPrefix(line, directiveAccount):
+		return ContextAccount
+	case strings.HasPrefix(line, directiveApplyAccount):
+		return ContextAccount
+	case strings.HasPrefix(line, directiveCommodity):
+		return ContextCommodity
+	case strings.HasPrefix(line, directivePayee):
+		return ContextPayee
+	case strings.HasPrefix(line, directiveTag):
+		return ContextTagName
+	}
+
+	if isPriceDirectiveLine(line) {
+		return determinePriceDirectiveContext(line, pos)
+	}
+
+	if line[0] >= '0' && line[0] <= '9' {
 		wsIdx := indexFirstWhitespace(line)
 		if wsIdx != -1 {
 			byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
@@ -303,11 +313,59 @@ func determineCompletionContext(content string, pos protocol.Position, ctx *prot
 		return ContextDate
 	}
 
-	if len(line) > 0 && line[0] != ';' && line[0] != '#' && line[0] != '*' && line[0] != '~' && line[0] != '=' {
+	if line[0] != ';' && line[0] != '#' && line[0] != '*' && line[0] != '~' && line[0] != '=' {
 		return ContextDirective
 	}
 
 	return ContextDate
+}
+
+// isPriceDirectiveLine reports whether a line starts a P (price) directive.
+// Unlike other directives a P line holds two commodity positions: the priced
+// commodity and the price commodity.
+func isPriceDirectiveLine(line string) bool {
+	if line == "" || line[0] != 'P' {
+		return false
+	}
+	if len(line) > 1 && line[1] != ' ' && line[1] != '\t' {
+		return false
+	}
+	return true
+}
+
+// determinePriceDirectiveContext maps the cursor inside a `P DATE [TIME]
+// COMMODITY PRICE` line onto a completion context: the keyword, the date, or one
+// of the two commodity positions.
+func determinePriceDirectiveContext(line string, pos protocol.Position) CompletionContextType {
+	byteCol := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+
+	before := line[:byteCol]
+	trimmed := strings.TrimRight(before, " \t")
+	afterToken := len(before) > len(trimmed)
+	fields := strings.Fields(trimmed)
+
+	switch {
+	case len(fields) <= 1:
+		if afterToken {
+			// "P " — the date comes next.
+			return ContextDate
+		}
+		// "P" — the directive keyword is still being typed.
+		return ContextDirective
+	case len(fields) == 2:
+		if afterToken {
+			// "P 2024-01-15 " — the priced commodity comes next.
+			return ContextCommodity
+		}
+		// Inside the date token.
+		return ContextDate
+	default:
+		// After the date (and optional time): the priced commodity or the price.
+		return ContextCommodity
+	}
 }
 
 func determinePostingContext(line string, pos protocol.Position) CompletionContextType {
@@ -336,6 +394,38 @@ func determinePostingContext(line string, pos protocol.Position) CompletionConte
 	}
 
 	return ContextCommodity
+}
+
+// postingStartOffset returns the byte offset where a posting's account name
+// begins: after the indentation, an optional status mark ('*' or '!') followed by
+// whitespace, and an optional virtual-posting bracket ('(' or '[').
+//
+// hledger writes postings as "[STATUS] ACCOUNT AMOUNT" and wraps virtual
+// accounts in brackets, so the marker must not become part of the completion
+// query or of the range the client replaces.
+func postingStartOffset(line string, byteCol int) int {
+	if byteCol > len(line) {
+		byteCol = len(line)
+	}
+
+	offset := 0
+	for offset < byteCol && (line[offset] == ' ' || line[offset] == '\t') {
+		offset++
+	}
+
+	if offset+1 < byteCol && (line[offset] == '*' || line[offset] == '!') &&
+		(line[offset+1] == ' ' || line[offset+1] == '\t') {
+		offset++
+		for offset < byteCol && (line[offset] == ' ' || line[offset] == '\t') {
+			offset++
+		}
+	}
+
+	if offset < byteCol && (line[offset] == '(' || line[offset] == '[') {
+		offset++
+	}
+
+	return offset
 }
 
 func findDoublespace(s string) int {
@@ -522,13 +612,30 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 	switch ctxType {
 	case ContextAccount:
 		prefix := extractAccountPrefix(content, pos)
-		accounts := getAccountsForPrefix(result.Accounts, prefix)
+		applyPrefix := activeAccountPrefix(content, int(pos.Line))
+
+		// The typed prefix is relative inside an apply-account block, while the
+		// index is keyed by resolved names.
+		lookup := prefix
+		if applyPrefix != "" && lookup != "" {
+			lookup = applyPrefix + ":" + lookup
+		}
+
+		accounts := getAccountsForPrefix(result.Accounts, lookup)
 		for _, acc := range accounts {
-			items = append(items, protocol.CompletionItem{
+			item := protocol.CompletionItem{
 				Label:  acc,
 				Kind:   protocol.CompletionItemKindVariable,
 				Detail: protocol.NewOptional(formatDetailWithCount("Account", acc, counts, settings.ShowCounts)),
-			})
+			}
+			// Inside an apply-account block the written form is relative: inserting
+			// the resolved name would produce business:business:checking. The label
+			// keeps the resolved name so balance filtering, usage counts and
+			// matching still work on it.
+			if written := relativeAccountName(acc, applyPrefix); written != acc {
+				item.InsertText = protocol.NewOptional(written)
+			}
+			items = append(items, item)
 		}
 
 	case ContextPayee:
@@ -546,10 +653,14 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 
 	case ContextCommodity:
 		for _, commodity := range result.Commodities {
+			display := commodityDisplaySymbol(commodity)
 			items = append(items, protocol.CompletionItem{
-				Label:  commodity,
-				Kind:   protocol.CompletionItemKindEnum,
-				Detail: protocol.NewOptional(formatDetailWithCount("Commodity", commodity, counts, settings.ShowCounts)),
+				Label: display,
+				Kind:  protocol.CompletionItemKindEnum,
+				// Filter on the raw symbol so a client-side prefix filter still
+				// matches when the inserted text gains quotes.
+				FilterText: protocol.NewOptional(commodity),
+				Detail:     protocol.NewOptional(formatDetailWithCount("Commodity", commodity, counts, settings.ShowCounts)),
 			})
 		}
 
@@ -638,7 +749,12 @@ func extractAccountPrefix(content string, pos protocol.Position) string {
 		byteCol = len(line)
 	}
 
-	beforeCursor := strings.TrimSpace(line[:byteCol])
+	// Skip the indentation and any posting marker before looking for the prefix.
+	accountStart := postingStartOffset(line, byteCol)
+	if accountStart > byteCol {
+		accountStart = byteCol
+	}
+	beforeCursor := strings.TrimSpace(line[accountStart:byteCol])
 
 	lastColon := strings.LastIndex(beforeCursor, ":")
 	if lastColon == -1 {
@@ -650,6 +766,76 @@ func extractAccountPrefix(content string, pos protocol.Position) string {
 		return beforeCursor[:lastColon+1]
 	}
 	return beforeCursor[start+1 : lastColon+1]
+}
+
+// activeAccountPrefix returns the account prefix introduced by `apply account`
+// directives above the cursor line, joined with colons. hledger prepends it to
+// every posting account inside the block, so completion must offer the name as it
+// is written there rather than the fully resolved name.
+func activeAccountPrefix(content string, line int) string {
+	lines := strings.Split(content, "\n")
+	if line > len(lines) {
+		line = len(lines)
+	}
+
+	var stack []string
+	for i := 0; i < line; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		switch {
+		case strings.HasPrefix(trimmed, directiveApplyAccount):
+			name := strings.TrimSpace(strings.TrimPrefix(trimmed, directiveApplyAccount))
+			if comment := strings.Index(name, ";"); comment != -1 {
+				name = strings.TrimSpace(name[:comment])
+			}
+			if name != "" {
+				stack = append(stack, name)
+			}
+		case trimmed == "end apply account":
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	return strings.Join(stack, ":")
+}
+
+// relativeAccountName strips the active apply-account prefix from a resolved
+// account name, falling back to the full name when the account is outside the
+// block.
+func relativeAccountName(account, applyPrefix string) string {
+	if applyPrefix == "" {
+		return account
+	}
+	if relative, ok := strings.CutPrefix(account, applyPrefix+":"); ok && relative != "" {
+		return relative
+	}
+	return account
+}
+
+// needsQuoting reports whether a commodity symbol must be written in double
+// quotes. hledger accepts a bare symbol only when every rune is a letter, a
+// currency symbol, '/' or '_'; spaces, dots, hyphens and digits require quotes.
+// Verified against hledger 1.52.4: bare "TEST.A", "ACME-Inc", "123abc" and
+// "green apples" fail to load, while quoted forms of any symbol are accepted.
+func needsQuoting(symbol string) bool {
+	if symbol == "" {
+		return false
+	}
+	for _, r := range symbol {
+		if unicode.IsLetter(r) || unicode.Is(unicode.Sc, r) || r == '/' || r == '_' {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// commodityDisplaySymbol returns the symbol as it must be written in a journal.
+func commodityDisplaySymbol(symbol string) string {
+	if needsQuoting(symbol) {
+		return "\"" + symbol + "\""
+	}
+	return symbol
 }
 
 func getAccountsForPrefix(accounts *analyzer.AccountIndex, prefix string) []string {
@@ -910,8 +1096,7 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 		} else if strings.HasPrefix(line, directiveApplyAccount) {
 			startByte = len(directiveApplyAccount)
 		} else {
-			trimmed := strings.TrimLeft(line[:byteCol], " \t")
-			startByte = byteCol - len(trimmed)
+			startByte = postingStartOffset(line, byteCol)
 		}
 	case ContextCommodity:
 		if strings.HasPrefix(line, directiveCommodity) {
@@ -922,6 +1107,11 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 	case ContextPayee:
 		startByte = payeeStartOffset(line, byteCol)
 	case ContextTagName:
+		if strings.HasPrefix(line, directiveTag) {
+			startByte = len(directiveTag)
+			break
+		}
+
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return nil
@@ -1022,6 +1212,52 @@ func findTokenEnd(line string, byteCol int, ctxType CompletionContextType) int {
 	return len(line)
 }
 
+// commodityOffsetAfterMarker returns the byte offset of the commodity inside the
+// text that follows a posting amount. It skips the price or assertion marker and,
+// for the total form ("@@ 100 EUR"), the total amount written before the
+// commodity. It returns -1 when the text holds no marker.
+func commodityOffsetAfterMarker(text string) int {
+	offset := 0
+	skipSpaces := func() {
+		for offset < len(text) && (text[offset] == ' ' || text[offset] == '\t') {
+			offset++
+		}
+	}
+
+	skipSpaces()
+	switch {
+	case strings.HasPrefix(text[offset:], "@@"):
+		offset += 2
+	case strings.HasPrefix(text[offset:], "=="):
+		offset += 2
+	case strings.HasPrefix(text[offset:], "@"), strings.HasPrefix(text[offset:], "="):
+		offset++
+	default:
+		return -1
+	}
+
+	skipSpaces()
+	amountStart := offset
+	for offset < len(text) && (isDigitOrSign(text[offset]) || text[offset] == '.' || text[offset] == ',') {
+		offset++
+	}
+	if offset > amountStart {
+		skipSpaces()
+	}
+
+	return offset
+}
+
+// trimAmountMarker removes a leading price or assertion marker from the text that
+// follows an amount, so the completion query is the commodity the user is typing
+// rather than "@ $", "@@ 100 " or "= $".
+func trimAmountMarker(text string) string {
+	if offset := commodityOffsetAfterMarker(text); offset >= 0 {
+		return text[offset:]
+	}
+	return strings.TrimLeft(text, " \t")
+}
+
 func findCommodityStart(line string, byteCol int) int {
 	parts := parsePosting(line)
 	if parts.separatorIdx == -1 {
@@ -1036,6 +1272,12 @@ func findCommodityStart(line string, byteCol int) int {
 	}
 
 	commodityStart := afterAccountStart + parts.amountEnd
+	// Skip the price or assertion marker: after "@", "@@" or "=" the user is
+	// typing a commodity, and the replaced range must cover only that text.
+	if offset := commodityOffsetAfterMarker(line[commodityStart:]); offset >= 0 {
+		return commodityStart + offset
+	}
+
 	for commodityStart < len(line) && line[commodityStart] == ' ' {
 		commodityStart++
 	}
@@ -1065,8 +1307,13 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		if after, found := strings.CutPrefix(beforeCursor, directiveApplyAccount); found {
 			return after
 		}
-		trimmed := strings.TrimLeft(beforeCursor, " \t")
-		return trimmed
+		// Skip the indentation and any posting marker, so "* exp" queries "exp"
+		// and "(assets:c" queries "assets:c".
+		start := postingStartOffset(line, byteCol)
+		if start > byteCol {
+			start = byteCol
+		}
+		return line[start:byteCol]
 
 	case ContextPayee:
 		return beforeCursor[payeeStartOffset(line, byteCol):]
@@ -1093,7 +1340,7 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		if parts.amountEnd >= len(parts.afterAccount) {
 			return ""
 		}
-		return strings.TrimLeft(parts.afterAccount[parts.amountEnd:], " ")
+		return trimAmountMarker(parts.afterAccount[parts.amountEnd:])
 
 	case ContextDate:
 		if len(beforeCursor) > 0 && beforeCursor[0] >= '0' && beforeCursor[0] <= '9' {
@@ -1102,6 +1349,10 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		return ""
 
 	case ContextTagName:
+		if after, found := strings.CutPrefix(beforeCursor, directiveTag); found {
+			return after
+		}
+
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return ""

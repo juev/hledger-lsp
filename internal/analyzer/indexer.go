@@ -80,6 +80,17 @@ func CollectPayees(journal *ast.Journal) []string {
 	seen := make(map[string]bool)
 	var payees []string
 
+	// hledger's payee directive declares a valid payee name, so it belongs in the
+	// list even before any transaction uses it.
+	for _, dir := range journal.Directives {
+		if pd, ok := dir.(ast.PayeeDirective); ok {
+			if pd.Name != "" && !seen[pd.Name] {
+				seen[pd.Name] = true
+				payees = append(payees, pd.Name)
+			}
+		}
+	}
+
 	for _, tx := range journal.Transactions {
 		name := tx.Payee
 		if name == "" {
@@ -99,12 +110,21 @@ func CollectCommodities(journal *ast.Journal) []string {
 	seen := make(map[string]bool)
 	var commodities []string
 
+	addCommodity := func(symbol string) {
+		if symbol != "" && !seen[symbol] {
+			seen[symbol] = true
+			commodities = append(commodities, symbol)
+		}
+	}
+
 	for _, dir := range journal.Directives {
-		if cd, ok := dir.(ast.CommodityDirective); ok {
-			if cd.Commodity.Symbol != "" && !seen[cd.Commodity.Symbol] {
-				seen[cd.Commodity.Symbol] = true
-				commodities = append(commodities, cd.Commodity.Symbol)
-			}
+		switch d := dir.(type) {
+		case ast.CommodityDirective:
+			addCommodity(d.Commodity.Symbol)
+		case ast.PriceDirective:
+			// P directives name both the priced commodity and the price commodity.
+			addCommodity(d.Commodity.Symbol)
+			addCommodity(d.Price.Commodity.Symbol)
 		}
 	}
 
@@ -150,6 +170,13 @@ func CollectTags(journal *ast.Journal) []string {
 		}
 	}
 
+	// hledger's tag directive declares a valid tag name.
+	for _, dir := range journal.Directives {
+		if td, ok := dir.(ast.TagDirective); ok && td.Name != "" {
+			collectTagsFrom([]ast.Tag{{Name: td.Name}})
+		}
+	}
+
 	for _, tx := range journal.Transactions {
 		collectTagsFrom(tx.Tags)
 		for _, comment := range tx.Comments {
@@ -186,9 +213,11 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 
 		var postings []PostingTemplate
 		var accounts []string
-		for _, p := range tx.Postings {
+		for i := range tx.Postings {
+			p := &tx.Postings[i]
 			pt := PostingTemplate{
 				Account: p.Account.GetResolvedName(),
+				Status:  p.Status,
 			}
 			if p.Amount != nil {
 				pt.Amount = p.Amount.RawQuantity
@@ -197,6 +226,20 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 				}
 				pt.Commodity = p.Amount.Commodity.Symbol
 				pt.CommodityLeft = p.Amount.Commodity.Position == ast.CommodityLeft
+			}
+			if p.Cost != nil {
+				pt.Cost = renderTemplateAmount(p.Cost.Amount)
+				if p.Cost.IsTotal {
+					pt.Cost = "@@ " + pt.Cost
+				} else {
+					pt.Cost = "@ " + pt.Cost
+				}
+			}
+			if p.BalanceAssertion != nil {
+				pt.Assertion = "= " + renderTemplateAmount(p.BalanceAssertion.Amount)
+			}
+			if p.Comment != "" {
+				pt.Comment = strings.TrimLeft(p.Comment, " \t")
 			}
 			postings = append(postings, pt)
 			accounts = append(accounts, p.Account.GetResolvedName())
@@ -428,4 +471,26 @@ func CollectTagValueCounts(journal *ast.Journal) map[string]map[string]int {
 		}
 	}
 	return counts
+}
+
+// renderTemplateAmount renders an amount for ghost text: sign, commodity and
+// quantity in the order the journal writes them.
+func renderTemplateAmount(amount ast.Amount) string {
+	quantity := amount.RawQuantity
+	if quantity == "" {
+		quantity = amount.Quantity.String()
+	}
+
+	symbol := amount.Commodity.Symbol
+	if symbol == "" {
+		return quantity
+	}
+
+	if amount.Commodity.Position == ast.CommodityLeft {
+		if amount.SignBeforeCommodity && (strings.HasPrefix(quantity, "-") || strings.HasPrefix(quantity, "+")) {
+			return string(quantity[0]) + symbol + quantity[1:]
+		}
+		return symbol + quantity
+	}
+	return quantity + " " + symbol
 }

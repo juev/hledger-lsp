@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -10,6 +11,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
 )
 
@@ -134,11 +136,24 @@ func fuzzyMatchPayeeTemplate(templates map[string][]analyzer.PostingTemplate, pa
 		return postings, true
 	}
 
+	// Iterate in a stable order: two templates can score identically (for
+	// example "Amazon" and "Amazon Prime"), and a map iteration would then pick a
+	// different suggestion for the same keystroke. Ties are broken by the
+	// shortest key and then lexicographically, so the suggestion is reproducible.
+	keys := make([]string, 0, len(templates))
+	for key := range templates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	bestScore := 0
 	var bestKey string
-	for key := range templates {
-		if score := fuzzyMatchScore(key, payee); score > bestScore {
-			bestScore = score
+	for _, key := range keys {
+		score := fuzzyMatchScore(key, payee)
+		switch {
+		case score > bestScore:
+			bestScore, bestKey = score, key
+		case score == bestScore && score > 0 && bestKey != "" && preferTemplateKey(key, bestKey):
 			bestKey = key
 		}
 	}
@@ -214,21 +229,43 @@ func buildInlinePostingsText(postings []analyzer.PostingTemplate, formatting for
 	var sb strings.Builder
 	indent := strings.Repeat(" ", formatting.IndentSize)
 
-	for i, p := range postings {
+	for i := range postings {
+		p := &postings[i]
 		if i > 0 {
 			sb.WriteString("\n")
 		}
 		sb.WriteString(indent)
+		switch p.Status {
+		case ast.StatusCleared:
+			sb.WriteString("* ")
+		case ast.StatusPending:
+			sb.WriteString("! ")
+		}
 		sb.WriteString(p.Account)
 
-		amountText := renderInlineAmount(p)
+		amountText := renderInlineAmount(*p)
 		if amountText != "" {
 			// Alignment columns are display cells, so the account prefix must be
 			// measured the same way or CJK/emoji accounts shift ghost text.
 			accountEnd := formatter.DisplayWidth(indent) + formatter.DisplayWidth(p.Account)
+			if p.Status != ast.StatusNone {
+				accountEnd += 2
+			}
 			spaces := amountSpacesFromAlignment(accountEnd, amountText, alignment, formatting)
 			sb.WriteString(strings.Repeat(" ", spaces))
 			sb.WriteString(amountText)
+		}
+		if p.Cost != "" {
+			sb.WriteString(" ")
+			sb.WriteString(p.Cost)
+		}
+		if p.Assertion != "" {
+			sb.WriteString(" ")
+			sb.WriteString(p.Assertion)
+		}
+		if p.Comment != "" {
+			sb.WriteString("  ; ")
+			sb.WriteString(p.Comment)
 		}
 	}
 
@@ -240,14 +277,18 @@ func renderInlineAmount(p analyzer.PostingTemplate) string {
 		return ""
 	}
 
+	// A commodity with spaces or punctuation must stay quoted, or the inserted
+	// posting is not valid hledger.
+	symbol := commodityDisplaySymbol(p.Commodity)
+
 	var sb strings.Builder
-	if p.CommodityLeft && p.Commodity != "" {
-		sb.WriteString(p.Commodity)
+	if p.CommodityLeft && symbol != "" {
+		sb.WriteString(symbol)
 	}
 	sb.WriteString(p.Amount)
-	if !p.CommodityLeft && p.Commodity != "" {
+	if !p.CommodityLeft && symbol != "" {
 		sb.WriteString(" ")
-		sb.WriteString(p.Commodity)
+		sb.WriteString(symbol)
 	}
 	return sb.String()
 }
@@ -293,4 +334,13 @@ func inlineDecimalPrefix(amountText string) int {
 		return formatter.DisplayWidth(amountText)
 	}
 	return utf8.RuneCountInString(fields[0])
+}
+
+// preferTemplateKey reports whether candidate is a better tie-break than current:
+// the shorter key wins, then the lexicographically smaller one.
+func preferTemplateKey(candidate, current string) bool {
+	if len(candidate) != len(current) {
+		return len(candidate) < len(current)
+	}
+	return candidate < current
 }
