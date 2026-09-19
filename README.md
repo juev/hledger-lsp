@@ -10,8 +10,10 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 ## 🎯 Features
 
 ### Completions
-- **Accounts** — Fuzzy matching with frequency-based ranking; only accounts with a nonzero balance in at least one commodity are suggested. Balances include journal files loaded through `include` and exclude the transaction being edited. Unused declared accounts are omitted.
+- **Accounts** — Fuzzy matching with frequency-based ranking; only accounts with a nonzero balance in at least one commodity are suggested. Balances include journal files loaded through `include` and exclude the transaction being edited. Unused declared accounts are omitted, or kept with `hledger.completion.accountScope: "all"`.
 - Clients can explicitly request [all matching accounts](docs/account-completion.md), including zero balances and unused declarations, without changing subsequent standard completions.
+- Works after a posting status mark (`* account`) and inside virtual postings (`(account)`, `[account]`), and keeps the written name relative inside `apply account` blocks
+- Commodities that hledger requires quoted (for example `"green apples"`) are inserted quoted, and price (`@`, `@@`) and assertion (`=`) slots complete commodities too
 - **Payees** — From transaction history with usage counts
 - **Commodities** — From directives and usage
 - **Tags** — Name and value completion from existing tags
@@ -24,11 +26,12 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 - **Workspace Symbol** — Quick search for accounts, commodities, payees
 
 ### Diagnostics
-- Real-time validation of transactions
-- Balance checks and syntax errors
+- Real-time validation of transactions against hledger 1.52.4 semantics: balance checks (including the two-commodity conversion inference and per-commodity precision), `= / == / =* / ==*` balance assertions evaluated in date order across the include tree, and syntax errors
+- Diagnostics for included files are published in the file that contains the problem, and each carries a stable code plus structured `data`
+- `hledger.diagnostics.accountCheck` mirrors `hledger --strict` when you want declaration checks
 
 ### Other
-- **Formatting** — Automatic alignment of amounts (left-, right-, or decimal-point aligned)
+- **Formatting** — Automatic alignment of amounts (left-, right-, or decimal-point aligned), with hand-aligned inline comment columns preserved and periodic (`~`) and auto (`=`) rule blocks formatted too
 - **Hover** — Account balances on hover
 - **Semantic Tokens** — Syntax highlighting with delta support
 - **Document Symbols** — Outline navigation
