@@ -12,6 +12,10 @@ import (
 )
 
 func (s *Server) FoldingRanges(ctx context.Context, params *protocol.FoldingRangeParams) ([]protocol.FoldingRange, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.FoldingRanges }) {
+		return nil, nil
+	}
+
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return nil, nil

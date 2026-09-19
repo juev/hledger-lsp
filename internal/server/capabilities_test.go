@@ -97,3 +97,19 @@ func TestServer_Initialize_CapabilityProfiles(t *testing.T) {
 		})
 	}
 }
+
+func TestCapabilities_DeclareEncodingAndWorkspaceFolders(t *testing.T) {
+	srv := NewServer()
+
+	result, err := srv.Initialize(context.Background(), &protocol.InitializeParams{})
+	require.NoError(t, err)
+
+	assert.Equal(t, protocol.PositionEncodingKindUTF16, result.Capabilities.PositionEncoding,
+		"the server only implements UTF-16 offsets, which must be declared")
+
+	require.NotNil(t, result.Capabilities.Workspace)
+	require.NotNil(t, result.Capabilities.Workspace.WorkspaceFolders)
+	require.NotNil(t, result.Capabilities.Workspace.WorkspaceFolders.Supported)
+	assert.False(t, *result.Capabilities.Workspace.WorkspaceFolders.Supported,
+		"only the first workspace folder is indexed, so say so")
+}

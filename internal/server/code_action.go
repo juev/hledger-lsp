@@ -60,6 +60,10 @@ func getHledgerCommands() []hledgerCommand {
 }
 
 func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CommandOrCodeAction, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.CodeActions }) {
+		return nil, nil
+	}
+
 	if filetype.IsRules(string(params.TextDocument.URI)) {
 		return nil, nil
 	}
@@ -349,7 +353,21 @@ func (s *Server) executeRunCommand(ctx context.Context, params *protocol.Execute
 		return nil, fmt.Errorf("invalid command argument type")
 	}
 
+	// Only the commands the server advertises may run, so a client cannot turn
+	// this handler into an arbitrary command runner.
+	if !isHledgerCommand(cmd) {
+		s.showMessage(protocol.MessageTypeError, fmt.Sprintf("hledger-lsp: refusing to run unknown command %q", cmd))
+		return nil, fmt.Errorf("unknown hledger command: %s", cmd)
+	}
+
+	settings := s.getSettings()
+	if !settings.CLI.Enabled {
+		s.showMessage(protocol.MessageTypeWarning, "hledger-lsp: CLI integration is disabled (hledger.cli.enabled)")
+		return nil, fmt.Errorf("hledger CLI integration is disabled")
+	}
+
 	if s.cliClient == nil || !s.cliClient.Available() {
+		s.showMessage(protocol.MessageTypeError, fmt.Sprintf("hledger-lsp: hledger is not available at %q", settings.CLI.Path))
 		return nil, fmt.Errorf("hledger not available")
 	}
 
@@ -360,10 +378,22 @@ func (s *Server) executeRunCommand(ctx context.Context, params *protocol.Execute
 
 	output, err := s.cliClient.Run(ctx, filePath, cmd)
 	if err != nil {
+		s.showMessage(protocol.MessageTypeError, fmt.Sprintf("hledger-lsp: hledger %s failed: %v", cmd, err))
 		return marshalLSPAny(formatOutputAsComment(cmd, fmt.Sprintf("Error: %v", err)))
 	}
 
+	s.logMessage(protocol.MessageTypeInfo, fmt.Sprintf("hledger-lsp: hledger %s finished (%d bytes of output)", cmd, len(output)))
 	return marshalLSPAny(formatOutputAsComment(cmd, output))
+}
+
+// isHledgerCommand reports whether a command is one the server offers.
+func isHledgerCommand(name string) bool {
+	for _, command := range getHledgerCommands() {
+		if command.cmd == name {
+			return true
+		}
+	}
+	return false
 }
 
 // executeFixUnbalanced resolves the transaction targeted by the unbalanced
@@ -425,8 +455,11 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 		return nil, fmt.Errorf("apply workspace edit: %w", err)
 	}
 	if applied == nil || !applied.Applied {
+		s.showMessage(protocol.MessageTypeWarning, "hledger-lsp: the editor rejected the balance fix")
 		return nil, fmt.Errorf("client rejected the edit")
 	}
+
+	s.logMessage(protocol.MessageTypeInfo, "hledger-lsp: applied the balance fix")
 	return nil, nil
 }
 
@@ -499,6 +532,13 @@ func (s *Server) resolveCommandFile(args []protocol.LSPAny) string {
 	return filePath
 }
 
+// maxCommandOutputLines and maxCommandOutputBytes bound what a report may insert
+// into the document, so a huge or looping report cannot flood the buffer.
+const (
+	maxCommandOutputLines = 200
+	maxCommandOutputBytes = 64 * 1024
+)
+
 func formatOutputAsComment(cmd, output string) string {
 	header := fmt.Sprintf("; === hledger %s ===", cmd)
 	footer := "; " + strings.Repeat("=", len(header)-3)
@@ -510,6 +550,25 @@ func formatOutputAsComment(cmd, output string) string {
 		lines = []string{"(no output)"}
 	} else {
 		lines = strings.Split(output, "\n")
+	}
+
+	truncated := false
+	if len(lines) > maxCommandOutputLines {
+		lines = lines[:maxCommandOutputLines]
+		truncated = true
+	}
+
+	total := 0
+	for i, line := range lines {
+		total += len(line) + 1
+		if total > maxCommandOutputBytes {
+			lines = lines[:i+1]
+			truncated = true
+			break
+		}
+	}
+	if truncated {
+		lines = append(lines, fmt.Sprintf("... output truncated at %d lines / %d bytes", maxCommandOutputLines, maxCommandOutputBytes))
 	}
 
 	var builder strings.Builder
@@ -636,6 +695,7 @@ func (s *Server) quickFixForUndeclaredAccount(uri uri.URI, diag protocol.Diagnos
 	return protocol.CodeAction{
 		Title:       "Declare account " + name,
 		Kind:        codeActionKind(protocol.CodeActionKindQuickFix),
+		IsPreferred: boolPtr(true),
 		Diagnostics: []protocol.Diagnostic{diag},
 		Edit:        declarationEdit(target.URI, target.Position, declarationDirectiveText(target.Position, "account "+name)),
 	}, true
@@ -654,6 +714,7 @@ func (s *Server) quickFixForUndeclaredCommodity(uri uri.URI, diag protocol.Diagn
 	return protocol.CodeAction{
 		Title:       "Declare commodity " + symbol,
 		Kind:        codeActionKind(protocol.CodeActionKindQuickFix),
+		IsPreferred: boolPtr(true),
 		Diagnostics: []protocol.Diagnostic{diag},
 		Edit:        declarationEdit(target.URI, target.Position, declarationDirectiveText(target.Position, formatCommodityDirectiveText(symbol))),
 	}, true

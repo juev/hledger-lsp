@@ -70,6 +70,7 @@ type Server struct {
 	journalDiagMu sync.Mutex
 	journalDiag   *journalDiagEntry
 	docVersions   sync.Map // map[uri.URI]uint32
+	warned        sync.Map // map[string]bool: one log line per document condition
 }
 
 func NewServer() *Server {
@@ -131,7 +132,10 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 	if params != nil {
 		s.clientCapabilities = newClientCapabilities(params.Capabilities)
 		s.supportsConfiguration = s.clientCapabilities.supportsConfiguration
-		settings := parseSettingsFromLSPAny(s.getSettings(), params.InitializationOptions)
+		settings, issues := parseSettingsFromLSPAnyWithIssues(s.getSettings(), params.InitializationOptions)
+		for _, issue := range issues {
+			s.logMessage(protocol.MessageTypeWarning, "hledger-lsp: "+issue)
+		}
 		s.setSettings(settings)
 
 		if folders, ok := params.WorkspaceFolders.Get(); ok && len(folders) > 0 {
@@ -170,6 +174,18 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		ReferencesProvider:        protocol.Boolean(true),
 		RenameProvider:            protocol.Boolean(true),
 		TypeHierarchyProvider:     protocol.Boolean(true),
+		// Declare the encoding explicitly. The server only implements UTF-16
+		// offsets, which is also LSP's mandatory default, so no negotiation is
+		// possible; saying so avoids clients guessing.
+		PositionEncoding: protocol.PositionEncodingKindUTF16,
+		// Only the first workspace folder is indexed, so advertise that limitation
+		// instead of accepting folders the server would ignore.
+		Workspace: &protocol.WorkspaceOptions{
+			WorkspaceFolders: &protocol.WorkspaceFoldersServerCapabilities{
+				Supported:           boolPtr(false),
+				ChangeNotifications: protocol.Boolean(false),
+			},
+		},
 	}
 	if s.clientCapabilities.supportsRenamePrepare {
 		caps.RenameProvider = &protocol.RenameOptions{PrepareProvider: boolPtr(true)}
@@ -253,11 +269,8 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 
 func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) error {
 	if s.workspace != nil {
-		if err := s.workspace.Initialize(); err != nil && s.client != nil {
-			_ = s.client.LogMessage(context.Background(), &protocol.LogMessageParams{
-				Type:    protocol.MessageTypeWarning,
-				Message: "Workspace initialization failed: " + err.Error(),
-			})
+		if err := s.workspace.Initialize(); err != nil {
+			s.logMessage(protocol.MessageTypeWarning, "hledger-lsp: workspace initialization failed: "+err.Error())
 		}
 	}
 	go s.refreshConfiguration(context.Background())
@@ -507,6 +520,8 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 		if ctx.Err() != nil {
 			return
 		}
+		// Tell the user once per document instead of silently ignoring the file.
+		s.warnOnce(docURI, "hledger-lsp: "+sizeErr.Message)
 		s.publishDiagnosticSet(ctx, docURI, []protocol.Diagnostic{
 			{
 				Severity: protocol.DiagnosticSeverityError,
@@ -549,6 +564,10 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 
 	// A load failure belongs to the file that contains the failing directive.
 	for _, err := range loadErrors {
+		if err.Kind != include.ErrorParseError {
+			s.warnOnce(docURI, "hledger-lsp: "+err.Message)
+		}
+
 		if err.Kind == include.ErrorParseError && (err.SourcePath == "" || err.SourcePath == path) {
 			// Already reported by the per-buffer analysis of this document.
 			continue
