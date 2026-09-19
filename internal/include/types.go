@@ -80,8 +80,10 @@ type LoadOptions struct {
 	Overlays map[string]OverlayEntry
 }
 
-func (o LoadOptions) overlay(path string) (string, bool) {
-	entry, ok := o.Overlays[canonicalPath(path)]
+// overlay looks up editor content for path. The canonical form must come from
+// the same loader that built the overlay map, or the keys would not match.
+func (o LoadOptions) overlay(l *Loader, path string) (string, bool) {
+	entry, ok := o.Overlays[l.canonicalPath(path)]
 	return entry.Content, ok
 }
 
@@ -231,7 +233,7 @@ func (r *ResolvedJournal) OccurrencesForPath(path string) []JournalOccurrence {
 // path. The input is canonicalized so a real path finds occurrences included
 // through a symlink (and vice versa).
 func (r *ResolvedJournal) OccurrencesForCanonical(path string) []JournalOccurrence {
-	return r.occurrencesForIDs(r.ByCanonical[canonicalPath(path)])
+	return r.occurrencesForIDs(r.ByCanonical[resolveCanonicalPath(absoluteClean(path))])
 }
 
 func (r *ResolvedJournal) occurrencesForIDs(ids []OccurrenceID) []JournalOccurrence {
