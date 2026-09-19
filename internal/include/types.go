@@ -216,6 +216,59 @@ func (r *ResolvedJournal) occurrencesForIDs(ids []OccurrenceID) []JournalOccurre
 	return result
 }
 
+// SourcedTransaction pairs a transaction with the source file that contains it.
+// Path is empty for the legacy Primary/Files projection, where the caller knows
+// the root document; occurrence-based resolution always fills it in.
+type SourcedTransaction struct {
+	Path         string
+	OccurrenceID OccurrenceID
+	Transaction  ast.Transaction
+}
+
+// TransactionsWithSource returns every transaction of the resolved journal in
+// the order hledger processes it (textual order, with included files inlined at
+// their include sites), together with the file each one comes from.
+func (r *ResolvedJournal) TransactionsWithSource() []SourcedTransaction {
+	if r.Items != nil {
+		result := make([]SourcedTransaction, 0, len(r.Items))
+		for _, item := range r.Items {
+			if item.Kind != ResolvedItemTransaction {
+				continue
+			}
+			occurrence := r.Occurrence(item.OccurrenceID)
+			if occurrence == nil || occurrence.Journal == nil {
+				continue
+			}
+			if item.Index < 0 || item.Index >= len(occurrence.Journal.Transactions) {
+				continue
+			}
+			result = append(result, SourcedTransaction{
+				Path:         occurrence.Path,
+				OccurrenceID: occurrence.ID,
+				Transaction:  occurrence.Journal.Transactions[item.Index],
+			})
+		}
+		return result
+	}
+
+	var result []SourcedTransaction
+	if r.Primary != nil {
+		for i := range r.Primary.Transactions {
+			result = append(result, SourcedTransaction{Transaction: r.Primary.Transactions[i]})
+		}
+	}
+	for _, path := range r.FileOrder {
+		journal, ok := r.Files[path]
+		if !ok {
+			continue
+		}
+		for i := range journal.Transactions {
+			result = append(result, SourcedTransaction{Path: path, Transaction: journal.Transactions[i]})
+		}
+	}
+	return result
+}
+
 func (r *ResolvedJournal) AllTransactions() []ast.Transaction {
 	if r.Items != nil {
 		var result []ast.Transaction
