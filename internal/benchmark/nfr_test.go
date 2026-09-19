@@ -298,12 +298,25 @@ func TestNFR_DidChangeSubLinear(t *testing.T) {
 		srv, docURI, _ := keystrokeServer(t, transactions)
 		typeKeystroke(t, srv, docURI) // warm the parse cache
 
-		const iterations = 20
-		start := time.Now()
-		for range iterations {
-			typeKeystroke(t, srv, docURI)
+		// One keystroke is tens of microseconds, short enough that a single GC
+		// pause or a scheduler preemption dominates a batch. Take the fastest of
+		// several batches instead of their mean: the minimum is the closest
+		// estimate of the intrinsic cost, and the ratio is what this test is
+		// about, not the absolute number.
+		const batches = 6
+		const perBatch = 40
+		best := time.Duration(1) << 62
+		for range batches {
+			start := time.Now()
+			for range perBatch {
+				typeKeystroke(t, srv, docURI)
+			}
+			avg := time.Since(start) / perBatch
+			if avg < best {
+				best = avg
+			}
 		}
-		return time.Since(start) / iterations
+		return best
 	}
 
 	small := measure(1000)
