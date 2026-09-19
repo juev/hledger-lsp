@@ -1200,7 +1200,7 @@ include transactions.journal`
 	srv.SetClient(client)
 
 	rootURI := uri.File(tmpDir)
-	initParams := &protocol.InitializeParams{RootURI: &rootURI}
+	initParams := initParamsWithRootURI(rootURI)
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
