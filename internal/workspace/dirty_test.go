@@ -47,7 +47,7 @@ func TestWorkspace_MarkFileDirty_DefersUntilRead(t *testing.T) {
 	before := resolvedOf(ws, root)
 	require.NotNil(t, before)
 
-	ws.MarkFileDirty(root, "2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n")
+	ws.MarkFileDirty(root, StaticContent("2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n"))
 
 	assert.Same(t, before, resolvedOf(ws, root),
 		"MarkFileDirty must not re-resolve: the O(n) work belongs to the first read")
@@ -77,7 +77,7 @@ func TestWorkspace_RefreshScopedToOwningRoots(t *testing.T) {
 	aBefore := resolvedOf(ws, aRoot)
 	bBefore := resolvedOf(ws, bRoot)
 
-	ws.MarkFileDirty(child, "2024-01-03 c\n    expenses:books  $9\n    assets:cash\n")
+	ws.MarkFileDirty(child, StaticContent("2024-01-03 c\n    expenses:books  $9\n    assets:cash\n"))
 	_ = ws.IndexSnapshot()
 
 	assert.NotSame(t, aBefore, resolvedOf(ws, aRoot),
@@ -94,7 +94,7 @@ func TestWorkspace_RefreshCoalescesBurst(t *testing.T) {
 
 	before := resolvedOf(ws, root)
 	for i := range 20 {
-		ws.MarkFileDirty(root, "2024-01-0"+string(rune('1'+i%9))+" burst\n    expenses:food  $1\n    assets:cash\n")
+		ws.MarkFileDirty(root, StaticContent("2024-01-0"+string(rune('1'+i%9))+" burst\n    expenses:food  $1\n    assets:cash\n"))
 	}
 
 	assert.Len(t, ws.dirty, 1, "a burst on one file collapses into a single pending edit")
@@ -116,7 +116,7 @@ func TestWorkspace_MarkFileDirty_UpdatesIndexAndResolved(t *testing.T) {
 	})
 	root := filepath.Join(dir, "main.journal")
 
-	ws.MarkFileDirty(root, "2024-01-01 store\n    expenses:food  $20\n    assets:cash\n\n2024-01-02 extra\n    expenses:rent  $5\n    assets:bank\n")
+	ws.MarkFileDirty(root, StaticContent("2024-01-01 store\n    expenses:food  $20\n    assets:cash\n\n2024-01-02 extra\n    expenses:rent  $5\n    assets:bank\n"))
 
 	snap := ws.IndexSnapshot()
 	assert.Contains(t, snap.Accounts.All, "expenses:rent")
@@ -146,7 +146,7 @@ func TestWorkspace_MarkFileDirty_DropsOrphanedIndex(t *testing.T) {
 
 	require.Contains(t, ws.IndexSnapshot().Accounts.All, "expenses:books")
 
-	ws.MarkFileDirty(root, "2024-01-01 main\n    income:salary  $10\n    assets:cash\n")
+	ws.MarkFileDirty(root, StaticContent("2024-01-01 main\n    income:salary  $10\n    assets:cash\n"))
 
 	snap := ws.IndexSnapshot()
 	assert.NotContains(t, snap.Accounts.All, "expenses:books",
@@ -161,8 +161,8 @@ func TestWorkspace_ResolvedForRootContent_StaleRevisionReturnsNil(t *testing.T) 
 	})
 	root := filepath.Join(dir, "main.journal")
 
-	oldRevision := ws.MarkFileDirty(root, "2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n")
-	newRevision := ws.MarkFileDirty(root, "2024-01-03 c\n    expenses:books  $3\n    assets:cash\n")
+	oldRevision := ws.MarkFileDirty(root, StaticContent("2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n"))
+	newRevision := ws.MarkFileDirty(root, StaticContent("2024-01-03 c\n    expenses:books  $3\n    assets:cash\n"))
 	require.NotEqual(t, oldRevision, newRevision)
 
 	// A request still carrying the older content must not be answered from a
@@ -189,7 +189,7 @@ func TestWorkspace_ResolvedForRootContent_UnknownRevisionReturnsNil(t *testing.T
 	})
 	root := filepath.Join(dir, "main.journal")
 
-	ws.MarkFileDirty(root, "2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n")
+	ws.MarkFileDirty(root, StaticContent("2024-01-02 b\n    expenses:rent  $2\n    assets:cash\n"))
 
 	resolved, _ := ws.ResolvedForRootContent(root, RevisionUnknown)
 	assert.Nil(t, resolved, "a caller that cannot name its content must not be served a tree")
@@ -210,11 +210,11 @@ func TestWorkspace_ResolvedForRootContent_IncludedEditInvalidatesRoot(t *testing
 	root := filepath.Join(dir, "main.journal")
 	child := filepath.Join(dir, "child.journal")
 
-	rootRevision := ws.MarkFileDirty(root, "include child.journal\n\n2024-01-01 main\n    income:salary  $10\n    assets:cash\n")
+	rootRevision := ws.MarkFileDirty(root, StaticContent("include child.journal\n\n2024-01-01 main\n    income:salary  $10\n    assets:cash\n"))
 	resolved, _ := ws.ResolvedForRootContent(root, rootRevision)
 	require.NotNil(t, resolved)
 
-	ws.MarkFileDirty(child, "2024-01-02 child\n    expenses:books  $9\n    assets:cash\n")
+	ws.MarkFileDirty(child, StaticContent("2024-01-02 child\n    expenses:books  $9\n    assets:cash\n"))
 
 	resolved, _ = ws.ResolvedForRootContent(root, rootRevision)
 	assert.Nil(t, resolved,

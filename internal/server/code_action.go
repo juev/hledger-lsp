@@ -13,6 +13,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/document"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -521,8 +522,7 @@ func (s *Server) resolveCommandFile(args []protocol.LSPAny) string {
 	}
 
 	var filePath string
-	s.documents.Range(func(key, _ any) bool {
-		docURI := key.(uri.URI)
+	s.documents.Range(func(docURI uri.URI, _ *document.Text) bool {
 		if path := uriToPath(docURI); path != "" {
 			filePath = path
 			return false

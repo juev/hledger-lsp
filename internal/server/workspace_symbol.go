@@ -8,6 +8,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/document"
 )
 
 func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
@@ -58,13 +59,11 @@ func (s *Server) WorkspaceSymbol(ctx context.Context, params *protocol.Workspace
 		}
 	}
 
-	s.documents.Range(func(key, value any) bool {
-		docURI := key.(uri.URI)
+	s.documents.Range(func(docURI uri.URI, text *document.Text) bool {
 		if path := uriToPath(docURI); path != "" && coveredPaths[path] {
 			return true
 		}
-		content := value.(string)
-		journal, _ := s.cachedJournal(docURI, content)
+		journal, _ := s.cachedJournal(docURI, text.Materialize())
 		if journal == nil {
 			return true
 		}

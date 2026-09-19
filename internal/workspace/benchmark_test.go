@@ -71,7 +71,7 @@ func BenchmarkWorkspace_MarkFileDirty_Small(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 	}
 }
 
@@ -81,7 +81,7 @@ func BenchmarkWorkspace_MarkFileDirty_Large(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 	}
 }
 
@@ -95,7 +95,7 @@ func BenchmarkWorkspace_ApplyEdit_Small(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 		_ = ws.IndexSnapshot()
 	}
 }
@@ -106,7 +106,7 @@ func BenchmarkWorkspace_ApplyEdit_Medium(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 		_ = ws.IndexSnapshot()
 	}
 }
@@ -117,7 +117,7 @@ func BenchmarkWorkspace_ApplyEdit_Large(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 		_ = ws.IndexSnapshot()
 	}
 }
@@ -129,7 +129,7 @@ func BenchmarkWorkspace_ApplyEdit_Large_Allocs(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		ws.MarkFileDirty(mainPath, modified)
+		ws.MarkFileDirty(mainPath, StaticContent(modified))
 		_ = ws.IndexSnapshot()
 	}
 }

@@ -44,7 +44,7 @@ type Server struct {
 
 	version               string
 	client                protocol.Client
-	documents             sync.Map
+	documents             documentStore
 	analyzer              *analyzer.Analyzer
 	loader                *include.Loader
 	rulesLoader           *rules.Loader
@@ -60,8 +60,6 @@ type Server struct {
 	alignmentCache        sync.Map // map[uri.URI]int
 	tokenCache            *semanticTokensCache
 	parseCache            sync.Map // map[uri.URI]*cachedDoc
-	docTexts              sync.Map // map[uri.URI]*document.Text
-	docTextMu             sync.Mutex
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -118,11 +116,62 @@ func (s *Server) SetClient(client protocol.Client) {
 	s.client = client
 }
 
+// documentStore holds one rope per open document. The rope is the source of
+// truth: an incremental edit applies to it in O(log n), and the flat string the
+// rest of the server expects is materialized on demand and cached inside the
+// rope until the next edit. Store and Load keep a string-shaped API so callers
+// that only have content do not have to know about the rope.
+type documentStore struct {
+	m sync.Map // map[uri.URI]*document.Text
+}
+
+func (d *documentStore) Store(docURI uri.URI, content string) {
+	d.m.Store(docURI, document.NewText(textutil.NormalizeLineEndings(content)))
+}
+
+// rope returns the document's rope, for callers that want to edit it or read a
+// line without materializing the whole text.
+func (d *documentStore) rope(docURI uri.URI) (*document.Text, bool) {
+	v, ok := d.m.Load(docURI)
+	if !ok {
+		return nil, false
+	}
+	text, ok := v.(*document.Text)
+	return text, ok
+}
+
+func (d *documentStore) Load(docURI uri.URI) (string, bool) {
+	text, ok := d.rope(docURI)
+	if !ok {
+		return "", false
+	}
+	return text.String(), true
+}
+
+func (d *documentStore) Delete(docURI uri.URI) {
+	d.m.Delete(docURI)
+}
+
+// Range visits every open document with its rope.
+func (d *documentStore) Range(f func(docURI uri.URI, text *document.Text) bool) {
+	d.m.Range(func(key, value any) bool {
+		docURI, ok := key.(uri.URI)
+		if !ok {
+			return true
+		}
+		text, ok := value.(*document.Text)
+		if !ok {
+			return true
+		}
+		return f(docURI, text)
+	})
+}
+
 // StoreDocument records document content, normalizing line endings the same
 // way the didOpen/didChange handlers do. Everything downstream — AST offsets,
 // PositionMapper, the rope in internal/document — assumes LF-only text.
 func (s *Server) StoreDocument(uri uri.URI, content string) {
-	s.documents.Store(uri, textutil.NormalizeLineEndings(content))
+	s.documents.Store(uri, content)
 }
 
 func (s *Server) Initialize(ctx context.Context, params *protocol.InitializeParams) (*protocol.InitializeResult, error) {
@@ -323,61 +372,60 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
-	s.invalidateDocText(params.TextDocument.URI)
+	text, _ := s.documents.rope(params.TextDocument.URI)
 	var revision uint64
 	if s.workspace != nil && s.loader.FileSizeError(content) == nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
-			revision = s.workspace.MarkFileDirty(path, content)
+			revision = s.workspace.MarkFileDirty(path, text)
 			s.loader.InvalidateFile(path)
 		}
 	}
-	s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version), revision)
+	s.scheduleDiagnostics(params.TextDocument.URI, text, uint32(params.TextDocument.Version), revision)
 	return nil
 }
 
 func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDocumentParams) error {
-	if doc, ok := s.documents.Load(params.TextDocument.URI); ok {
-		content, ok := doc.(string)
-		if !ok {
-			return nil
-		}
-		for _, change := range params.ContentChanges {
-			switch change := change.(type) {
-			case *protocol.TextDocumentContentChangeWholeDocument:
-				if change == nil {
-					continue
-				}
-				content = textutil.NormalizeLineEndings(change.Text)
-				s.invalidateDocText(params.TextDocument.URI)
-			case *protocol.TextDocumentContentChangePartial:
-				if change == nil {
-					continue
-				}
-				content = s.applyChange(params.TextDocument.URI, content, change.Range, textutil.NormalizeLineEndings(change.Text))
-			}
-		}
-		s.documents.Store(params.TextDocument.URI, content)
-		s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
-		s.payeeTemplatesCache.Clear()
-		s.alignmentCache.Delete(params.TextDocument.URI)
-		// Record the edit without parsing or re-resolving anything: the whole
-		// journal is re-parsed and re-indexed on the first read that needs tree
-		// data, so a keystroke stays O(1) and a burst collapses into one pass.
-		var revision uint64
-		if s.workspace != nil {
-			if path := uriToPath(params.TextDocument.URI); path != "" {
-				revision = s.workspace.MarkFileDirty(path, content)
-				s.loader.InvalidateFile(path)
-			}
-		}
-		// Rules loader cache is independent of the journal workspace — a
-		// .rules file that changes must be evicted so the next completion
-		// re-reads its current content (editor or disk).
-		if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
-			s.rulesLoader.InvalidateFile(path)
-		}
-		s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version), revision)
+	text, ok := s.documents.rope(params.TextDocument.URI)
+	if !ok {
+		return nil
 	}
+	// The edits apply to the rope and nothing is materialized here: the flat
+	// string is produced by the first reader that needs it, and the workspace
+	// flattens the rope once per recompute rather than once per keystroke.
+	for _, change := range params.ContentChanges {
+		switch change := change.(type) {
+		case *protocol.TextDocumentContentChangeWholeDocument:
+			if change == nil {
+				continue
+			}
+			text.Replace(change.Text)
+		case *protocol.TextDocumentContentChangePartial:
+			if change == nil {
+				continue
+			}
+			text.ApplyChange(change.Range, textutil.NormalizeLineEndings(change.Text))
+		}
+	}
+	s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
+	s.payeeTemplatesCache.Clear()
+	s.alignmentCache.Delete(params.TextDocument.URI)
+	// Record the edit without parsing or re-resolving anything: the whole
+	// journal is re-parsed and re-indexed on the first read that needs tree
+	// data, so a keystroke stays O(log n) and a burst collapses into one pass.
+	var revision uint64
+	if s.workspace != nil {
+		if path := uriToPath(params.TextDocument.URI); path != "" {
+			revision = s.workspace.MarkFileDirty(path, text)
+			s.loader.InvalidateFile(path)
+		}
+	}
+	// Rules loader cache is independent of the journal workspace — a
+	// .rules file that changes must be evicted so the next completion
+	// re-reads its current content (editor or disk).
+	if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
+		s.rulesLoader.InvalidateFile(path)
+	}
+	s.scheduleDiagnostics(params.TextDocument.URI, text, uint32(params.TextDocument.Version), revision)
 	return nil
 }
 
@@ -407,11 +455,10 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
 	s.invalidateParseCache(params.TextDocument.URI)
-	s.invalidateDocText(params.TextDocument.URI)
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 				s.loader.InvalidateFile(path)
 			}
 		}
@@ -425,10 +472,10 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); path != "" {
-			if content, ok := s.GetDocument(params.TextDocument.URI); ok {
-				s.workspace.MarkFileDirty(path, content)
+			if text, ok := s.documents.rope(params.TextDocument.URI); ok {
+				s.workspace.MarkFileDirty(path, text)
 			} else if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 			}
 			s.loader.InvalidateFile(path)
 		}
@@ -442,7 +489,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 // scheduleDiagnostics debounces diagnostics computation for the given URI.
 // A trailing timer coalesces rapid edits; the previous in-flight computation
 // is cancelled so a stale result never overwrites newer diagnostics.
-func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uint32, revision uint64) {
+func (s *Server) scheduleDiagnostics(docURI uri.URI, text *document.Text, version uint32, revision uint64) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 
@@ -460,7 +507,7 @@ func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uin
 				return
 			default:
 			}
-			s.publishDiagnostics(ctx, docURI, content, version, revision)
+			s.publishDiagnostics(ctx, docURI, text, version, revision)
 		}),
 	}
 }
@@ -475,10 +522,18 @@ func (s *Server) cancelDiagnostics(docURI uri.URI) {
 	}
 }
 
-func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content string, version uint32, revision uint64) {
+func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *document.Text, version uint32, revision uint64) {
 	if s.client == nil {
 		return
 	}
+	if text == nil {
+		return
+	}
+	// The debounce coalesces a burst, so by the time this runs the rope holds
+	// the newest content; materializing here is what keeps the keystroke path
+	// free of it. A run that lost the race publishes against the current
+	// content under its own version and is discarded by the client.
+	content := text.Materialize()
 
 	settings := s.getSettings()
 	if !settings.Features.Diagnostics {
@@ -880,7 +935,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 		if change.Type == protocol.FileChangeTypeChanged || change.Type == protocol.FileChangeTypeCreated {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 			}
 		}
 
@@ -902,8 +957,8 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		if s.workspace != nil {
 			revision = s.workspace.ContentRevision(uriToPath(docURI))
 		}
-		if content, ok := s.GetDocument(docURI); ok {
-			s.publishDiagnostics(ctx, docURI, content, s.documentVersion(docURI), revision)
+		if text, ok := s.documents.rope(docURI); ok {
+			s.publishDiagnostics(ctx, docURI, text, s.documentVersion(docURI), revision)
 		}
 	}
 
@@ -911,12 +966,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 }
 
 func (s *Server) GetDocument(uri uri.URI) (string, bool) {
-	if doc, ok := s.documents.Load(uri); ok {
-		if content, ok := doc.(string); ok {
-			return content, true
-		}
-	}
-	return "", false
+	return s.documents.Load(uri)
 }
 
 // WillSaveWaitUntil is intentionally a no-op: formatting is handled by textDocument/formatting
@@ -973,42 +1023,6 @@ func formatterOptionsFrom(f formattingSettings) formatter.Options {
 func applyChange(content string, r protocol.Range, text string) string {
 	mapper := lsputil.NewPositionMapper(content)
 	return mapper.ApplyChange(r, text)
-}
-
-// applyChange applies an incremental LSP edit to the document's cached rope and
-// returns the updated content. The rope is persisted per URI so consecutive
-// edits do not re-split the whole document: the edit itself is O(log n) in the
-// line count, and the returned string is materialized once (O(n)) for the
-// string-based consumers downstream. content is the authoritative pre-edit
-// document text.
-func (s *Server) applyChange(docURI uri.URI, content string, r protocol.Range, text string) string {
-	s.docTextMu.Lock()
-	defer s.docTextMu.Unlock()
-	var dt *document.Text
-	if v, ok := s.docTexts.Load(docURI); ok {
-		dt = v.(*document.Text)
-	}
-	// The persisted rope is only trustworthy while it matches the authoritative
-	// content. If it diverged (e.g. concurrent DidChange interleaving), rebuild
-	// from content so the edit lands at the correct position instead of
-	// corrupting the buffer. In the common in-sync case dt.String() is the cached
-	// string identical to content, so this check is cheap.
-	if dt == nil || dt.String() != content {
-		dt = document.NewText(content)
-	}
-	dt.ApplyChange(r, text)
-	updated := dt.String()
-	s.docTexts.Store(docURI, dt)
-	return updated
-}
-
-// invalidateDocText drops the cached rope for a document so the next incremental
-// edit rebuilds it from the current content (called on DidOpen, full changes and
-// DidClose).
-func (s *Server) invalidateDocText(docURI uri.URI) {
-	s.docTextMu.Lock()
-	s.docTexts.Delete(docURI)
-	s.docTextMu.Unlock()
 }
 
 func splitLines(s string) []string {

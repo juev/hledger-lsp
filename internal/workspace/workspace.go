@@ -49,11 +49,37 @@ func (t *IncludeTree) clearCaches() {
 // directly.
 const RevisionUnknown uint64 = 0
 
+// ContentSource is a document whose text can be materialized on demand. Marking
+// an edit therefore costs whatever it costs to name the document, not a copy of
+// it: a rope is handed over as-is and only flattened inside the recompute, once
+// per burst instead of once per keystroke.
+//
+// The two methods are separate for that reason. Version is read when the edit is
+// recorded and must not copy anything; the recompute reads the content and then
+// the version again, so a document that moved on in between — the versions
+// differ — is discarded rather than stamped with a revision it does not belong
+// to. Reading the version last is what makes that safe: versions only increase,
+// so a version equal to the recorded one means the content read just before it
+// was still the recorded content.
+type ContentSource interface {
+	Version() uint64
+	Materialize() string
+}
+
+// StaticContent adapts text that is already materialized and cannot move on,
+// such as a file just read from disk. Its version never changes, so it always
+// matches the edit it was recorded with.
+type StaticContent string
+
+func (StaticContent) Version() uint64       { return 0 }
+func (c StaticContent) Materialize() string { return string(c) }
+
 // pendingEdit is an editor edit that has been recorded but not yet applied to
 // the include trees and the workspace index.
 type pendingEdit struct {
-	content  string
-	revision uint64
+	source        ContentSource
+	sourceVersion uint64
+	revision      uint64
 }
 
 // Workspace holds the include trees and the search index for one workspace
@@ -444,10 +470,10 @@ func (w *Workspace) IndexSnapshot() IndexSnapshot {
 	return w.index.Snapshot()
 }
 
-// MarkFileDirty records that path now holds content, without re-resolving the
-// include trees or rebuilding the index. The work happens on the first read
-// that needs tree data, so a burst of keystrokes collapses into one recompute
-// instead of one per edit.
+// MarkFileDirty records that path now holds the content of source, without
+// re-resolving the include trees or rebuilding the index. The work happens on
+// the first read that needs tree data, so a burst of keystrokes collapses into
+// one recompute instead of one per edit.
 //
 // The returned revision identifies this content and is what a caller passes
 // back to ResolvedForRootContent. It is a workspace-local counter, not the LSP
@@ -457,20 +483,21 @@ func (w *Workspace) IndexSnapshot() IndexSnapshot {
 // Returns RevisionUnknown when path is not a journal file, and so was not
 // recorded.
 //
-// content must already be LF-only, matching the invariant the rest of the
+// source must yield LF-only content, matching the invariant the rest of the
 // pipeline holds (see the line-endings note in CLAUDE.md). Normalizing here
 // would put a full scan of the document on the keystroke path, where the
 // editor content is LF by construction.
-func (w *Workspace) MarkFileDirty(path, content string) uint64 {
-	if path == "" || !filetype.IsJournalPath(path) {
+func (w *Workspace) MarkFileDirty(path string, source ContentSource) uint64 {
+	if path == "" || !filetype.IsJournalPath(path) || source == nil {
 		return RevisionUnknown
 	}
+	sourceVersion := source.Version()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.revision++
-	w.dirty[path] = pendingEdit{content: content, revision: w.revision}
+	w.dirty[path] = pendingEdit{source: source, sourceVersion: sourceVersion, revision: w.revision}
 	w.contentRevisions[path] = w.revision
 	w.dirtyCount.Store(int64(len(w.dirty)))
 	return w.revision
@@ -535,12 +562,23 @@ func (w *Workspace) applyDirtyLocked() {
 			continue
 		}
 
+		// Read the content, then the version. A document that was edited again
+		// since the mark carries a newer version, and this entry describes
+		// content no caller can name any more: the newer edit has already
+		// replaced it in the dirty map, so the recompute it belongs to is still
+		// to come. Applying this one would stamp a tree with a revision that
+		// does not match what it was built from.
+		content := edit.source.Materialize()
+		if edit.source.Version() != edit.sourceVersion {
+			continue
+		}
+
 		oldIndex := w.index.FileIndex(path)
 		oldIncludes := []string(nil)
 		if oldIndex != nil {
 			oldIncludes = append([]string(nil), oldIndex.Includes...)
 		}
-		journal, _ := parser.Parse(edit.content)
+		journal, _ := parser.Parse(content)
 		fileIndex := BuildFileIndexFromJournal(path, journal)
 		w.index.SetFileIndex(path, fileIndex)
 		w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
@@ -551,7 +589,7 @@ func (w *Workspace) applyDirtyLocked() {
 			}
 			overlays[rootPath][path] = include.OverlayEntry{
 				SourcePath: path,
-				Content:    edit.content,
+				Content:    content,
 				Revision:   edit.revision,
 			}
 			// Only the tree rooted at the edited file can be said to correspond

@@ -117,7 +117,7 @@ func TestNFR_1_3_IncrementalUpdateLatency(t *testing.T) {
 	for i := range iterations {
 		// Marking alone would defer the work and measure nothing; the snapshot
 		// read is what forces the recompute this NFR bounds.
-		ws.MarkFileDirty(mainPath, modifiedContents[i])
+		ws.MarkFileDirty(mainPath, workspace.StaticContent(modifiedContents[i]))
 		_ = ws.IndexSnapshot()
 	}
 	totalDuration := time.Since(start)

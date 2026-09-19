@@ -1,46 +1,57 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
-
-	"github.com/juev/hledger-lsp/internal/document"
 )
 
-// TestDidChange_RebuildsDivergedRope reproduces the corruption where the
-// persisted rope diverges from the authoritative document content (as can happen
-// under concurrent DidChange interleaving) and an edit then lands in the wrong
-// place. applyChange must detect the divergence and rebuild the rope from the
-// authoritative content before applying the edit.
-func TestDidChange_RebuildsDivergedRope(t *testing.T) {
-	ts := newTestServer()
-	uri := uri.URI("file:///diverge.journal")
-	full := "2024-01-01 one\n    expenses:a  $1\n    assets:cash\n\n2024-01-02 two\n    expenses:b  $2\n    assets:cash\n"
-	require.NoError(t, ts.openDocument(uri, full))
+// The rope in the document store is the single source of truth. The workspace
+// materializes that same rope when it recomputes a tree, so the content a
+// reader is served and the content the index was built from cannot drift apart.
+//
+// This replaces the test that guarded `applyChange` against a rope diverging
+// from a separately stored flat string. With one store that divergence is no
+// longer representable, so the invariant worth pinning is the agreement itself:
+// an edit lands in the tree the workspace serves, and in GetDocument.
+func TestDidChange_WorkspaceAndDocumentAgree(t *testing.T) {
+	tmpDir := t.TempDir()
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	base := "2024-01-01 one\n    expenses:food  $20\n    assets:cash\n"
+	require.NoError(t, os.WriteFile(mainPath, []byte(base), 0o644))
 
-	// Simulate a diverged rope: it reflects a shorter content than the
-	// authoritative document.
-	ts.docTexts.Store(uri, document.NewText("2024-01-01 one\n    expenses:a  $1\n    assets:cash\n"))
+	ts := initWorkspaceTestServer(t, tmpDir)
+	mainURI := uri.URI("file://" + mainPath)
+	require.NoError(t, ts.openDocument(mainURI, base))
 
-	// Incremental insert at line 4 (the second transaction) of the FULL document.
-	require.NoError(t, ts.changeDocument(uri, []protocol.TextDocumentContentChangeEvent{&protocol.TextDocumentContentChangePartial{
+	insert := &protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{
-			Start: protocol.Position{Line: 4, Character: 0},
-			End:   protocol.Position{Line: 4, Character: 0},
+			Start: protocol.Position{Line: 3, Character: 0},
+			End:   protocol.Position{Line: 3, Character: 0},
 		},
-		Text: "    expenses:inserted  $9\n",
-	}}))
+		Text: "\n2024-01-02 two\n    expenses:rent  $5\n    assets:cash\n",
+	}
+	require.NoError(t, ts.changeDocument(mainURI, []protocol.TextDocumentContentChangeEvent{insert}))
 
-	got, ok := ts.GetDocument(uri)
+	got, ok := ts.GetDocument(mainURI)
 	require.True(t, ok)
+	require.Contains(t, got, "2024-01-02 two", "the edit must reach the document readers")
 
-	// The second transaction must survive, and the insert must land at line 4 —
-	// not be clamped into the first transaction by the diverged shorter rope.
-	assert.Contains(t, got, "2024-01-02 two", "second transaction must not be lost")
-	assert.Contains(t, got, "2024-01-01 one\n    expenses:a  $1\n    assets:cash", "first transaction must stay intact")
-	assert.Contains(t, got, "    expenses:inserted  $9\n2024-01-02 two", "insert must land before the second transaction")
+	resolved := ts.workspace.GetResolvedForFile(mainPath)
+	require.NotNil(t, resolved, "the workspace must own the file it was opened from")
+
+	found := false
+	for _, tx := range resolved.AllTransactions() {
+		if tx.Description == "two" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"the tree the workspace serves must be built from the same content GetDocument returns")
 }

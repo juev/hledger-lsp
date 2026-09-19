@@ -8,6 +8,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
+	"github.com/juev/hledger-lsp/internal/document"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -154,30 +155,33 @@ func (s *Server) publishDiagnosticSet(ctx context.Context, docURI uri.URI, diagn
 // republishDiagnostics recomputes diagnostics for every open journal. It runs
 // after a settings change so the effect is visible without restarting the server.
 func (s *Server) republishDiagnostics() {
-	var docURIs []uri.URI
-	s.documents.Range(func(key, _ any) bool {
-		if docURI, ok := key.(uri.URI); ok && !filetype.IsRules(string(docURI)) {
-			docURIs = append(docURIs, docURI)
+	var docs []docRef
+	s.documents.Range(func(docURI uri.URI, text *document.Text) bool {
+		if !filetype.IsRules(string(docURI)) {
+			docs = append(docs, docRef{uri: docURI, text: text})
 		}
 		return true
 	})
 
-	for _, docURI := range docURIs {
+	for _, doc := range docs {
 		// The revision is read before the content, on purpose. An edit marked
 		// between the two reads can then only make the pair mismatch, which
 		// makes publishDiagnostics load the content directly. The other order
 		// could pair older content with a tree built from newer content.
 		var revision uint64
 		if s.workspace != nil {
-			revision = s.workspace.ContentRevision(uriToPath(docURI))
+			revision = s.workspace.ContentRevision(uriToPath(doc.uri))
 		}
-		content, ok := s.GetDocument(docURI)
-		if !ok {
-			continue
-		}
-		version := s.documentVersion(docURI)
-		go s.publishDiagnostics(context.Background(), docURI, content, version, revision)
+		version := s.documentVersion(doc.uri)
+		go s.publishDiagnostics(context.Background(), doc.uri, doc.text, version, revision)
 	}
+}
+
+// docRef pairs a document with its rope for the republish loop, which must not
+// hold anything while the diagnostics run on their own goroutines.
+type docRef struct {
+	uri  uri.URI
+	text *document.Text
 }
 
 // setDocumentVersion records the client's version for a document.
