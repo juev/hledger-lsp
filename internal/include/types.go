@@ -32,6 +32,32 @@ func (e LoadError) Error() string {
 	return e.Message
 }
 
+// ErrorCode returns a stable identifier for the failure kind. The server
+// publishes it as the diagnostic code so clients can filter include failures
+// without matching message text.
+func (e LoadError) ErrorCode() string {
+	switch e.Kind {
+	case ErrorFileNotFound:
+		return "INCLUDE_NOT_FOUND"
+	case ErrorCycleDetected:
+		return "INCLUDE_CYCLE"
+	case ErrorParseError:
+		return "INCLUDE_PARSE_ERROR"
+	case ErrorReadError:
+		return "INCLUDE_READ_ERROR"
+	case ErrorFileTooLarge:
+		return "INCLUDE_FILE_TOO_LARGE"
+	case ErrorPathTraversal:
+		return "INCLUDE_PATH_TRAVERSAL"
+	case ErrorNotJournal:
+		return "INCLUDE_NOT_JOURNAL"
+	case ErrorDepthExceeded:
+		return "INCLUDE_DEPTH_EXCEEDED"
+	default:
+		return "INCLUDE_ERROR"
+	}
+}
+
 type FileSource struct {
 	Path    string
 	Content string

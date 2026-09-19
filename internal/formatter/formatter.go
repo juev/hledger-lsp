@@ -315,6 +315,12 @@ func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapp
 
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
+		if posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
+			// The parser did not understand part of this line (for example the
+			// `:=` balance assignment hledger 1.52 rejects). Rebuilding the line
+			// from the AST would silently drop that text, so leave it alone.
+			continue
+		}
 		formatted := formatPostingWithOpts(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target)
 		line := posting.Range.Start.Line - 1
 
@@ -834,6 +840,11 @@ func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[
 			sb.WriteString(" {{")
 		} else {
 			sb.WriteString(" {")
+		}
+		if lot.Fixed {
+			// {=PRICE} / {{=PRICE}}: the amount is the whole lot cost, so the
+			// `=` must survive formatting (hledger 1.52 accepts this form).
+			sb.WriteString("=")
 		}
 		writeAmountWithSign(sb, lot.Cost, commodityFormats)
 		if lot.IsTotal {

@@ -1362,13 +1362,26 @@ func TestParser_PartialDate(t *testing.T) {
 }
 
 func TestParser_PartialDateWithoutYear(t *testing.T) {
+	// hledger 1.52.4 accepts "01-02 test" without a Y directive and fills in the
+	// current year (verified with `hledger -f - print`).
 	input := `01-02 test
     e:f  $1
     a:c`
 
-	_, errs := Parse(input)
-	require.NotEmpty(t, errs)
-	assert.Contains(t, errs[0].Message, "partial date requires Y directive")
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, defaultYearForPartialDates(), tx.Date.Year)
+	assert.Equal(t, 1, tx.Date.Month)
+	assert.Equal(t, 2, tx.Date.Day)
+
+	// A Y directive still wins over the current year.
+	withYear, yearErrs := Parse("Y 2019\n\n" + input)
+	require.Empty(t, yearErrs)
+	require.Len(t, withYear.Transactions, 1)
+	assert.Equal(t, 2019, withYear.Transactions[0].Date.Year)
 }
 
 func TestParser_UnicodeAccountDirective(t *testing.T) {
@@ -2032,44 +2045,44 @@ func TestParser_DateEdgeCases(t *testing.T) {
 		expectErr bool
 	}{
 		{
-			name: "month 13 parsed without validation",
+			name: "month 13 rejected",
 			input: `2024-13-01 test
     e:f  $1
     a:c`,
 			year: 2024, month: 13, day: 1,
-			expectErr: false,
+			expectErr: true,
 		},
 		{
-			name: "day 32 parsed without validation",
+			name: "day 32 rejected",
 			input: `2024-01-32 test
     e:f  $1
     a:c`,
 			year: 2024, month: 1, day: 32,
-			expectErr: false,
+			expectErr: true,
 		},
 		{
-			name: "february 30 parsed without validation",
+			name: "february 30 rejected",
 			input: `2024-02-30 test
     e:f  $1
     a:c`,
 			year: 2024, month: 2, day: 30,
-			expectErr: false,
+			expectErr: true,
 		},
 		{
-			name: "month 0 parsed without validation",
+			name: "month 0 rejected",
 			input: `2024-00-15 test
     e:f  $1
     a:c`,
 			year: 2024, month: 0, day: 15,
-			expectErr: false,
+			expectErr: true,
 		},
 		{
-			name: "day 0 parsed without validation",
+			name: "day 0 rejected",
 			input: `2024-01-00 test
     e:f  $1
     a:c`,
 			year: 2024, month: 1, day: 0,
-			expectErr: false,
+			expectErr: true,
 		},
 		{
 			name: "leap year feb 29 valid",
@@ -2556,19 +2569,39 @@ func TestParseError_End_ExpectedAccountName(t *testing.T) {
 		"End should be after Pos for token-spanning errors")
 }
 
-func TestParseError_End_PartialDate(t *testing.T) {
+func TestParseError_End_PartialDateUsesCurrentYear(t *testing.T) {
+	// hledger accepts a date written without a year and fills in the current
+	// year, so this is not an error any more. The year is pinned by the parser's
+	// defaultYearForPartialDates hook.
 	input := "01-15 test\n    expenses:food  $50\n    assets:cash"
 
-	_, errs := Parse(input)
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	assert.Equal(t, defaultYearForPartialDates(), journal.Transactions[0].Date.Year)
+	assert.Equal(t, 1, journal.Transactions[0].Date.Month)
+	assert.Equal(t, 15, journal.Transactions[0].Date.Day)
+}
+
+func TestParser_InvalidCalendarDateReportsCode(t *testing.T) {
+	input := "2024-02-31 test\n    expenses:food  $50\n    assets:cash"
+
+	journal, errs := Parse(input)
 	require.NotEmpty(t, errs)
 
 	err := errs[0]
-	assert.Contains(t, err.Message, "partial date requires Y directive")
+	assert.Equal(t, CodeInvalidDate, err.Code)
+	assert.Contains(t, err.Message, "invalid date: 2024-02-31")
 	assert.Equal(t, 1, err.Pos.Line)
 	assert.Equal(t, 1, err.Pos.Column)
 	assert.Equal(t, 1, err.End.Line)
 	assert.Greater(t, err.End.Column, err.Pos.Column,
 		"End should span the full date token")
+
+	// The unreadable header takes its block with it: one diagnostic, not one per
+	// posting line.
+	assert.Len(t, errs, 1)
+	assert.Empty(t, journal.Transactions)
 }
 
 func TestParseError_End_AtEOF(t *testing.T) {
@@ -3985,7 +4018,12 @@ func TestParseWithContext_SnapshotsTrackLocalStateBoundaries(t *testing.T) {
 	require.Empty(t, errs)
 
 	_, zeroErrs := ParseWithContext("1/2 missing year\n    cash\n", contexts["zero"], nil)
-	require.NotEmpty(t, zeroErrs)
+	require.Empty(t, zeroErrs, "a partial date without a year is not an error")
+
+	zero, _ := ParseWithContext("1/2 missing year\n    cash\n", contexts["zero"], nil)
+	assert.Equal(t, defaultYearForPartialDates(), zero.Journal.Transactions[0].Date.Year,
+		"the zero snapshot must not inherit Y 2024 from a later include site")
+	assert.NotEqual(t, 2024, zero.Journal.Transactions[0].Date.Year)
 
 	year, yearErrs := ParseWithContext("1/2 inherited year\n    cash\n", contexts["year"], nil)
 	require.Empty(t, yearErrs)

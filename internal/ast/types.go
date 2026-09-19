@@ -84,6 +84,11 @@ type Posting struct {
 	Tags             []Tag
 	Virtual          VirtualType
 	Range            Range
+	// UnparsedTail marks text on the posting line that the parser did not
+	// consume (for example `:=` balance assignment, which hledger 1.52 rejects).
+	// The formatter leaves such lines untouched instead of rebuilding them from
+	// the AST and losing the text.
+	UnparsedTail Range
 }
 
 type VirtualType int
@@ -139,9 +144,12 @@ type Cost struct {
 type LotPrice struct {
 	Cost    *Amount
 	IsTotal bool
-	Date    string
-	Label   string
-	Range   Range
+	// Fixed marks the `{=PRICE}` / `{{=PRICE}}` form, which states the lot cost
+	// outright instead of the per-unit price.
+	Fixed bool
+	Date  string
+	Label string
+	Range Range
 }
 
 type BalanceAssertion struct {

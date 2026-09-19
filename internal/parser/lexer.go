@@ -55,7 +55,10 @@ func (l *Lexer) Next() Token {
 func (l *Lexer) scanLineStart() Token {
 	l.atStart = false
 
-	if l.peek() == ';' || l.peek() == '#' {
+	// hledger treats a line starting with '*', '#' or ';' as a comment, which
+	// makes org-mode outline headings legal in a journal. A '*' after the
+	// indentation is a posting status mark and never reaches this branch.
+	if l.peek() == ';' || l.peek() == '#' || l.peek() == '*' {
 		return l.scanComment()
 	}
 
@@ -169,6 +172,9 @@ func (l *Lexer) scanInLine() Token {
 	case l.isDigit(ch):
 		if l.looksLikeDate() {
 			return l.scanDate()
+		}
+		if l.looksLikeTime() {
+			return l.scanTime()
 		}
 		// Header line: digits are part of description
 		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
@@ -416,6 +422,36 @@ done:
 	value := l.input[start:l.pos]
 	l.afterNumber = true // Mark that we just scanned a number (amount context continues)
 	return Token{Type: TokenNumber, Value: value, Pos: startPos, End: l.position()}
+}
+
+// looksLikeTime reports whether the input at the current position is a clock
+// time such as "09:30" or "9:30:15". hledger accepts a time between the date and
+// the commodity of a P (price) directive.
+func (l *Lexer) looksLikeTime() bool {
+	digits := 0
+	for i := l.pos; i < len(l.input) && l.isDigit(l.input[i]); i++ {
+		digits++
+	}
+	if digits == 0 || digits > 2 || l.pos+digits >= len(l.input) || l.input[l.pos+digits] != ':' {
+		return false
+	}
+
+	minutes := 0
+	for i := l.pos + digits + 1; i < len(l.input) && l.isDigit(l.input[i]); i++ {
+		minutes++
+	}
+	return minutes == 2
+}
+
+func (l *Lexer) scanTime() Token {
+	start := l.pos
+	startPos := l.position()
+
+	for l.pos < len(l.input) && (l.isDigit(l.peek()) || l.peek() == ':') {
+		l.advance()
+	}
+
+	return Token{Type: TokenTime, Value: l.input[start:l.pos], Pos: startPos, End: l.position()}
 }
 
 func (l *Lexer) scanCurrencySymbol() Token {
