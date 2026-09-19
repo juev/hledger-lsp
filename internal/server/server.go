@@ -536,7 +536,9 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 
 	// Prefer the workspace's already-resolved journal only when it was built
 	// from this root buffer. Otherwise LoadFromContent keeps diagnostics in sync
-	// with the editor after an included file invalidates the tree snapshot.
+	// with the editor after an included file invalidates the tree snapshot. This
+	// per-document view is also what handlers that edit the current file (such as
+	// the declaration quick fixes) rely on.
 	var resolved *include.ResolvedJournal
 	var loadErrors []include.LoadError
 	if s.workspace != nil {
@@ -547,7 +549,30 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 		s.resolved.Store(docURI, resolved)
 	}
 
-	byURI := s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(resolved), settings.Diagnostics)
+	// Balance rules and assertions depend on every file of the journal, so an
+	// included file is evaluated in the context of the root that includes it
+	// instead of as a journal of its own; otherwise an assertion in a year file
+	// would not see the balances the journal's other files establish. The
+	// workspace keeps those trees fresh with the open buffer, and sorts them by
+	// root path, so the primary root is chosen deterministically when several
+	// journals include the file.
+	journalTree := resolved
+	journalErrors := loadErrors
+	partialContext := false
+	if s.workspace != nil {
+		trees := s.workspace.GetIncludeTreesForFile(path)
+		switch {
+		case len(trees) == 0:
+			// The workspace does not know this file, so there may be a larger
+			// journal behind it that is not open here. The verdict is qualified so
+			// the user knows why hledger accepts a file the server flags.
+			partialContext = true
+		case trees[0].RootPath != path:
+			journalTree, journalErrors = trees[0].Resolved, trees[0].LoadErrors
+		}
+	}
+
+	byURI := s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(journalTree, partialContext), settings.Diagnostics)
 
 	// The analysed document always gets a publish, even when it has no problems:
 	// the empty list is what clears previously reported diagnostics.
@@ -565,7 +590,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 	}
 
 	// A load failure belongs to the file that contains the failing directive.
-	for _, err := range loadErrors {
+	for _, err := range journalErrors {
 		if err.Kind != include.ErrorParseError {
 			s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
 		}
