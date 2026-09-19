@@ -313,44 +313,45 @@ func BenchmarkDidChange_Incremental_Large(b *testing.B) {
 	}
 }
 
-func BenchmarkPublishDiagnostics_Small(b *testing.B) {
-	srv, docURI := setupBenchServer(b, smallContent, true)
+// benchmarkPublishDiagnostics measures the publish that follows an edit, which
+// is the only kind there is: a publish is scheduled by a document change, so it
+// always sees a version nothing has analysed yet.
+//
+// It edits between rounds for that reason. Publishing the same version in a
+// loop would measure the caches — the journal, the workspace tree and the
+// analysis are all kept per version — and report a fraction of the real cost.
+func benchmarkPublishDiagnostics(b *testing.B, content string) {
+	b.Helper()
+	srv, docURI := setupBenchServer(b, content, true)
 	ctx := context.Background()
+	path := uriToPath(docURI)
 
-	revision := srv.workspace.ContentRevision(uriToPath(docURI))
-	text, _ := srv.documents.rope(docURI)
+	text, ok := srv.documents.rope(docURI)
+	if !ok {
+		b.Fatal("no rope for the benchmarked document")
+	}
+	rng := protocol.Range{
+		Start: protocol.Position{Line: 1, Character: 0},
+		End:   protocol.Position{Line: 1, Character: 0},
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for b.Loop() {
+	for i := 0; b.Loop(); i++ {
+		text.ApplyChange(rng, fmt.Sprintf("; %d\n", i))
+		revision := srv.workspace.MarkFileDirty(path, text)
 		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
 	}
+}
+
+func BenchmarkPublishDiagnostics_Small(b *testing.B) {
+	benchmarkPublishDiagnostics(b, smallContent)
 }
 
 func BenchmarkPublishDiagnostics_Medium(b *testing.B) {
-	srv, docURI := setupBenchServer(b, mediumContent, true)
-	ctx := context.Background()
-
-	revision := srv.workspace.ContentRevision(uriToPath(docURI))
-	text, _ := srv.documents.rope(docURI)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
-	}
+	benchmarkPublishDiagnostics(b, mediumContent)
 }
 
 func BenchmarkPublishDiagnostics_Large(b *testing.B) {
-	srv, docURI := setupBenchServer(b, largeContent, true)
-	ctx := context.Background()
-
-	revision := srv.workspace.ContentRevision(uriToPath(docURI))
-	text, _ := srv.documents.rope(docURI)
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
-	}
+	benchmarkPublishDiagnostics(b, largeContent)
 }
