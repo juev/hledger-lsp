@@ -23,6 +23,14 @@ const (
 // the amount.
 const multipleInferredMessage = "posting has no amount (separate the account and amount with two or more spaces)"
 
+// JournalCheckOptions tunes the journal-level pass.
+type JournalCheckOptions struct {
+	// PartialContext marks a document that no workspace journal includes, so the
+	// pass can only see that file's own transactions. Assertion verdicts are then
+	// qualified with a hint instead of pretending to know the whole history.
+	PartialContext bool
+}
+
 // SourcedDiagnostic is a diagnostic that knows which file it belongs to, so a
 // caller can publish it to the right document in a multi-file journal. Path is
 // empty when the diagnostic belongs to the document that was analyzed.
@@ -104,6 +112,9 @@ func (b accountBalances) otherCommodities(account, except string, inclusive bool
 type journalEvaluator struct {
 	balances  accountBalances
 	tolerance decimal.Decimal
+	// partialContext qualifies assertion verdicts that were computed from one
+	// file's transactions only.
+	partialContext bool
 }
 
 // postingEffective is the amount a posting contributes to the journal once
@@ -128,9 +139,14 @@ type postingEffective struct {
 // posting-level `date:`/`date2:` tags do not move a posting between transactions.
 // hledger reorders individual postings; journals that rely on that remain rare,
 // and treating the transaction as the unit keeps the pass linear.
-func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decimal.Decimal) []SourcedDiagnostic {
+func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decimal.Decimal, options ...JournalCheckOptions) []SourcedDiagnostic {
 	if resolved == nil {
 		return nil
+	}
+
+	opts := JournalCheckOptions{}
+	if len(options) > 0 {
+		opts = options[0]
 	}
 	sourced := resolved.TransactionsWithSource()
 	if len(sourced) == 0 {
@@ -144,6 +160,8 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 	})
 
 	evaluator := &journalEvaluator{balances: accountBalances{}, tolerance: userTolerance}
+
+	evaluator.partialContext = opts.PartialContext
 
 	var diagnostics []SourcedDiagnostic
 	for i := range ordered {
@@ -361,24 +379,30 @@ func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingInde
 
 	difference := actual.Sub(assertion.Amount.Quantity)
 	if difference.Abs().GreaterThan(tolerance) {
+		message := fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
+			account,
+			assertion.Amount.Quantity.String(), displayCommodity(commodity),
+			actual.String(), displayCommodity(commodity),
+			difference.String())
+		if e.partialContext {
+			message += "; this file is not included by a journal in the workspace, so only its own transactions were compared"
+		}
+
 		diagnostics = append(diagnostics, SourcedDiagnostic{
 			Path:     path,
 			Range:    assertion.Range,
 			Severity: SeverityError,
 			Code:     CodeBalanceAssertionFailed,
-			Message: fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
-				account,
-				assertion.Amount.Quantity.String(), displayCommodity(commodity),
-				actual.String(), displayCommodity(commodity),
-				difference.String()),
+			Message:  message,
 			Data: map[string]any{
-				"kind":      "balanceAssertion",
-				"account":   account,
-				"commodity": commodity,
-				"expected":  assertion.Amount.Quantity.String(),
-				"actual":    actual.String(),
-				"strict":    assertion.IsStrict,
-				"inclusive": assertion.IsInclusive,
+				"kind":           "balanceAssertion",
+				"account":        account,
+				"commodity":      commodity,
+				"expected":       assertion.Amount.Quantity.String(),
+				"actual":         actual.String(),
+				"strict":         assertion.IsStrict,
+				"inclusive":      assertion.IsInclusive,
+				"partialContext": e.partialContext,
 			},
 		})
 		return diagnostics

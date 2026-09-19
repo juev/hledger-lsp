@@ -122,25 +122,39 @@ func TestPublishDiagnostics_RootFallsBackAfterIncludedFileDidOpen(t *testing.T) 
 	assert.True(t, foundMissing, "root should use the current buffer after an included file opens, got: %+v", diagnostics.Diagnostics)
 }
 
-// child.journal is included by main.journal, so it is NOT a root. It must not
-// inherit main's tree errors (the missing.journal include): the root-only guard
-// sends it through the LoadFromContent fallback, which scopes errors to child's
-// own subtree.
+// child.journal is included by main.journal: the child is evaluated in its owner
+// root's context (that is where its balances come from), but an include failure
+// in the root or a sibling is not the child's problem and must be published
+// against the file that contains the failing directive.
 func TestPublishDiagnostics_NonRootDoesNotInheritTreeErrors(t *testing.T) {
-	tmpDir, _, childPath := writeIncludeFixture(t)
+	tmpDir, mainPath, childPath := writeIncludeFixture(t)
 	ts := initWorkspaceTestServer(t, tmpDir)
 
 	childContent, err := os.ReadFile(childPath)
 	require.NoError(t, err)
 	childURI := uri.URI(fmt.Sprintf("file://%s", childPath))
 
-	diags, err := ts.openAndWait(childURI, string(childContent))
-	require.NoError(t, err)
+	require.NoError(t, ts.openDocument(childURI, string(childContent)))
 
-	for _, d := range diags {
-		assert.NotContains(t, d.Message, "missing.journal",
-			"non-root file must not inherit sibling include errors, got: %+v", diags)
-		assert.NotContains(t, d.Message, "cannot read included file",
-			"non-root file must not inherit sibling include errors, got: %+v", diags)
+	childDiags := waitForDocument(t, ts.client, childURI)
+	for _, d := range childDiags {
+		assert.NotContains(t, tooltipString(d.Message), "missing.journal",
+			"a non-root file must not inherit its owner's include errors, got: %+v", childDiags)
+		assert.NotContains(t, tooltipString(d.Message), "cannot read included file",
+			"a non-root file must not inherit its owner's include errors, got: %+v", childDiags)
 	}
+
+	// Publishing for the child also refreshes the tree it belongs to, so the root
+	// reports its own include failure in its own file.
+	mainURI := uri.URI(fmt.Sprintf("file://%s", mainPath))
+	mainDiags := waitForDocument(t, ts.client, mainURI)
+
+	foundMissing := false
+	for _, d := range mainDiags {
+		if strings.Contains(tooltipString(d.Message), "missing.journal") {
+			foundMissing = true
+			break
+		}
+	}
+	assert.True(t, foundMissing, "the root must still report its own include failure, got: %+v", mainDiags)
 }

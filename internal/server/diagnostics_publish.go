@@ -17,13 +17,14 @@ import (
 type journalDiagEntry struct {
 	resolved  *include.ResolvedJournal
 	tolerance string
+	partial   bool
 	diags     []analyzer.SourcedDiagnostic
 }
 
 // journalDiagnostics returns hledger's balance and balance-assertion verdicts for
 // the resolved include tree. The result is memoised per tree revision and
 // tolerance, because the pass runs on every published diagnostic set.
-func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal) []analyzer.SourcedDiagnostic {
+func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal, partialContext bool) []analyzer.SourcedDiagnostic {
 	if resolved == nil {
 		return nil
 	}
@@ -33,12 +34,13 @@ func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal) []analyze
 	s.journalDiagMu.Lock()
 	defer s.journalDiagMu.Unlock()
 
-	if entry := s.journalDiag; entry != nil && entry.resolved == resolved && entry.tolerance == tolerance.String() {
+	if entry := s.journalDiag; entry != nil && entry.resolved == resolved &&
+		entry.tolerance == tolerance.String() && entry.partial == partialContext {
 		return entry.diags
 	}
 
-	diags := analyzer.CheckJournalBalance(resolved, tolerance)
-	s.journalDiag = &journalDiagEntry{resolved: resolved, tolerance: tolerance.String(), diags: diags}
+	diags := analyzer.CheckJournalBalance(resolved, tolerance, analyzer.JournalCheckOptions{PartialContext: partialContext})
+	s.journalDiag = &journalDiagEntry{resolved: resolved, tolerance: tolerance.String(), partial: partialContext, diags: diags}
 	return diags
 }
 
