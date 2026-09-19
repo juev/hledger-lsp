@@ -66,10 +66,12 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 	return total
 }
 
-// otherCommodities returns the non-zero balances held by an account (and, for
-// inclusive assertions, its subaccounts) except one commodity, in a stable
-// order. hledger's `==` form requires these to be empty.
-func (b accountBalances) otherCommodities(account, except string, inclusive bool, tolerance decimal.Decimal) []string {
+// otherCommodities returns the balances held by an account (and, for inclusive
+// assertions, its subaccounts) in commodities other than the asserted one, in a
+// stable order. hledger's `==` form requires these to be empty, and it compares
+// each commodity using that commodity's own precision, so a balance like 0.20 EUR
+// still fails a dollar assertion.
+func (b accountBalances) otherCommodities(account, except string, inclusive bool, userTolerance decimal.Decimal) []string {
 	var result []string
 	seen := make(map[string]bool)
 	prefix := account + ":"
@@ -78,9 +80,18 @@ func (b accountBalances) otherCommodities(account, except string, inclusive bool
 			continue
 		}
 		for commodity, quantity := range byCommodity {
-			if commodity == except || quantity.Abs().LessThanOrEqual(tolerance) || seen[commodity] {
+			if commodity == except || quantity.IsZero() || seen[commodity] {
 				continue
 			}
+
+			tolerance := toleranceForPrecision(decimalPrecision(quantity))
+			if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
+				tolerance = userTolerance
+			}
+			if quantity.Abs().LessThanOrEqual(tolerance) {
+				continue
+			}
+
 			seen[commodity] = true
 			result = append(result, fmt.Sprintf("%s %s", quantity.String(), displayCommodity(commodity)))
 		}
@@ -143,12 +154,19 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 
 func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
-	elidedIdx := -1
-	elidedCount := 0
+	var diagnostics []SourcedDiagnostic
 
 	// Written order matters: an assertion-only posting takes the amount that
 	// makes its assertion hold against the balance including the postings
 	// written before it, exactly like hledger.
+	groups := postingGroups(tx.Postings)
+
+	// hledger infers at most one amount per balancing group, and parenthesised
+	// virtual postings are never inferred, so the candidates are counted per
+	// group rather than per transaction.
+	elidedByGroup := make(map[int]int) // group index -> posting index
+	inferredPerGroup := make(map[int]int)
+
 	for i := range tx.Postings {
 		p := &tx.Postings[i]
 		switch {
@@ -168,19 +186,35 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedD
 				precision: decimalPrecision(p.BalanceAssertion.Amount.Quantity),
 			}
 		default:
-			elidedIdx = i
-			elidedCount++
+			if group, ok := groupOf(groups, i); ok {
+				inferredPerGroup[group]++
+			}
+
+			if group, ok := groupOf(groups, i); ok && inferredPerGroup[group] == 1 {
+				elidedByGroup[group] = i
+			} else if ok && inferredPerGroup[group] > 1 {
+				delete(elidedByGroup, group)
+			}
 			continue
 		}
+
 		e.apply(p.Account.GetResolvedName(), effective[i].native)
+
+		// hledger checks an assertion when the posting is processed, not at the
+		// end of the transaction: a later posting must not change the verdict.
+		if p.BalanceAssertion != nil {
+			diagnostics = append(diagnostics, e.assertionDiagnostics(tx, i, path)...)
+		}
 	}
 
-	var diagnostics []SourcedDiagnostic
-	if elidedCount > 1 {
-		// hledger cannot infer more than one amount, so the transaction has no
-		// balance to check and its assertions are not evaluated either.
-		for i := range tx.Postings {
-			p := &tx.Postings[i]
+	// More than one amount-less posting in a group cannot be inferred, so the
+	// transaction has no balance hledger is willing to compute.
+	for group, count := range inferredPerGroup {
+		if count <= 1 {
+			continue
+		}
+		for _, idx := range groups[group] {
+			p := &tx.Postings[idx]
 			if p.Amount != nil || p.BalanceAssertion != nil {
 				continue
 			}
@@ -199,13 +233,24 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedD
 		return diagnostics
 	}
 
-	if elidedIdx >= 0 {
-		elided := tx.Postings[elidedIdx]
-		e.apply(elided.Account.GetResolvedName(), e.elidedContribution(tx, effective, elidedIdx))
+	for group, index := range elidedByGroup {
+		elided := tx.Postings[index]
+		e.apply(elided.Account.GetResolvedName(), e.elidedContribution(tx, effective, index, groups[group]))
 	}
-	diagnostics = append(diagnostics, e.balanceDiagnostics(tx, path, effective, elidedIdx)...)
 
-	return append(diagnostics, e.assertionDiagnostics(tx, path)...)
+	diagnostics = append(diagnostics, e.balanceDiagnostics(tx, path, effective, elidedByGroup, groups)...)
+
+	return diagnostics
+}
+
+// groupOf returns the index of the balancing group that contains a posting.
+func groupOf(groups [][]int, posting int) (int, bool) {
+	for group, indices := range groups {
+		if groupContains(indices, posting) {
+			return group, true
+		}
+	}
+	return 0, false
 }
 
 func (e *journalEvaluator) apply(account string, contribution map[string]decimal.Decimal) {
@@ -216,13 +261,14 @@ func (e *journalEvaluator) apply(account string, contribution map[string]decimal
 
 // balanceDiagnostics checks the two posting groups of a transaction against
 // hledger's balance rules and returns transaction-level diagnostics.
-func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, effective []postingEffective, elidedIdx int) []SourcedDiagnostic {
+func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, effective []postingEffective, elidedByGroup map[int]int, groups [][]int) []SourcedDiagnostic {
 	var diagnostics []SourcedDiagnostic
 
-	for _, group := range postingGroups(tx.Postings) {
-		postings := make([]ast.Posting, 0, len(group))
-		for _, idx := range group {
-			if idx == elidedIdx {
+	for group, indices := range groups {
+		elidedIdx, hasElided := elidedByGroup[group]
+		postings := make([]ast.Posting, 0, len(indices))
+		for _, idx := range indices {
+			if hasElided && idx == elidedIdx {
 				continue
 			}
 			p := tx.Postings[idx]
@@ -234,7 +280,7 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			postings = append(postings, p)
 		}
 
-		if elidedIdx >= 0 && groupContains(group, elidedIdx) {
+		if hasElided {
 			// Exactly one posting is elided in this group, so it absorbs the
 			// residual and the group is balanced by construction.
 			continue
@@ -276,103 +322,93 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 // elidedContribution returns the mixed amount hledger infers for the single
 // amount-less posting of a transaction: the negation of the cost-aware residual
 // of its own posting group.
-func (e *journalEvaluator) elidedContribution(tx *ast.Transaction, effective []postingEffective, elidedIdx int) map[string]decimal.Decimal {
+func (e *journalEvaluator) elidedContribution(tx *ast.Transaction, effective []postingEffective, elidedIdx int, group []int) map[string]decimal.Decimal {
 	contribution := make(map[string]decimal.Decimal)
-	if elidedIdx < 0 {
-		return contribution
-	}
 
-	for _, group := range postingGroups(tx.Postings) {
-		if !groupContains(group, elidedIdx) {
+	postings := make([]ast.Posting, 0, len(group))
+	for _, idx := range group {
+		if idx == elidedIdx {
 			continue
 		}
-		postings := make([]ast.Posting, 0, len(group))
-		for _, idx := range group {
-			if idx == elidedIdx {
-				continue
-			}
-			p := tx.Postings[idx]
-			if p.Amount == nil {
-				p.Amount = synthesizedAmount(effective[idx])
-			}
-			postings = append(postings, p)
+		p := tx.Postings[idx]
+		if p.Amount == nil {
+			p.Amount = synthesizedAmount(effective[idx])
 		}
-		for commodity, sum := range sumByCommodity(postings) {
-			contribution[commodity] = sum.Neg()
-		}
+		postings = append(postings, p)
+	}
+	for commodity, sum := range sumByCommodity(postings) {
+		contribution[commodity] = sum.Neg()
 	}
 	return contribution
 }
 
-// assertionDiagnostics checks every balance assertion against the balances that
-// include the transaction it belongs to, matching hledger (the asserted posting
-// counts towards its own assertion).
-func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, path string) []SourcedDiagnostic {
+// assertionDiagnostics checks one balance assertion against the balance as it
+// stands after the asserting posting, which is how hledger evaluates it: an
+// assertion sees earlier postings of the same transaction, and later postings of
+// that transaction do not change its verdict.
+func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingIndex int, path string) []SourcedDiagnostic {
 	var diagnostics []SourcedDiagnostic
 
-	for i := range tx.Postings {
-		p := &tx.Postings[i]
-		if p.BalanceAssertion == nil {
-			continue
-		}
+	p := &tx.Postings[postingIndex]
+	assertion := p.BalanceAssertion
+	account := p.Account.GetResolvedName()
+	commodity := assertion.Amount.Commodity.Symbol
+	actual := e.balances.amount(account, commodity, assertion.IsInclusive)
+	tolerance := toleranceForPrecision(decimalPrecision(assertion.Amount.Quantity))
+	if e.tolerance.IsPositive() && e.tolerance.GreaterThan(tolerance) {
+		tolerance = e.tolerance
+	}
 
-		assertion := p.BalanceAssertion
-		account := p.Account.GetResolvedName()
-		commodity := assertion.Amount.Commodity.Symbol
-		actual := e.balances.amount(account, commodity, assertion.IsInclusive)
-		tolerance := toleranceForPrecision(decimalPrecision(assertion.Amount.Quantity))
-		if e.tolerance.IsPositive() && e.tolerance.GreaterThan(tolerance) {
-			tolerance = e.tolerance
-		}
+	difference := actual.Sub(assertion.Amount.Quantity)
+	if difference.Abs().GreaterThan(tolerance) {
+		diagnostics = append(diagnostics, SourcedDiagnostic{
+			Path:     path,
+			Range:    assertion.Range,
+			Severity: SeverityError,
+			Code:     CodeBalanceAssertionFailed,
+			Message: fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
+				account,
+				assertion.Amount.Quantity.String(), displayCommodity(commodity),
+				actual.String(), displayCommodity(commodity),
+				difference.String()),
+			Data: map[string]any{
+				"kind":      "balanceAssertion",
+				"account":   account,
+				"commodity": commodity,
+				"expected":  assertion.Amount.Quantity.String(),
+				"actual":    actual.String(),
+				"strict":    assertion.IsStrict,
+				"inclusive": assertion.IsInclusive,
+			},
+		})
+		return diagnostics
+	}
 
-		difference := actual.Sub(assertion.Amount.Quantity)
-		if !difference.Abs().LessThanOrEqual(tolerance) {
-			diagnostics = append(diagnostics, SourcedDiagnostic{
-				Path:     path,
-				Range:    assertion.Range,
-				Severity: SeverityError,
-				Code:     CodeBalanceAssertionFailed,
-				Message: fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
-					account,
-					assertion.Amount.Quantity.String(), displayCommodity(commodity),
-					actual.String(), displayCommodity(commodity),
-					difference.String()),
-				Data: map[string]any{
-					"kind":      "balanceAssertion",
-					"account":   account,
-					"commodity": commodity,
-					"expected":  assertion.Amount.Quantity.String(),
-					"actual":    actual.String(),
-					"strict":    assertion.IsStrict,
-					"inclusive": assertion.IsInclusive,
-				},
-			})
-			continue
-		}
+	if !assertion.IsStrict {
+		return diagnostics
+	}
 
-		if !assertion.IsStrict {
-			continue
-		}
-
-		if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive, tolerance); len(others) > 0 {
-			diagnostics = append(diagnostics, SourcedDiagnostic{
-				Path:     path,
-				Range:    assertion.Range,
-				Severity: SeverityError,
-				Code:     CodeBalanceAssertionFailed,
-				Message: fmt.Sprintf("balance assertion failed in %s: %s also holds %s",
-					account, displayCommodity(commodity), strings.Join(others, ", ")),
-				Data: map[string]any{
-					"kind":      "balanceAssertion",
-					"account":   account,
-					"commodity": commodity,
-					"expected":  assertion.Amount.Quantity.String(),
-					"actual":    actual.String(),
-					"strict":    true,
-					"inclusive": assertion.IsInclusive,
-				},
-			})
-		}
+	// `==` requires the account to hold nothing else. hledger compares every
+	// other commodity with its own precision, so a small EUR balance still fails
+	// a dollar assertion.
+	if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive, e.tolerance); len(others) > 0 {
+		diagnostics = append(diagnostics, SourcedDiagnostic{
+			Path:     path,
+			Range:    assertion.Range,
+			Severity: SeverityError,
+			Code:     CodeBalanceAssertionFailed,
+			Message: fmt.Sprintf("balance assertion failed in %s: %s also holds %s",
+				account, displayCommodity(commodity), strings.Join(others, ", ")),
+			Data: map[string]any{
+				"kind":      "balanceAssertion",
+				"account":   account,
+				"commodity": commodity,
+				"expected":  assertion.Amount.Quantity.String(),
+				"actual":    actual.String(),
+				"strict":    true,
+				"inclusive": assertion.IsInclusive,
+			},
+		})
 	}
 
 	return diagnostics

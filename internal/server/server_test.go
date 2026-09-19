@@ -1451,11 +1451,13 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
 		diagnostics := client.getDiagnostics()
 		require.NotEmpty(t, diagnostics)
 
+		// The code is a union type, so it must be read through the helper: a plain
+		// string comparison would never match and the assertion could not fail.
 		for _, pub := range diagnostics {
 			for _, d := range pub.Diagnostics {
-				assert.NotEqual(t, "UNBALANCED", d.Code,
+				assert.NotEqual(t, "UNBALANCED", diagnosticCodeString(d.Code),
 					"unbalanced transaction diagnostics should be filtered out")
-				assert.NotEqual(t, "MULTIPLE_INFERRED", d.Code,
+				assert.NotEqual(t, "MULTIPLE_INFERRED", diagnosticCodeString(d.Code),
 					"multiple inferred diagnostics should be filtered out")
 			}
 		}
@@ -1490,7 +1492,7 @@ func TestServer_BalanceTolerance(t *testing.T) {
 		diagnostics := client.getDiagnostics()
 		for _, pub := range diagnostics {
 			for _, d := range pub.Diagnostics {
-				assert.NotEqual(t, "UNBALANCED", d.Code,
+				assert.NotEqual(t, "UNBALANCED", diagnosticCodeString(d.Code),
 					"imbalance 0.0053 should be within user tolerance 0.01")
 			}
 		}

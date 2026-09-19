@@ -388,3 +388,99 @@ func TestCheckJournalBalance_NoDiagnosticsForBalancedJournal(t *testing.T) {
 	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
 	assert.Empty(t, codesOf(CheckJournalBalance(resolved, decimal.Zero)))
 }
+
+func TestCheckJournalBalance_AssertionCheckedAtItsPosting(t *testing.T) {
+	// hledger checks a balance assertion when the posting is processed: postings
+	// written after the assertion must not change its verdict. Verified: this
+	// journal exits 0 with hledger 1.52.4.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 first
+    assets:cash  $100
+    equity
+
+2024-01-02 second
+    assets:cash  $10 = $110
+    assets:cash  $-30
+    expenses  $20
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+
+	// The mirror case: the asserted balance is wrong at the posting, even though
+	// the end-of-transaction balance would match.
+	broken := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 first
+    assets:cash  $100
+    equity
+
+2024-01-02 second
+    assets:cash  $-30 = $110
+    assets:cash  $40
+    income  $-10
+`})
+
+	diagnostics := CheckJournalBalance(broken, decimal.Zero)
+	require.Len(t, diagnostics, 1, "the assertion fails at its own posting")
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Contains(t, diagnostics[0].Message, "calculated 70 $")
+}
+
+func TestCheckJournalBalance_OneElidedPostingPerGroup(t *testing.T) {
+	// hledger infers one amount per balancing group and never infers a
+	// parenthesised virtual posting. Verified: both journals exit 0.
+	tests := map[string]string{
+		"real and balanced virtual": `2024-01-01 x
+    a  $10
+    b
+    [c]  $5
+    [d]
+`,
+		"real and unbalanced virtual": `2024-01-01 x
+    a  $10
+    b
+    (c)
+`,
+	}
+
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: content})
+			assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+		})
+	}
+}
+
+func TestCheckJournalBalance_StrictRejectsSmallOtherCommodity(t *testing.T) {
+	// `==` compares every other commodity with its own precision: 0.20 EUR still
+	// fails a dollar assertion (hledger reports "Across all commodities ...").
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 first
+    assets:cash  $10
+    assets:cash  0.20 EUR
+    equity
+
+2024-01-02 second
+    assets:cash  $5 == $15
+    equity
+`})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Contains(t, diagnostics[0].Message, "also holds")
+	assert.Contains(t, diagnostics[0].Message, "EUR")
+}
+
+func TestCheckJournalBalance_ResidualEqualToToleranceIsBalanced(t *testing.T) {
+	// hledger accepts a residual exactly equal to the tolerance: with `$`
+	// precision 0 the tolerance is 0.5 and 10 AAPL @ $2.05 plus $-20 balances.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 x
+    a:aa  10 AAPL @ $2.05
+    b:bb  $-20
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+
+	beyond := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 x
+    a:aa  10 AAPL @ $2.5
+    b:bb  $-20
+`})
+	assert.Len(t, CheckJournalBalance(beyond, decimal.Zero), 1, "5.00 exceeds the 0.5 tolerance")
+}

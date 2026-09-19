@@ -420,3 +420,96 @@ func TestPublishDiagnostics_IncludedAssertionRangeUsesItsOwnFile(t *testing.T) {
 	assert.True(t, strings.Contains(tooltipString(assertion.Message), "balance assertion failed"),
 		"message: %s", tooltipString(assertion.Message))
 }
+
+func TestPublishDiagnostics_BalanceAssertionsCanBeDisabled(t *testing.T) {
+	// hledger.diagnostics.balanceAssertions turns the whole assertion pass off,
+	// which matters on journals whose history is incomplete.
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Diagnostics.BalanceAssertions = false
+	ts.setSettings(settings)
+
+	docURI := uri.URI("file:///assertions-off.journal")
+	content := "2024-01-01 x\n    assets:cash  $-100 = $50\n    expenses:food  $100\n"
+
+	diagnostics, err := ts.openAndWait(docURI, content)
+	require.NoError(t, err)
+	assert.Nil(t, diagnosticWithCode(diagnostics, "BALANCE_ASSERTION_FAILED"),
+		"the failing assertion must stay silent when the check is disabled, got %v", codesIn(diagnostics))
+
+	// The setting is about assertions only: the balance check still runs.
+	unbalanced, err := ts.openAndWait(uri.URI("file:///unbalanced.journal"), "2024-01-01 x\n    assets:cash  $100\n    expenses:food  $50\n")
+	require.NoError(t, err)
+	assert.NotNil(t, diagnosticWithCode(unbalanced, "UNBALANCED"))
+}
+
+func TestPublishDiagnostics_OpenIncludedFileKeepsItsOwnDiagnostics(t *testing.T) {
+	// An open buffer owns its diagnostics: publishing the resolved tree to an
+	// open included file would replace the buffer's problems with a set computed
+	// from disk content and buffer offsets.
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+
+	tmpDir := t.TempDir()
+	mainPath := filepath.Join(tmpDir, "main.journal")
+	childPath := filepath.Join(tmpDir, "child.journal")
+
+	writeJournal(t, childPath, "2024-01-02 child\n    a:aa  $5\n    c:cc\n")
+	mainContent := "include child.journal\n\n2024-01-01 root\n    a:aa  $10\n    b:bb\n"
+	writeJournal(t, mainPath, mainContent)
+
+	ts := initWorkspaceTestServer(t, tmpDir)
+	mainURI := uri.File(mainPath)
+	childURI := uri.File(childPath)
+
+	// The open child buffer carries a per-buffer problem the disk copy does not.
+	childBuffer := "2024-01-02 child\n    a:aa  $5  ; date:2024-01\n    c:cc\n"
+	require.NoError(t, ts.openDocument(childURI, childBuffer))
+	childBefore := waitForDocument(t, ts.client, childURI)
+	require.NotNil(t, diagnosticWithCode(childBefore, "INVALID_DATE_TAG"),
+		"the buffer's own problem must be reported, got %v", codesIn(childBefore))
+
+	require.NoError(t, ts.openDocument(mainURI, mainContent))
+	time.Sleep(150 * time.Millisecond)
+
+	childAfter := ts.client.diagnosticsFor(childURI)
+	require.NotNil(t, childAfter)
+	assert.NotNil(t, diagnosticWithCode(childAfter.Diagnostics, "INVALID_DATE_TAG"),
+		"publishing for the root must not drop the open buffer's own diagnostics")
+}
+
+func TestPublishDiagnostics_StrictModeStillOffersDeclareAccount(t *testing.T) {
+	ts := newTestServer()
+	settings := ts.getSettings()
+	settings.Diagnostics.AccountCheck = accountCheckStrict
+	ts.setSettings(settings)
+
+	docURI := uri.URI("file:///strict.journal")
+	content := "2024-01-01 x\n    food:snacks  $50\n    assets:cash\n"
+
+	diagnostics, err := ts.openAndWait(docURI, content)
+	require.NoError(t, err)
+	undeclared := diagnosticWithCode(diagnostics, "UNDECLARED_ACCOUNT")
+	require.NotNil(t, undeclared, "strict mode reports the undeclared account, got %v", codesIn(diagnostics))
+
+	// A client that supports code action literals is what receives the fix.
+	ts.clientCapabilities.supportsCodeActionLiterals = true
+
+	actions, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        undeclared.Range,
+		Context: protocol.CodeActionContext{
+			Diagnostics: []protocol.Diagnostic{*undeclared},
+		},
+	})
+	require.NoError(t, err)
+
+	var titles []string
+	for _, action := range actions {
+		if ca, ok := action.(*protocol.CodeAction); ok {
+			titles = append(titles, ca.Title)
+		}
+	}
+	assert.Contains(t, titles, "Declare account food:snacks",
+		"the declaration fix must also work in strict mode")
+}

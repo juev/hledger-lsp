@@ -10,6 +10,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/lsputil"
 )
 
 // journalDiagEntry memoises the journal-level verdicts for one resolved tree.
@@ -66,6 +67,18 @@ func isJournalBalanceCode(code string) bool {
 // included journal shows its errors where they are.
 func (s *Server) sourcedDiagnosticsByURI(docURI uri.URI, path string, diags []analyzer.SourcedDiagnostic, settings diagnosticsSettings) map[uri.URI][]protocol.Diagnostic {
 	byURI := make(map[uri.URI][]protocol.Diagnostic)
+
+	// Building a position mapper costs a split of the whole file, so build at most
+	// one per target file per publish instead of one per diagnostic.
+	mappers := make(map[uri.URI]*lsputil.PositionMapper)
+	mapperFor := func(target uri.URI) *lsputil.PositionMapper {
+		if mapper, ok := mappers[target]; ok {
+			return mapper
+		}
+		mapper := s.mapperFor(target)
+		mappers[target] = mapper
+		return mapper
+	}
 	for _, diag := range diags {
 		if !s.shouldIncludeDiagnostic(diag.Code, settings) {
 			continue
@@ -84,7 +97,7 @@ func (s *Server) sourcedDiagnosticsByURI(docURI uri.URI, path string, diags []an
 		}
 		// Ranges are expressed in the coordinates of the owning file, so use that
 		// file's content for the byte-offset conversion when it is available.
-		if mapper := s.mapperFor(target); mapper != nil {
+		if mapper := mapperFor(target); mapper != nil {
 			converted.Range = astRangeToLSP(mapper, diag.Range)
 		} else {
 			converted.Range = *astRangeToProtocol(diag.Range)

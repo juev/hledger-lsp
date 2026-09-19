@@ -70,7 +70,8 @@ type Server struct {
 	journalDiagMu sync.Mutex
 	journalDiag   *journalDiagEntry
 	docVersions   sync.Map // map[uri.URI]uint32
-	warned        sync.Map // map[string]bool: one log line per document condition
+	warnedMu      sync.Mutex
+	warned        sync.Map // map[uri.URI]map[string]bool: one log line per condition
 }
 
 func NewServer() *Server {
@@ -400,6 +401,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	}
 	s.documents.Delete(params.TextDocument.URI)
 	s.docVersions.Delete(params.TextDocument.URI)
+	s.forgetWarnings(params.TextDocument.URI)
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
@@ -521,7 +523,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 			return
 		}
 		// Tell the user once per document instead of silently ignoring the file.
-		s.warnOnce(docURI, "hledger-lsp: "+sizeErr.Message)
+		s.warnOnce(docURI, "file-too-large", "hledger-lsp: "+sizeErr.Message)
 		s.publishDiagnosticSet(ctx, docURI, []protocol.Diagnostic{
 			{
 				Severity: protocol.DiagnosticSeverityError,
@@ -565,7 +567,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 	// A load failure belongs to the file that contains the failing directive.
 	for _, err := range loadErrors {
 		if err.Kind != include.ErrorParseError {
-			s.warnOnce(docURI, "hledger-lsp: "+err.Message)
+			s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
 		}
 
 		if err.Kind == include.ErrorParseError && (err.SourcePath == "" || err.SourcePath == path) {

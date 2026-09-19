@@ -691,3 +691,20 @@ func TestServer_SetSettings_KeepsAlignmentCacheWhenFormattingUnchanged(t *testin
 		t.Error("alignmentCache should be preserved when formatting settings don't change")
 	}
 }
+
+func TestSettings_LegacyUndeclaredAccountsFalseDisablesTheCheck(t *testing.T) {
+	base := defaultServerSettings()
+	base.Diagnostics.AccountCheck = accountCheckLint
+
+	// A refresh parses on top of the live settings, so the legacy boolean must
+	// map both ways: false has to turn the check off again.
+	settings := parseSettingsFromRaw(base, map[string]interface{}{
+		"diagnostics": map[string]interface{}{"undeclaredAccounts": false},
+	})
+	assert.Equal(t, accountCheckOff, settings.Diagnostics.AccountCheck)
+
+	enabled := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+		"diagnostics": map[string]interface{}{"undeclaredAccounts": true},
+	})
+	assert.Equal(t, accountCheckLint, enabled.Diagnostics.AccountCheck)
+}

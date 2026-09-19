@@ -577,10 +577,13 @@ func TestOnTypeFormatting_Tab_RespectsMinAlignment(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edits, 1)
 
-	// The line is tab-indented, so the visual column is the tab-expanded display
-	// column of the cursor plus the inserted spaces.
-	visualColumn := formatter.DisplayWidthInLine(contentLine(1), 18, 4) + len(edits[0].NewText)
-	assert.Equal(t, 49, visualColumn, "the amount must land on the alignment column")
+	// The line is tab-indented: "    expenses:food" is 17 cells, the tab advances
+	// to the next stop of 4 (column 20), and the alignment column is 49, so the
+	// server must insert exactly 29 spaces. The expectation is written out rather
+	// than recomputed with the production helper so it can fail.
+	assert.Equal(t, 29, len(edits[0].NewText),
+		"a tab counts as one tab stop, not as a single character")
+	assert.Equal(t, 20, formatter.DisplayWidthInLine(contentLine(1), 18, 4))
 }
 
 // contentLine returns the n-th line (1-based) of the tab-indented fixture used by
@@ -719,4 +722,18 @@ func TestOnTypeFormatting_SkipsRulesFiles(t *testing.T) {
 	tabEdits, err := ts.onTypeFormatting(rulesURI, 1, "\t")
 	require.NoError(t, err)
 	assert.Nil(t, tabEdits)
+}
+
+func TestOnTypeTab_CRLFDocumentAligns(t *testing.T) {
+	ts := newTestServer()
+	uriValue := uri.URI("file:///crlf-tab.journal")
+	content := "2024-01-15 grocery store\r\n    expenses:food\r\n    assets:cash\r\n"
+
+	ts.StoreDocument(uriValue, strings.ReplaceAll(content, "\r\n", "\n"))
+
+	edits, err := ts.onTypeFormattingTab(uriValue, 1, 17)
+	require.NoError(t, err)
+	require.Len(t, edits, 1)
+	assert.Equal(t, "  ", edits[0].NewText,
+		"the posting must reach the natural alignment column 19 after normalization")
 }

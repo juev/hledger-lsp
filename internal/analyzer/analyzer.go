@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/shopspring/decimal"
 
@@ -27,8 +28,41 @@ const (
 )
 
 type Analyzer struct {
+	// mu guards the settings a running server can change (tolerance, account
+	// check mode) against concurrent analysis. Read them through
+	// balanceTolerance/accountCheckMode rather than directly.
+	mu sync.RWMutex
+	// BalanceTolerance and AccountCheck are the configured settings. Direct
+	// field access is fine for single-goroutine callers; concurrent callers use
+	// SetBalanceTolerance/SetAccountCheckMode and the accessors below.
 	BalanceTolerance decimal.Decimal
 	AccountCheck     AccountCheckMode
+}
+
+// SetBalanceTolerance updates the user tolerance for balance checks.
+func (a *Analyzer) SetBalanceTolerance(tolerance decimal.Decimal) {
+	a.mu.Lock()
+	a.BalanceTolerance = tolerance
+	a.mu.Unlock()
+}
+
+// SetAccountCheckMode updates how strictly posting accounts must be declared.
+func (a *Analyzer) SetAccountCheckMode(mode AccountCheckMode) {
+	a.mu.Lock()
+	a.AccountCheck = mode
+	a.mu.Unlock()
+}
+
+func (a *Analyzer) balanceTolerance() decimal.Decimal {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.BalanceTolerance
+}
+
+func (a *Analyzer) accountCheckMode() AccountCheckMode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.AccountCheck
 }
 
 func New() *Analyzer {
@@ -77,15 +111,15 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
-		balanceResult := CheckBalance(tx, a.BalanceTolerance)
+		balanceResult := CheckBalance(tx, a.balanceTolerance())
 
 		if !balanceResult.Balanced {
 			diag := a.createBalanceDiagnostic(tx, balanceResult)
 			result.Diagnostics = append(result.Diagnostics, diag)
 		}
 
-		if a.AccountCheck != AccountCheckOff && len(sortedDeclared) > 0 {
-			undeclaredDiags := checkUndeclaredAccounts(tx, sortedDeclared, a.AccountCheck == AccountCheckStrict)
+		if mode := a.accountCheckMode(); shouldCheckAccounts(mode, sortedDeclared) {
+			undeclaredDiags := checkUndeclaredAccounts(tx, sortedDeclared, mode == AccountCheckStrict)
 			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
 		}
 
@@ -158,14 +192,14 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	seen := make(map[diagKey]bool)
 	for _, tx := range resolved.AllTransactions() {
 		tx := tx
-		balanceResult := CheckBalance(&tx, a.BalanceTolerance)
+		balanceResult := CheckBalance(&tx, a.balanceTolerance())
 
 		var txDiags []Diagnostic
 		if !balanceResult.Balanced {
 			txDiags = append(txDiags, a.createBalanceDiagnostic(&tx, balanceResult))
 		}
-		if a.AccountCheck != AccountCheckOff && len(sortedDeclared) > 0 {
-			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, sortedDeclared, a.AccountCheck == AccountCheckStrict)...)
+		if mode := a.accountCheckMode(); shouldCheckAccounts(mode, sortedDeclared) {
+			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, sortedDeclared, mode == AccountCheckStrict)...)
 		}
 		if len(declaredCommodities) > 0 {
 			txDiags = append(txDiags, checkUndeclaredCommodities(&tx, declaredCommodities)...)
@@ -497,6 +531,21 @@ func isAccountDeclared(accountName string, sortedDeclared []string) bool {
 		}
 	}
 	return false
+}
+
+// shouldCheckAccounts reports whether the account declaration check runs. The
+// soft mode needs at least one directive to be meaningful; `hledger --strict`
+// requires every account to be declared, so a journal without any directive is
+// exactly the case it must report.
+func shouldCheckAccounts(mode AccountCheckMode, declared []string) bool {
+	switch mode {
+	case AccountCheckOff:
+		return false
+	case AccountCheckStrict:
+		return true
+	default:
+		return len(declared) > 0
+	}
 }
 
 // checkUndeclaredAccounts reports posting accounts that no account directive

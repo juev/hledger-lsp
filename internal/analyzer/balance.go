@@ -90,7 +90,9 @@ func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) po
 		if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
 			tolerance = userTolerance
 		}
-		if sum.Abs().GreaterThanOrEqual(tolerance) {
+		// hledger treats a residual equal to the tolerance as balanced: with a
+		// tolerance of 0.5 a residual of exactly 0.5 is accepted (verified).
+		if sum.Abs().GreaterThan(tolerance) {
 			differences[commodity] = sum.Abs()
 			signed[commodity] = sum
 		}

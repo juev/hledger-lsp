@@ -852,6 +852,20 @@ func hledgerVerifiedCases() []hledgerBalanceCase {
     assets:cash  $-1400`,
 			balanced: true,
 		},
+		{
+			name: "residual equal to the tolerance is accepted",
+			input: `2024-01-01 x
+    a:aa  10 AAPL @ $2.05
+    b:bb  $-20`,
+			balanced: true,
+		},
+		{
+			name: "residual above the tolerance is rejected",
+			input: `2024-01-01 x
+    a:aa  10 AAPL @ $2.5
+    b:bb  $-20`,
+			balanced: false,
+		},
 	}
 }
 
@@ -948,4 +962,26 @@ func TestCheckBalance_CostPrecisionStaysOnNativeCommodity(t *testing.T) {
 	assert.False(t, result2.Balanced, "cash written with 2 decimals makes 0.01 exceed the tolerance")
 	assert.True(t, result2.Differences["$"].Equal(decimal.RequireFromString("0.01")),
 		"residual is 0.01, got %s", result2.Differences["$"])
+}
+
+func TestCheckBalance_ResidualAtToleranceBoundary(t *testing.T) {
+	// hledger 1.52.4 accepts a residual equal to the tolerance (10 AAPL @ $2.05
+	// with $-20 leaves 0.5 at a tolerance of 0.5) and rejects anything larger.
+	atBoundary := `2024-01-01 x
+    a:aa  10 AAPL @ $2.05
+    b:bb  $-20`
+
+	journal, errs := parser.Parse(atBoundary)
+	require.Empty(t, errs)
+	assert.True(t, CheckBalance(&journal.Transactions[0], decimal.Zero).Balanced,
+		"a residual equal to the tolerance is balanced")
+
+	beyondBoundary := `2024-01-01 x
+    a:aa  10 AAPL @ $2.5
+    b:bb  $-20`
+
+	journal2, errs2 := parser.Parse(beyondBoundary)
+	require.Empty(t, errs2)
+	assert.False(t, CheckBalance(&journal2.Transactions[0], decimal.Zero).Balanced,
+		"a residual above the tolerance is unbalanced")
 }
