@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
@@ -19,15 +20,22 @@ import (
 // IncludeTree represents a single include tree rooted at one journal file.
 // Each root file (file with no incoming include edges) gets its own tree
 // with an independent ResolvedJournal and caches.
+//
+// Resolved and LoadErrors are only current as of the last refresh. Callers
+// inside this package must reach them through the Workspace accessors, which
+// refresh first; reaching into a tree directly can hand back a stale journal.
 type IncludeTree struct {
-	RootPath                   string
-	Resolved                   *include.ResolvedJournal
-	LoadErrors                 []include.LoadError
-	rootContentSnapshot        string
-	rootContentSnapshotIsValid bool
-	cachedFormats              map[string]formatter.CommodityFormat
-	cachedCommodities          map[string]bool
-	cachedAccounts             map[string]bool
+	RootPath   string
+	Resolved   *include.ResolvedJournal
+	LoadErrors []include.LoadError
+	// rootContentRevision is the edit revision this tree was re-resolved from,
+	// set only when the tree's own root was the edited file. Zero means the
+	// tree does not correspond to any revision a caller could be holding, and
+	// ResolvedForRootContent refuses it.
+	rootContentRevision uint64
+	cachedFormats       map[string]formatter.CommodityFormat
+	cachedCommodities   map[string]bool
+	cachedAccounts      map[string]bool
 }
 
 func (t *IncludeTree) clearCaches() {
@@ -36,11 +44,47 @@ func (t *IncludeTree) clearCaches() {
 	t.cachedAccounts = nil
 }
 
+// RevisionUnknown is the revision of content the workspace never recorded. It
+// never matches a tree, so a caller passing it falls back to loading content
+// directly.
+const RevisionUnknown uint64 = 0
+
+// pendingEdit is an editor edit that has been recorded but not yet applied to
+// the include trees and the workspace index.
+type pendingEdit struct {
+	content  string
+	revision uint64
+}
+
+// Workspace holds the include trees and the search index for one workspace
+// root. Edits are recorded with MarkFileDirty and applied lazily: the first
+// read that needs tree data runs refresh, which re-resolves only the trees
+// owning the edited files and updates the index incrementally. A keystroke
+// therefore costs O(1) plus one deferred recompute shared by every consumer,
+// instead of a full re-parse and index rebuild per edit.
+//
+// Every public method that hands out tree or index data calls refresh first.
+// A consumer that reaches into an IncludeTree without going through one of
+// those methods will read a journal that may predate the last edit.
+//
+// Lock order: refreshMu, then mu. refresh takes both, so no method may call it
+// while already holding mu.
 type Workspace struct {
-	mu           sync.RWMutex
-	rootURI      string
-	trees        map[string]*IncludeTree // rootPath → tree
-	fileTree     map[string][]string     // filePath → sorted owning root paths
+	mu         sync.RWMutex
+	refreshMu  sync.Mutex
+	rootURI    string
+	trees      map[string]*IncludeTree // rootPath → tree
+	fileTree   map[string][]string     // filePath → sorted owning root paths
+	dirty      map[string]pendingEdit  // filePath → edit not yet applied
+	dirtyCount atomic.Int64            // len(dirty), readable without mu
+	revision   uint64                  // monotonic edit counter, guarded by mu
+	// contentRevisions records, per filePath, the revision of the most recent
+	// content recorded for it. Unlike dirty, entries outlive refresh, so a
+	// caller holding the current buffer can ask whether a tree is up to date
+	// without naming a revision itself.
+	contentRevisions map[string]uint64
+	// includeGraph and reverseGraph are kept for GetIncludedBy and
+	// isWorkspaceFileLocked.
 	includeGraph map[string][]string
 	reverseGraph map[string][]string
 	loader       *include.Loader
@@ -50,13 +94,15 @@ type Workspace struct {
 
 func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
 	return &Workspace{
-		rootURI:      rootURI,
-		loader:       loader,
-		trees:        make(map[string]*IncludeTree),
-		fileTree:     make(map[string][]string),
-		includeGraph: make(map[string][]string),
-		reverseGraph: make(map[string][]string),
-		index:        NewWorkspaceIndex(),
+		rootURI:          rootURI,
+		loader:           loader,
+		trees:            make(map[string]*IncludeTree),
+		fileTree:         make(map[string][]string),
+		dirty:            make(map[string]pendingEdit),
+		contentRevisions: make(map[string]uint64),
+		includeGraph:     make(map[string][]string),
+		reverseGraph:     make(map[string][]string),
+		index:            NewWorkspaceIndex(),
 	}
 }
 
@@ -67,6 +113,9 @@ func (w *Workspace) Initialize() error {
 	w.parseErrors = nil
 	w.trees = make(map[string]*IncludeTree)
 	w.fileTree = make(map[string][]string)
+	w.dirty = make(map[string]pendingEdit)
+	w.dirtyCount.Store(0)
+	w.contentRevisions = make(map[string]uint64)
 	w.index = NewWorkspaceIndex()
 	w.includeGraph = make(map[string][]string)
 	w.reverseGraph = make(map[string][]string)
@@ -97,6 +146,7 @@ func (w *Workspace) Initialize() error {
 }
 
 func (w *Workspace) LoadErrors() []include.LoadError {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	var all []include.LoadError
@@ -107,6 +157,7 @@ func (w *Workspace) LoadErrors() []include.LoadError {
 }
 
 func (w *Workspace) ParseErrors() []string {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.parseErrors
@@ -220,6 +271,7 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 
 // RootJournalPath returns the root path of the first tree (for backward compatibility).
 func (w *Workspace) RootJournalPath() string {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	// Return the first tree root in sorted order for determinism
@@ -231,6 +283,7 @@ func (w *Workspace) RootJournalPath() string {
 
 // GetResolved returns the resolved journal of the first tree (for backward compatibility).
 func (w *Workspace) GetResolved() *include.ResolvedJournal {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	for _, tree := range w.sortedTrees() {
@@ -243,6 +296,7 @@ func (w *Workspace) GetResolved() *include.ResolvedJournal {
 // that contains the given file path. When multiple roots own the file,
 // the lexicographically smallest root is selected (deterministic policy).
 func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	rootPath := w.primaryRootLocked(path)
@@ -260,6 +314,7 @@ func (w *Workspace) GetResolvedForFile(path string) *include.ResolvedJournal {
 // root path. Callers that depend on include context must use this instead of
 // GetResolvedForFile, which keeps its primary-root behavior for compatibility.
 func (w *Workspace) GetIncludeTreesForFile(path string) []*IncludeTree {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -278,6 +333,7 @@ func (w *Workspace) GetIncludeTreesForFile(path string) []*IncludeTree {
 // context, such as running balance calculations, must use this method instead
 // of the deterministic primary-root fallback.
 func (w *Workspace) GetUniqueResolvedForFile(path string) (*include.ResolvedJournal, bool) {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -293,13 +349,16 @@ func (w *Workspace) GetUniqueResolvedForFile(path string) (*include.ResolvedJour
 }
 
 // ResolvedForRootContent returns a root tree only when its resolved state was
-// built from content. The caller must pass CRLF-normalized content.
-func (w *Workspace) ResolvedForRootContent(path, content string) (*include.ResolvedJournal, []include.LoadError) {
+// built from the edit revision the caller holds, so a request carrying older
+// content is never answered from a newer tree. revision is the value
+// MarkFileDirty returned for that content; RevisionUnknown never matches.
+func (w *Workspace) ResolvedForRootContent(path string, revision uint64) (*include.ResolvedJournal, []include.LoadError) {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
 	tree := w.trees[path]
-	if tree == nil || !tree.rootContentSnapshotIsValid || tree.rootContentSnapshot != content {
+	if tree == nil || revision == RevisionUnknown || tree.rootContentRevision != revision {
 		return nil, nil
 	}
 	return tree.Resolved, tree.LoadErrors
@@ -369,12 +428,14 @@ func (w *Workspace) sortedTrees() []*IncludeTree {
 
 // AllTrees returns all include trees in deterministic order (sorted by root path).
 func (w *Workspace) AllTrees() []*IncludeTree {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.sortedTrees()
 }
 
 func (w *Workspace) IndexSnapshot() IndexSnapshot {
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.index == nil {
@@ -383,75 +444,170 @@ func (w *Workspace) IndexSnapshot() IndexSnapshot {
 	return w.index.Snapshot()
 }
 
-func (w *Workspace) UpdateFile(path, content string) {
+// MarkFileDirty records that path now holds content, without re-resolving the
+// include trees or rebuilding the index. The work happens on the first read
+// that needs tree data, so a burst of keystrokes collapses into one recompute
+// instead of one per edit.
+//
+// The returned revision identifies this content and is what a caller passes
+// back to ResolvedForRootContent. It is a workspace-local counter, not the LSP
+// document version: two edits can carry the same client version (or none at
+// all, as in tests), which would make the comparison match the wrong content.
+//
+// Returns RevisionUnknown when path is not a journal file, and so was not
+// recorded.
+//
+// content must already be LF-only, matching the invariant the rest of the
+// pipeline holds (see the line-endings note in CLAUDE.md). Normalizing here
+// would put a full scan of the document on the keystroke path, where the
+// editor content is LF by construction.
+func (w *Workspace) MarkFileDirty(path, content string) uint64 {
 	if path == "" || !filetype.IsJournalPath(path) {
-		return
+		return RevisionUnknown
 	}
-	journal, _ := parser.Parse(textutil.NormalizeLineEndings(content))
-	w.UpdateFileWithJournal(path, content, journal)
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.revision++
+	w.dirty[path] = pendingEdit{content: content, revision: w.revision}
+	w.contentRevisions[path] = w.revision
+	w.dirtyCount.Store(int64(len(w.dirty)))
+	return w.revision
 }
 
-// UpdateFileWithJournal updates the workspace index and owning trees for path
-// using a pre-parsed journal, avoiding a redundant parse on the hot path
-// (DidChange parses once and reuses the cached journal). The journal must be
-// parsed from CRLF-normalized content.
-func (w *Workspace) UpdateFileWithJournal(path, content string, journal *ast.Journal) {
-	if path == "" || !filetype.IsJournalPath(path) {
+// ContentRevision returns the revision of the content most recently recorded
+// for path, or RevisionUnknown when the workspace holds none. A caller that
+// has just read the current buffer for path can pass the result to
+// ResolvedForRootContent to accept the tree only when it is built from that
+// same content.
+func (w *Workspace) ContentRevision(path string) uint64 {
+	w.refresh()
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.contentRevisions[path]
+}
+
+// refresh applies every pending edit. It runs at the top of each public method
+// that hands out tree or index data, so no consumer can observe a stale tree.
+//
+// The atomic counter keeps the common case — nothing pending — to a single
+// load. When something is pending, refreshMu serialises the recompute so
+// concurrent readers collapse onto one pass rather than queueing behind mu.
+func (w *Workspace) refresh() {
+	if w.dirtyCount.Load() == 0 {
+		return
+	}
+	w.refreshMu.Lock()
+	defer w.refreshMu.Unlock()
+	// Another goroutine may have applied the edits while we waited for
+	// refreshMu; the counter is the only thing that needs re-checking.
+	if w.dirtyCount.Load() == 0 {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.applyDirtyLocked()
+}
+
+// applyDirtyLocked re-resolves the trees owning the edited files and updates
+// the index for those files only. Caller must hold the write lock.
+func (w *Workspace) applyDirtyLocked() {
+	if len(w.dirty) == 0 {
+		w.dirtyCount.Store(0)
+		return
+	}
+	pending := w.dirty
+	w.dirty = make(map[string]pendingEdit, len(pending))
+	w.dirtyCount.Store(0)
 
 	if len(w.trees) == 0 || w.index == nil {
 		return
 	}
-	if !w.isWorkspaceFileLocked(path) {
-		return
+
+	// Each owning tree is re-resolved once, with an overlay holding every edit
+	// that belongs to it, so a burst touching several files of one journal
+	// still costs a single load.
+	overlays := make(map[string]map[string]include.OverlayEntry)
+	rootRevision := make(map[string]uint64)
+	for path, edit := range pending {
+		if !w.isWorkspaceFileLocked(path) {
+			continue
+		}
+
+		oldIndex := w.index.FileIndex(path)
+		oldIncludes := []string(nil)
+		if oldIndex != nil {
+			oldIncludes = append([]string(nil), oldIndex.Includes...)
+		}
+		journal, _ := parser.Parse(edit.content)
+		fileIndex := BuildFileIndexFromJournal(path, journal)
+		w.index.SetFileIndex(path, fileIndex)
+		w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
+
+		for _, rootPath := range w.fileTree[path] {
+			if overlays[rootPath] == nil {
+				overlays[rootPath] = make(map[string]include.OverlayEntry)
+			}
+			overlays[rootPath][path] = include.OverlayEntry{
+				SourcePath: path,
+				Content:    edit.content,
+				Revision:   edit.revision,
+			}
+			// Only the tree rooted at the edited file can be said to correspond
+			// to the revision the editor holds; a tree that merely includes an
+			// edited file was built partly from content the caller never saw.
+			if rootPath == path {
+				rootRevision[rootPath] = edit.revision
+			}
+		}
 	}
 
-	oldIndex := w.index.FileIndex(path)
-	oldIncludes := []string(nil)
-	if oldIndex != nil {
-		oldIncludes = append([]string(nil), oldIndex.Includes...)
-	}
-
-	fileIndex := BuildFileIndexFromJournal(path, journal)
-	w.index.SetFileIndex(path, fileIndex)
-	w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
-
-	// Reload all owning roots with the edited content as an overlay so the
-	// loader produces fresh occurrences instead of mutating the legacy projection.
-	owners := append([]string(nil), w.fileTree[path]...)
-	w.loader.InvalidateFile(path)
-	for _, rootPath := range owners {
+	var orphaned []string
+	for rootPath, entries := range overlays {
 		tree := w.trees[rootPath]
 		if tree == nil {
 			continue
 		}
-		opts := include.LoadOptions{
-			Overlays: map[string]include.OverlayEntry{
-				path: {SourcePath: path, Content: content},
-			},
-		}
-		resolved, errs := w.loader.LoadWithOptions(rootPath, opts)
+		resolved, errs := w.loader.LoadWithOptions(rootPath, include.LoadOptions{Overlays: entries})
 		tree.Resolved = resolved
 		tree.LoadErrors = errs
-		tree.rootContentSnapshotIsValid = rootPath == path
-		if tree.rootContentSnapshotIsValid {
-			tree.rootContentSnapshot = textutil.NormalizeLineEndings(content)
-		}
+		tree.rootContentRevision = rootRevision[rootPath]
 		tree.clearCaches()
-		w.syncOwnershipFromResolvedLocked(tree)
+		orphaned = append(orphaned, w.syncOwnershipFromResolvedLocked(tree)...)
+
+		// A file that entered this tree with the edit (a new include) has no
+		// index entry yet. Already-known files keep theirs: their content did
+		// not change, so re-deriving it would only repeat the O(n) walk this
+		// refresh exists to avoid.
+		for path, journal := range tree.Resolved.Files {
+			if w.index.FileIndex(path) == nil {
+				w.index.SetFileIndex(path, BuildFileIndexFromJournal(path, journal))
+				w.updateIncludeEdgesLocked(path, nil, w.index.FileIndex(path).Includes)
+			}
+		}
 	}
-	w.buildIndexFromResolvedLocked()
+
+	// A path that lost its last owning tree is no longer part of the workspace;
+	// leaving its index entry behind would keep reporting its accounts and
+	// payees. Ownership was collected across every refreshed tree first, so a
+	// path another tree picked up in the same batch is not dropped here.
+	for _, path := range orphaned {
+		if len(w.fileTree[path]) == 0 {
+			w.index.RemoveFile(path)
+		}
+	}
+
+	w.index.RefreshDerived()
 }
 
 // syncOwnershipFromResolvedLocked updates fileTree ownership from the tree's
 // resolved journal occurrences. Paths no longer in the resolved journal lose
-// this tree as an owner. Caller must hold the write lock.
-func (w *Workspace) syncOwnershipFromResolvedLocked(tree *IncludeTree) {
+// this tree as an owner; the paths that lose their last owner are returned, so
+// the caller can drop their index entries. Caller must hold the write lock.
+func (w *Workspace) syncOwnershipFromResolvedLocked(tree *IncludeTree) []string {
 	if tree.Resolved == nil {
-		return
+		return nil
 	}
 	inResolved := make(map[string]bool)
 	inResolved[tree.RootPath] = true
@@ -459,15 +615,20 @@ func (w *Workspace) syncOwnershipFromResolvedLocked(tree *IncludeTree) {
 		inResolved[tree.Resolved.Occurrences[i].Path] = true
 	}
 	// Remove this tree as owner from paths no longer in the resolved journal.
+	var orphaned []string
 	for path := range w.fileTree {
 		if w.hasOwnerLocked(path, tree.RootPath) && !inResolved[path] {
 			w.removeOwnerLocked(path, tree.RootPath)
+			if len(w.fileTree[path]) == 0 {
+				orphaned = append(orphaned, path)
+			}
 		}
 	}
 	// Add this tree as owner for all paths in the resolved journal.
 	for path := range inResolved {
 		w.addOwnerLocked(path, tree.RootPath)
 	}
+	return orphaned
 }
 
 func (w *Workspace) buildIndexFromResolvedLocked() {
@@ -484,6 +645,7 @@ func (w *Workspace) buildIndexFromResolvedLocked() {
 			w.updateIncludeEdgesLocked(path, nil, w.index.FileIndex(path).Includes)
 		}
 	}
+	w.index.RefreshDerived()
 }
 
 func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newIncludes []string) {
@@ -537,6 +699,10 @@ func addString(values []string, target string) []string {
 }
 
 func (w *Workspace) GetIncludedBy(path string) []string {
+	// The refresh matters: DidChangeWatchedFiles asks who includes a changed
+	// file and republishes diagnostics for those open buffers, which is wrong
+	// if the pending edits have not been applied yet.
+	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -565,6 +731,7 @@ func (w *Workspace) GetIncludedBy(path string) []string {
 
 // GetCommodityFormatsForFile returns commodity formats for the tree containing the given file.
 func (w *Workspace) GetCommodityFormatsForFile(path string) map[string]formatter.CommodityFormat {
+	w.refresh()
 	w.mu.RLock()
 	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]
@@ -607,6 +774,7 @@ func (w *Workspace) GetCommodityFormats() map[string]formatter.CommodityFormat {
 
 // GetDeclaredCommoditiesForFile returns declared commodities for the tree containing the given file.
 func (w *Workspace) GetDeclaredCommoditiesForFile(path string) map[string]bool {
+	w.refresh()
 	w.mu.RLock()
 	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]
@@ -655,6 +823,7 @@ func (w *Workspace) GetDeclaredCommodities() map[string]bool {
 
 // GetDeclaredAccountsForFile returns declared accounts for the tree containing the given file.
 func (w *Workspace) GetDeclaredAccountsForFile(path string) map[string]bool {
+	w.refresh()
 	w.mu.RLock()
 	rootPath := w.primaryRootLocked(path)
 	tree := w.trees[rootPath]

@@ -106,7 +106,7 @@ func TestPublishDiagnostics_RootFallsBackAfterIncludedFileDidOpen(t *testing.T) 
 	defer ts.cancelDiagnostics(mainURI)
 	require.NoError(t, ts.openDocument(childURI, childContent))
 	defer ts.cancelDiagnostics(childURI)
-	ts.publishDiagnostics(context.Background(), mainURI, bufferContent, 0)
+	ts.publishDiagnostics(context.Background(), mainURI, bufferContent, 0, ts.workspace.ContentRevision(uriToPath(mainURI)))
 
 	diagnostics := ts.client.getLastDiagnostics()
 	require.NotNil(t, diagnostics)

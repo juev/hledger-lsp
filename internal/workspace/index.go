@@ -59,7 +59,13 @@ type IndexSnapshot struct {
 	TagValueCounts  map[string]map[string]int
 }
 
+// WorkspaceIndex aggregates per-file indexes. It is not synchronised: every
+// caller runs under the Workspace write lock, and the invariant is that the
+// derived views (accounts, payees, dates and the rest) are rebuilt before that
+// lock is released — mutating methods only flag the state dirty, so a batch
+// touching several files pays for one rebuild instead of one per file.
 type WorkspaceIndex struct {
+	derivedDirty      bool
 	fileIndexes       map[string]*FileIndex
 	accountCounts     map[string]int
 	payeeCounts       map[string]int
@@ -165,7 +171,7 @@ func (idx *WorkspaceIndex) addFileIndex(path string, fi *FileIndex) {
 	for payee, postings := range fi.PayeeTemplates {
 		idx.payeeTemplates[payee] = postings
 	}
-	idx.refreshDerived()
+	idx.derivedDirty = true
 }
 
 func (idx *WorkspaceIndex) removeFileIndex(path string, fi *FileIndex) {
@@ -200,7 +206,18 @@ func (idx *WorkspaceIndex) removeFileIndex(path string, fi *FileIndex) {
 	for payee := range fi.PayeeTemplates {
 		delete(idx.payeeTemplates, payee)
 	}
+	idx.derivedDirty = true
+}
+
+// RefreshDerived rebuilds the sorted views derived from the per-file counts,
+// if any mutation flagged them dirty. Call it once at the end of a batch of
+// index updates; see the WorkspaceIndex doc comment for the invariant.
+func (idx *WorkspaceIndex) RefreshDerived() {
+	if !idx.derivedDirty {
+		return
+	}
 	idx.refreshDerived()
+	idx.derivedDirty = false
 }
 
 func (idx *WorkspaceIndex) decrementBy(counts map[string]int, key string, amount int) {

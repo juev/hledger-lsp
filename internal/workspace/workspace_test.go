@@ -352,7 +352,7 @@ func TestWorkspace_IndexSnapshot_IncrementalUpdate(t *testing.T) {
 	updatedContent := `2024-02-02 Lunch
     expenses:food  $5
     assets:bank`
-	ws.UpdateFile(childPath, updatedContent)
+	ws.MarkFileDirty(childPath, updatedContent)
 
 	snapshot := ws.IndexSnapshot()
 	assert.Contains(t, snapshot.Accounts.All, "assets:bank")
@@ -390,11 +390,11 @@ func TestWorkspace_IndexSnapshot_IncludeChange(t *testing.T) {
 	// In multi-tree mode, two.journal is a standalone tree, so its accounts are visible
 	assert.Contains(t, snapshot.Accounts.All, "expenses:travel")
 
-	ws.UpdateFile(mainPath, "include one.journal\ninclude two.journal")
+	ws.MarkFileDirty(mainPath, "include one.journal\ninclude two.journal")
 	snapshot = ws.IndexSnapshot()
 	assert.Contains(t, snapshot.Accounts.All, "expenses:travel")
 
-	ws.UpdateFile(mainPath, "include two.journal")
+	ws.MarkFileDirty(mainPath, "include two.journal")
 	snapshot = ws.IndexSnapshot()
 	// one.journal is no longer included by main and has no standalone tree
 	assert.NotContains(t, snapshot.Accounts.All, "expenses:food")
@@ -504,7 +504,7 @@ func TestWorkspace_IndexSnapshot_TagValues_UpdateOnFileChange(t *testing.T) {
     expenses:food  $10
     assets:cash
 `
-	ws.UpdateFile(mainPath, updatedContent)
+	ws.MarkFileDirty(mainPath, updatedContent)
 
 	snapshot = ws.IndexSnapshot()
 	assert.Contains(t, snapshot.TagValues["project"], "beta")
@@ -596,7 +596,7 @@ func TestWorkspace_IndexSnapshot_FrequencyCounts_IncrementalUpdate(t *testing.T)
     expenses:drinks  $10
     assets:cash
 `
-	ws.UpdateFile(mainPath, updatedContent)
+	ws.MarkFileDirty(mainPath, updatedContent)
 
 	snapshot = ws.IndexSnapshot()
 	assert.Equal(t, 0, snapshot.PayeeCounts["Shop"])
@@ -1108,7 +1108,7 @@ func TestWorkspace_AddMissingReachable_CRLF(t *testing.T) {
 	require.NoError(t, ws.Initialize())
 
 	// Now add include directive — this triggers refreshIncludeTreeLocked → addMissingReachableLocked
-	ws.UpdateFile(mainPath, "include child.journal\n\n2024-01-01 Main\n    expenses:food  $10\n    assets:cash\n")
+	ws.MarkFileDirty(mainPath, "include child.journal\n\n2024-01-01 Main\n    expenses:food  $10\n    assets:cash\n")
 
 	resolved := ws.GetResolvedForFile(mainPath)
 	require.NotNil(t, resolved)
@@ -1123,7 +1123,7 @@ func TestWorkspace_AddMissingReachable_CRLF(t *testing.T) {
 	assert.Contains(t, snapshot.Accounts.All, "assets:bank")
 }
 
-func TestWorkspace_UpdateFile_SkipsNonJournal(t *testing.T) {
+func TestWorkspace_MarkFileDirty_SkipsNonJournal(t *testing.T) {
 	t.Setenv("LEDGER_FILE", "")
 	t.Setenv("HLEDGER_JOURNAL", "")
 
@@ -1149,8 +1149,8 @@ fields date,description,amount
 	ws := NewWorkspace(tmpDir, loader)
 	require.NoError(t, ws.Initialize())
 
-	// UpdateFile on .rules path should not panic and should return early
-	ws.UpdateFile(rulesPath, rulesContent)
+	// MarkFileDirty on a .rules path should not panic and should return early
+	ws.MarkFileDirty(rulesPath, rulesContent)
 
 	// Main journal data should still be intact
 	snapshot := ws.IndexSnapshot()
@@ -1179,7 +1179,7 @@ func TestWorkspace_UpdateFile_OccurrencesPreserved(t *testing.T) {
 	require.NoError(t, ws.Initialize())
 
 	// Edit root without changing includes
-	ws.UpdateFile(rootPath, "include child.journal\n\n2024-01-02 root tx edited\n    expenses:food  $25\n    assets:cash\n")
+	ws.MarkFileDirty(rootPath, "include child.journal\n\n2024-01-02 root tx edited\n    expenses:food  $25\n    assets:cash\n")
 
 	resolved := ws.GetResolvedForFile(rootPath)
 	require.NotNil(t, resolved)
@@ -1213,7 +1213,7 @@ func TestWorkspace_UpdateFile_ReloadsAllOwners(t *testing.T) {
 	require.NoError(t, ws.Initialize())
 
 	// Edit child — both roots must be reloaded
-	ws.UpdateFile(childPath, "2024-01-01 child tx edited\n    expenses:child  $99\n    assets:cash\n")
+	ws.MarkFileDirty(childPath, "2024-01-01 child tx edited\n    expenses:child  $99\n    assets:cash\n")
 
 	resolved1 := ws.GetResolvedForFile(root1Path)
 	require.NotNil(t, resolved1)
