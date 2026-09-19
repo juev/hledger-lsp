@@ -52,6 +52,14 @@ type PostingTemplate struct {
 	Amount        string
 	Commodity     string
 	CommodityLeft bool
+	// The remaining posting parts keep ghost text faithful to the transaction the
+	// template came from: dropping them would write a different posting than the
+	// user's history (a missing cost changes the recorded basis, a missing
+	// assertion or comment loses data).
+	Status    ast.Status
+	Cost      string
+	Assertion string
+	Comment   string
 }
 
 type AccountIndex struct {
