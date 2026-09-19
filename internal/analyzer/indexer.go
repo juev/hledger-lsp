@@ -26,6 +26,19 @@ func CollectAccounts(journal *ast.Journal) *AccountIndex {
 		}
 	}
 
+	// Periodic transactions and auto posting rules write to real accounts too, so
+	// their names belong to the account list used for completion.
+	for i := range journal.PeriodicTransactions {
+		for _, posting := range journal.PeriodicTransactions[i].Postings {
+			addAccount(idx, seen, posting.Account.GetResolvedName())
+		}
+	}
+	for i := range journal.AutoPostingRules {
+		for _, posting := range journal.AutoPostingRules[i].Postings {
+			addAccount(idx, seen, posting.Account.GetResolvedName())
+		}
+	}
+
 	return idx
 }
 

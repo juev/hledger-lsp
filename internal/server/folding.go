@@ -61,23 +61,33 @@ func findTransactionFolds(journal *ast.Journal) []protocol.FoldingRange {
 	}
 	var ranges []protocol.FoldingRange
 
+	appendFold := func(rng ast.Range, postings int) {
+		if postings == 0 {
+			return
+		}
+
+		startLine := uint32(rng.Start.Line - 1)
+		endLine := uint32(rng.End.Line - 1)
+		if endLine <= startLine {
+			return
+		}
+
+		ranges = append(ranges, protocol.FoldingRange{
+			StartLine: startLine,
+			EndLine:   endLine,
+			Kind:      protocol.FoldingRangeKindRegion,
+		})
+	}
+
 	for i := range journal.Transactions {
-		tx := &journal.Transactions[i]
-
-		if len(tx.Postings) == 0 {
-			continue
-		}
-
-		startLine := uint32(tx.Range.Start.Line - 1)
-		endLine := uint32(tx.Range.End.Line - 1)
-
-		if endLine > startLine {
-			ranges = append(ranges, protocol.FoldingRange{
-				StartLine: startLine,
-				EndLine:   endLine,
-				Kind:      protocol.FoldingRangeKindRegion,
-			})
-		}
+		appendFold(journal.Transactions[i].Range, len(journal.Transactions[i].Postings))
+	}
+	// Periodic transactions and auto posting rules are blocks of postings too.
+	for i := range journal.PeriodicTransactions {
+		appendFold(journal.PeriodicTransactions[i].Range, len(journal.PeriodicTransactions[i].Postings))
+	}
+	for i := range journal.AutoPostingRules {
+		appendFold(journal.AutoPostingRules[i].Range, len(journal.AutoPostingRules[i].Postings))
 	}
 
 	return ranges

@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/formatter"
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 func inlineCompletionParams(documentURI uri.URI, line, character uint32) *protocol.InlineCompletionParams {
@@ -837,4 +840,64 @@ func TestInlineCompletion_FuzzyPayeeMatch_Unicode(t *testing.T) {
 	require.Len(t, inlineCompletionItems(t, result), 1, "exact unicode payee match should work")
 
 	assert.Contains(t, inlineCompletionItems(t, result)[0].InsertText, "expenses:food")
+}
+
+// displayColumnOfText returns the display column at which substr starts in line,
+// counting wide characters as two cells.
+func displayColumnOfText(t *testing.T, line, substr string) int {
+	t.Helper()
+
+	index := strings.Index(line, substr)
+	require.GreaterOrEqual(t, index, 0, "line %q must contain %q", line, substr)
+	return formatter.DisplayWidth(line[:index])
+}
+
+// applyFormatterEdits applies whole-line formatter edits.
+func applyFormatterEdits(t *testing.T, content string, edits []protocol.TextEdit) string {
+	t.Helper()
+
+	lines := strings.Split(content, "\n")
+	for _, edit := range edits {
+		require.Equal(t, edit.Range.Start.Line, edit.Range.End.Line, "expected a single-line edit")
+		lines[edit.Range.Start.Line] = edit.NewText
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestInlineCompletion_UsesDisplayWidthForCJKAccounts(t *testing.T) {
+	// Ghost text must land on the same display column as Format Document, which
+	// requires measuring wide characters in display cells rather than runes.
+	ts := newTestServer()
+	uri := uri.URI("file:///cjk-ghost.journal")
+	content := "2024-01-10 商店\n    費用:食物  $50.00\n    資産:現金   $-50.00\n\n2024-01-15 商店\n"
+
+	ts.StoreDocument(uri, content)
+
+	result, err := ts.InlineCompletion(context.Background(), inlineCompletionParams(uri, 5, 0))
+	require.NoError(t, err)
+
+	items := inlineCompletionItems(t, result)
+	require.NotEmpty(t, items)
+
+	ghostLines := strings.Split(items[0].InsertText, "\n")
+	require.Len(t, ghostLines, 2)
+
+	// Format the very same postings as a journal and compare line by line.
+	journalText := "2024-01-15 商店\n" + items[0].InsertText + "\n"
+	journal, errs := parser.Parse(journalText)
+	require.Empty(t, errs)
+
+	formatted := applyFormatterEdits(t, journalText, formatter.FormatDocument(journal, journalText))
+	formattedLines := strings.Split(formatted, "\n")
+
+	assert.Equal(t, formattedLines[1], ghostLines[0],
+		"the ghost posting must match what Format Document produces")
+	assert.Equal(t, formattedLines[2], ghostLines[1],
+		"the elided ghost posting must match what Format Document produces")
+
+	// The alignment accounts for the wide account names: a rune-based
+	// implementation would have produced 4+5+2 = 11.
+	amountStart := displayColumnOfText(t, ghostLines[0], "$50.00")
+	assert.GreaterOrEqual(t, amountStart, 4+formatter.DisplayWidth("費用:食物")+2)
+	assert.NotEqual(t, 11, amountStart)
 }

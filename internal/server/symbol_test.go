@@ -312,3 +312,57 @@ func TestFlattenDocumentSymbols_PreservesMetadata(t *testing.T) {
 	require.Len(t, symbols, 1)
 	assert.Equal(t, []protocol.SymbolTag{protocol.SymbolTagDeprecated}, symbols[0].Tags)
 }
+
+func TestDocumentSymbols_IncludePeriodicAndAutoRules(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///recurring.journal")
+	content := `~ monthly
+    expenses:rent  $1200
+    assets:bank
+
+= expenses:food
+    (budget:food)  $100
+
+2024-01-15 grocery
+    expenses:food  $50
+    assets:cash
+`
+	ts.StoreDocument(docURI, content)
+
+	symbols := ts.documentSymbols(context.Background(), &protocol.DocumentSymbolParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NotEmpty(t, symbols)
+
+	names := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		names = append(names, symbol.Name)
+	}
+	assert.Contains(t, names, "~ monthly")
+	assert.Contains(t, names, "= expenses:food")
+	assert.Contains(t, names, "2024-01", "transactions stay grouped by month")
+}
+
+func TestFoldingRanges_IncludePeriodicAndAutoRules(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///recurring.journal")
+	content := `~ monthly
+    expenses:rent  $1200
+    assets:bank
+
+= expenses:food
+    (budget:food)  $100
+`
+	ts.StoreDocument(docURI, content)
+
+	ranges, err := ts.FoldingRanges(context.Background(), &protocol.FoldingRangeParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, ranges, 2, "one fold per periodic block and per auto rule")
+	assert.Equal(t, uint32(0), ranges[0].StartLine)
+	assert.GreaterOrEqual(t, ranges[0].EndLine, uint32(2), "the fold covers the block's postings")
+	assert.Equal(t, uint32(4), ranges[1].StartLine)
+	assert.GreaterOrEqual(t, ranges[1].EndLine, uint32(5))
+}

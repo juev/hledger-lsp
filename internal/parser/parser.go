@@ -668,6 +668,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	if p.current.Type == TokenComment {
 		posting.Comment = p.current.Value
+		posting.CommentRange = ast.Range{Start: toASTPosition(p.current.Pos), End: toASTPosition(p.current.End)}
 		posting.Tags = parseTags(p.current.Value, p.current.Pos)
 		p.advance()
 	}
