@@ -64,16 +64,22 @@ func NewAccountIndex() *AccountIndex {
 }
 
 type BalanceResult struct {
-	Balanced    bool
+	Balanced bool
+	// Differences holds the absolute residual per commodity, keyed by the
+	// commodity symbol ("" for commodity-less amounts).
 	Differences map[string]decimal.Decimal
-	InferredIdx int
+	// SignedDifferences holds the same residuals with their sign preserved, so
+	// diagnostics can tell the user whether a commodity is over or short.
+	SignedDifferences map[string]decimal.Decimal
+	InferredIdx       int
 }
 
 func NewBalanceResult() *BalanceResult {
 	return &BalanceResult{
-		Balanced:    true,
-		Differences: make(map[string]decimal.Decimal),
-		InferredIdx: -1,
+		Balanced:          true,
+		Differences:       make(map[string]decimal.Decimal),
+		SignedDifferences: make(map[string]decimal.Decimal),
+		InferredIdx:       -1,
 	}
 }
 
