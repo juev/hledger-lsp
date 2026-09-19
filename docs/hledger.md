@@ -173,13 +173,30 @@ Individual postings can have their own status:
 
 All posting amounts in a transaction must sum to zero (within balancing precision).
 
-**Balancing precision** (since hledger 1.50):
+**Balancing precision** (since hledger 1.50, verified against hledger 1.52.4):
 
-- Inferred from the highest decimal precision used in each commodity within the transaction
-- `commodity` and `D` directive precision is factored in as a floor (e.g. `commodity $1,000.00` sets minimum precision 2 for `$`)
-- Cost amounts (`@`/`@@`) don't affect balancing precision
-- Lot costs (`{}`/`{{}}`) are treated as `@`/`@@` for balance checking when no explicit cost is present
+- Inferred from the highest decimal precision of the amounts denominated in each commodity within the transaction
+- Cost amounts (`@`/`@@`) and the native amount behind a cost do not affect the cost commodity's precision:
+  `1.005 AAPL @ $2` with `$-2.0` balances because `$` keeps precision 1 (tolerance 0.05), while `$-2.00` does not
+- `commodity` and `D` directive precision is **not** a floor: `commodity $1,000.000` alone does not tighten the
+  tolerance for `$` amounts written with fewer decimals
+- Lot prices (`{}`/`{{}}`) are not costs: they do not participate in balancing at all
 - Example: if one posting uses `$1.00` and another `$1.5`, precision is 2 decimals
+
+**Currency conversion inference:**
+
+A transaction with no explicit cost that is left with exactly two residual commodities of opposite
+signs is accepted — hledger infers the conversion price:
+
+```
+2024-01-15 convert
+    assets:bank:eur     €100
+    assets:bank:usd     $-110        ; accepted: two commodities, opposite signs, no @
+```
+
+An explicit `@`/`@@` cost anywhere in the transaction disables the inference: the converted sum must
+be zero within tolerance. One residual commodity, three or more, or two with the same sign are all
+unbalanced.
 
 **One amount can be omitted:**
 
@@ -507,11 +524,9 @@ assets:checking           =$-1775.30
 
 ### Balance Assignment
 
-Use `:=` to set balance (compute posting amount):
-
-```
-assets:checking    $0    := $5000    ; Sets balance to $5000
-```
+`:=` is **not** supported by hledger 1.52.4: it fails to load with `unexpected ':'`. Do not use it in
+journals. Use a balance assertion (`= AMOUNT`) and the inferred amount instead, or set the posting
+amount explicitly.
 
 ### Assertion Behavior
 
@@ -1171,6 +1186,8 @@ Accounts can hold multiple commodities:
 
 hledger supports lot syntax for tracking acquisition cost basis. These annotations are preserved
 but not used for balance calculations — only `@`/`@@` determines the transaction price.
+Verified against hledger 1.52.4: `10 AAPL {$100}` with `$-900` is accepted (the residual is a
+two-commodity conversion), while the same posting written with `@ $100` is rejected.
 
 **Ledger-style** (separate annotations, any order):
 
