@@ -18,7 +18,7 @@ func (s *Server) prepareRename(_ context.Context, params *protocol.PrepareRename
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
-	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, params.Position)
+	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, runePosition(doc, params.Position))
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}
@@ -37,7 +37,7 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	}
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
-	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, params.Position)
+	target := findDefinitionTarget(lsputil.NewPositionMapper(doc), journal, runePosition(doc, params.Position))
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}

@@ -2,6 +2,8 @@ package server
 
 import (
 	"os"
+	"strings"
+	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -21,6 +23,28 @@ func astRangeToLSP(mapper *lsputil.PositionMapper, rng ast.Range) protocol.Range
 	return protocol.Range{
 		Start: mapper.ByteToLSP(rng.Start.Offset),
 		End:   mapper.ByteToLSP(rng.End.Offset),
+	}
+}
+
+// runePosition converts an LSP position into the lexer's coordinate system.
+// LSP columns count UTF-16 code units while the AST counts runes, so hit testing
+// must convert first: otherwise an emoji earlier on the line shifts every column
+// by one and the tail of the line becomes unreachable.
+func runePosition(doc string, pos protocol.Position) protocol.Position {
+	lines := strings.Split(doc, "\n")
+	if int(pos.Line) >= len(lines) {
+		return pos
+	}
+
+	line := lines[pos.Line]
+	byteOffset := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
+	if byteOffset > len(line) {
+		byteOffset = len(line)
+	}
+
+	return protocol.Position{
+		Line:      pos.Line,
+		Character: uint32(utf8.RuneCountInString(line[:byteOffset])),
 	}
 }
 
