@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -108,4 +110,70 @@ func TestInlayHint_BareAmountsReportDefaultCommodity(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
 	assert.Equal(t, protocol.String("= -50,00 RUB"), hints[0].Label)
+}
+
+// A bare amount is not a written occurrence of the commodity for references:
+// only the declaration and the amounts that spell the symbol out are listed.
+func TestReferences_BareAmountIsNotAWrittenCommodityOccurrence(t *testing.T) {
+	srv := NewServer()
+	docURI := uri.URI("file:///test.journal")
+	content := "commodity RUB\nD 1.000,00 RUB\n\n2024-01-15 mixed\n    expenses:food   -50,00\n    assets:cash      50,00 RUB\n"
+	srv.documents.Store(docURI, content)
+
+	result, err := srv.References(context.Background(), &protocol.ReferenceParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			// Inside the `commodity RUB` declaration.
+			Position: protocol.Position{Line: 0, Character: 12},
+		},
+		Context: protocol.ReferenceContext{IncludeDeclaration: true},
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 2, "the declaration and the explicitly written amount")
+
+	var lines []uint32
+	for _, location := range result {
+		lines = append(lines, location.Range.Start.Line)
+	}
+	assert.ElementsMatch(t, []uint32{0, 5}, lines)
+}
+
+// Without a commodity declaration, go-to-definition on a written symbol falls
+// back to its first usage — and a bare amount is not such a usage, even though
+// it belongs to the same commodity.
+func TestDefinition_CommodityFallsBackToWrittenUsageNotBareAmount(t *testing.T) {
+	// The fallback needs the workspace journal, so the test uses a real file.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.journal")
+	content := "D 1.000,00 RUB\n\n2024-01-01 early\n    expenses:food   50,00\n    assets:cash\n\n2024-02-01 later\n    expenses:food   60,00 RUB\n    assets:cash\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	ts := initWorkspaceTestServer(t, dir)
+	docURI := uri.File(path)
+	require.NoError(t, ts.openDocument(docURI, content))
+
+	// Position: inside the `RUB` of the explicitly written amount.
+	result, err := ts.definition(docURI, 7, 27)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+
+	assert.Equal(t, uint32(7), result[0].Range.Start.Line,
+		"the first written RUB occurrence is the explicit amount on the same line")
+}
+
+// The commodity can reach the elided posting only through an explicitly written
+// cost. The journal spells RUB out there, so the inserted amount states it too.
+func TestCodeAction_InsertInferredAmount_KeepsWrittenCommodityFromCost(t *testing.T) {
+	ts := newTestServer()
+	ts.cliClient = nil
+	docURI := inferredTestURI
+	content := "D 1.000,00 RUB\n\n2026-08-03 Buy\n    Assets:Stocks  10 AAPL @ 100,00 RUB\n    Assets:Cash\n"
+	require.NoError(t, ts.openDocument(docURI, content))
+
+	actions := inferredAmountActions(t, ts, 4)
+	require.Len(t, actions, 1)
+	assert.Equal(t, "Insert inferred amount (-1.000,00 RUB)", actions[0].Title)
+
+	edit := requireSingleEdit(t, actions[0])
+	assert.Equal(t, "-1.000,00 RUB", strings.TrimSpace(edit.NewText))
 }

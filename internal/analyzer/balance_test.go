@@ -25,6 +25,30 @@ func TestCheckBalance_SimpleBalanced(t *testing.T) {
 	assert.Empty(t, result.Differences)
 }
 
+// Regression: `D RUB 1.000,00` (word commodity first) was not understood, and
+// recording the unrecognised directive wiped the commodity remembered from the
+// previous D line. `1.000 RUB` then fell back to the ambiguous-number heuristic
+// and meant 1, so a transaction hledger accepts looked unbalanced by 999 RUB.
+func TestCheckBalance_WordSymbolFirstDefaultCommodityKeepsTheNumberFormat(t *testing.T) {
+	input := `D 1.000,00 RUB
+commodity RUB
+D RUB 1.000,00
+
+2024-01-15 mixed
+    expenses:food     1.000 RUB
+    assets:cash      -1.000,00 RUB
+`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.True(t, result.Balanced, "hledger accepts this journal, differences: %v", result.Differences)
+	assert.Empty(t, result.Differences)
+}
+
 func TestCheckBalance_InferredAmount(t *testing.T) {
 	input := `2024-01-15 test
     expenses:food  $50

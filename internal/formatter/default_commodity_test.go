@@ -145,3 +145,19 @@ func TestFormatDocument_BareAmountKeepsItsValueWhenCommodityStyleDiffers(t *test
 	assert.Equal(t, before.String(), reparsed.Transactions[0].Postings[0].Amount.Quantity.String(),
 		"formatting must not change the value of a bare amount")
 }
+
+// The D directive can lay its commodity out on the left with a space
+// (`D RUB 1.000,00`). A bare amount writes no symbol at all, so it must be
+// measured without that symbol's separator: without the guard the alignment
+// reserves one column too many.
+func TestFormatDocument_WordSymbolFirstCommodityDoesNotAddSeparatorSpace(t *testing.T) {
+	input := "D RUB 1.000,00\n\n2024-01-15 x\n    expenses:food   1.000,00\n    assets:cash\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+
+	assert.Equal(t, "    expenses:food   1.000,00", amountLineOf(t, formatted, "expenses:food"),
+		"the bare amount is separated from its account by the usual minimum")
+}

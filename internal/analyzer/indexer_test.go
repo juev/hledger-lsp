@@ -663,3 +663,29 @@ func TestCollectDescriptionCounts(t *testing.T) {
 	assert.Equal(t, 2, counts["Grocery Store | weekly shopping"])
 	assert.Equal(t, 1, counts["Coffee Shop"])
 }
+
+// Ghost text for a payee template mirrors how the journal writes amounts: a
+// cost or assertion written bare under a default commodity stays bare, while
+// the main amount keeps the commodity the journal spells out for it.
+func TestCollectPayeeTemplates_KeepsBareDefaultCommodity(t *testing.T) {
+	input := `D 1.000,00 RUB
+
+2024-01-15 buy stocks
+    assets:stocks   10 AAPL @ 100,00
+    assets:cash    -1.000,00 = -1.000,00
+`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	postings := CollectPayeeTemplates(journal)["buy stocks"]
+	require.Len(t, postings, 2)
+
+	stock := postings[0]
+	assert.Equal(t, "AAPL", stock.Commodity)
+	assert.Equal(t, "@ 100,00", stock.Cost, "the bare cost stays bare")
+
+	cash := postings[1]
+	assert.Equal(t, "RUB", cash.Commodity, "the amount itself belongs to the default commodity")
+	assert.Equal(t, "= -1.000,00", cash.Assertion, "the bare assertion stays bare")
+}

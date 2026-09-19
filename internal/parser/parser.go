@@ -1281,6 +1281,18 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 			dir.Format = symbol + numberStr
 			p.advance()
 		}
+	case TokenText:
+		// Word commodity before the number: `D RUB 1.000,00`, which hledger
+		// reads as RUB with the directive's number format.
+		symbol := p.current.Value
+		p.advance()
+
+		if p.current.Type == TokenNumber {
+			numberStr = p.current.Value
+			dir.Symbol = symbol
+			dir.Format = symbol + " " + numberStr
+			p.advance()
+		}
 	case TokenNumber:
 		numberStr = p.current.Value
 		p.advance()
@@ -1295,14 +1307,17 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 	// The default commodity applies to every amount written without a symbol
 	// from here on — including amounts in files included later, because
 	// hledger's directive state flows into an include — so record it even when
-	// the decimal mark is already known. A D directive without a symbol clears
-	// it again.
-	p.defaultCommoditySymbol = dir.Symbol
-	p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
+	// the decimal mark is already known. A D directive with a number but no
+	// symbol clears it again; a line hledger would reject (`D RUB`, a bare `D`)
+	// leaves the state alone instead of silently dropping the commodity.
+	if numberStr != "" {
+		p.defaultCommoditySymbol = dir.Symbol
+		p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
 
-	if !p.decimalMarkExplicit && numberStr != "" {
-		if mark := inferDecimalMark(numberStr); mark != "" {
-			p.defaultCommodityDecimalMark = mark
+		if !p.decimalMarkExplicit {
+			if mark := inferDecimalMark(numberStr); mark != "" {
+				p.defaultCommodityDecimalMark = mark
+			}
 		}
 	}
 
