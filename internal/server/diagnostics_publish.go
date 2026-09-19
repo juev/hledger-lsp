@@ -164,10 +164,12 @@ func (s *Server) republishDiagnostics() {
 	})
 
 	for _, doc := range docs {
-		// The revision is read before the content, on purpose. An edit marked
-		// between the two reads can then only make the pair mismatch, which
-		// makes publishDiagnostics load the content directly. The other order
-		// could pair older content with a tree built from newer content.
+		// The revision is read here; the rope is materialized later, inside
+		// publishDiagnostics. An edit landing in between therefore leaves this
+		// revision older than the content that gets analysed, and the tree built
+		// from the newer revision will not match it — the pair can only
+		// mismatch, which makes publishDiagnostics load the content directly,
+		// never wrongly match.
 		var revision uint64
 		if s.workspace != nil {
 			revision = s.workspace.ContentRevision(uriToPath(doc.uri))

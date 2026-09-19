@@ -620,6 +620,13 @@ func (w *Workspace) applyDirtyLocked() {
 		// index entry yet. Already-known files keep theirs: their content did
 		// not change, so re-deriving it would only repeat the O(n) walk this
 		// refresh exists to avoid.
+		//
+		// A root that cannot be read — deleted, renamed, over the size limit —
+		// resolves to no journal at all. There is nothing to index from it, and
+		// the load error is already recorded on the tree.
+		if tree.Resolved == nil {
+			continue
+		}
 		for path, journal := range tree.Resolved.Files {
 			if w.index.FileIndex(path) == nil {
 				w.index.SetFileIndex(path, BuildFileIndexFromJournal(path, journal))
