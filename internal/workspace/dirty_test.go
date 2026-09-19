@@ -155,6 +155,36 @@ func TestWorkspace_MarkFileDirty_DropsOrphanedIndex(t *testing.T) {
 	assert.Nil(t, ws.index.FileIndex(one))
 }
 
+// A root journal can stop being readable — renamed by a git operation, deleted,
+// or grown past the size limit — while a file it includes is still being edited.
+// The tree then resolves to no journal at all, which is a load error to report
+// and not a reason to take the workspace down.
+func TestWorkspace_RefreshToleratesUnreadableRoot(t *testing.T) {
+	ws, dir := newDirtyWorkspace(t, map[string]string{
+		"main.journal":  "include child.journal\n\n2024-01-01 main\n    income:salary  $10\n    assets:cash\n",
+		"child.journal": "2024-01-02 child\n    expenses:books  $3\n    assets:cash\n",
+	})
+	root := filepath.Join(dir, "main.journal")
+	child := filepath.Join(dir, "child.journal")
+
+	require.NoError(t, os.Remove(root))
+
+	ws.MarkFileDirty(child, StaticContent("2024-01-02 child\n    expenses:books  $9\n    assets:cash\n"))
+
+	require.NotPanics(t, func() {
+		_ = ws.IndexSnapshot()
+	}, "an unreadable root must degrade to a load error, not a panic")
+
+	// The root is still reported, with the error that explains the empty tree.
+	var found bool
+	for _, loadErr := range ws.LoadErrors() {
+		if loadErr.Path == root && loadErr.Kind == include.ErrorFileNotFound {
+			found = true
+		}
+	}
+	assert.True(t, found, "the unreadable root must be reported as a load error")
+}
+
 func TestWorkspace_ResolvedForRootContent_StaleRevisionReturnsNil(t *testing.T) {
 	ws, dir := newDirtyWorkspace(t, map[string]string{
 		"main.journal": "2024-01-01 a\n    expenses:food  $1\n    assets:cash\n",
