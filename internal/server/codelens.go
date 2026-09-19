@@ -67,6 +67,12 @@ func buildCodeLensTitle(result *analyzer.BalanceResult, postingCount int) string
 		return fmt.Sprintf("\u2713 balanced | %d postings", postingCount)
 	}
 
+	if len(result.Differences) == 0 {
+		// More than one posting has no amount, so there is no residual to show.
+		// The lens stays informative instead of rendering an empty list.
+		return fmt.Sprintf("\u2717 unbalanced | %d postings", postingCount)
+	}
+
 	commodities := make([]string, 0, len(result.Differences))
 	for c := range result.Differences {
 		commodities = append(commodities, c)

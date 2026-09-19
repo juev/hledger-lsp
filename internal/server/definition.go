@@ -36,7 +36,7 @@ func (s *Server) definition(_ context.Context, params *protocol.DefinitionParams
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
 	mapper := lsputil.NewPositionMapper(doc)
-	target := findDefinitionTarget(mapper, journal, params.Position)
+	target := findDefinitionTarget(mapper, journal, runePosition(doc, params.Position))
 	if target == nil || target.context == DefContextUnknown {
 		return nil, nil
 	}

@@ -44,6 +44,10 @@ type hoverElement struct {
 }
 
 func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*protocol.Hover, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.Hover }) {
+		return nil, nil
+	}
+
 	doc, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
@@ -51,7 +55,7 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 
-	element := findElementAtPosition(journal, params.Position)
+	element := findElementAtPosition(journal, runePosition(doc, params.Position))
 	if element == nil || element.context == HoverUnknown {
 		return nil, nil
 	}
@@ -85,9 +89,10 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		return nil, nil
 	}
 
+	hoverRange := astRangeToLSP(lsputil.NewPositionMapper(doc), element.rng)
 	return &protocol.Hover{
 		Contents: documentationMarkupContent(content, s.clientCapabilities.hoverContentFormats),
-		Range:    astRangeToProtocol(element.rng),
+		Range:    &hoverRange,
 	}, nil
 }
 
