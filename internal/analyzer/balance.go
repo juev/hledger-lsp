@@ -157,10 +157,49 @@ func decimalPrecision(d decimal.Decimal) int32 {
 	return exp
 }
 
+// postingNativeAmount returns the amount a posting contributes to its account
+// balance: the written amount, or — for a posting that carries only a balance
+// assertion — the amount hledger infers for it. CheckJournalBalance infers that
+// amount from the running account balance; this transaction-local view falls back
+// to the asserted amount, which is the same value when the account starts at zero.
+func postingNativeAmount(p ast.Posting) *ast.Amount {
+	if p.Amount != nil {
+		return p.Amount
+	}
+	if p.BalanceAssertion != nil {
+		return &p.BalanceAssertion.Amount
+	}
+	return nil
+}
+
+// balanceSumContribution returns the commodity and signed quantity a posting
+// contributes to the balancing sum of its posting group, converting through its
+// @/@@ cost when one is present. It reports false for a posting without an amount.
+func balanceSumContribution(p ast.Posting) (string, decimal.Decimal, bool) {
+	if p.Amount == nil {
+		return "", decimal.Zero, false
+	}
+	if p.Cost == nil {
+		return p.Amount.Commodity.Symbol, p.Amount.Quantity, true
+	}
+
+	var quantity decimal.Decimal
+	if p.Cost.IsTotal {
+		quantity = p.Cost.Amount.Quantity
+	} else {
+		quantity = p.Cost.Amount.Quantity.Mul(p.Amount.Quantity.Abs())
+	}
+	if p.Amount.Quantity.IsNegative() {
+		quantity = quantity.Neg()
+	}
+	return p.Cost.Amount.Commodity.Symbol, quantity, true
+}
+
 func maxPrecisionByCommodity(postings []ast.Posting) map[string]int32 {
 	precisions := make(map[string]int32)
-	for _, p := range postings {
-		if p.Amount == nil {
+	for i := range postings {
+		amount := postingNativeAmount(postings[i])
+		if amount == nil {
 			continue
 		}
 		// hledger counts precision per commodity from the amounts denominated
@@ -169,8 +208,8 @@ func maxPrecisionByCommodity(postings []ast.Posting) map[string]int32 {
 		// precision nor the cost amount's precision tightens the cost
 		// commodity's tolerance (docs/hledger.md:178-181, verified against
 		// hledger 1.52.4: "1.005 AAPL @ $2" + "$-2.0" balances).
-		commodity := p.Amount.Commodity.Symbol
-		prec := decimalPrecision(p.Amount.Quantity)
+		commodity := amount.Commodity.Symbol
+		prec := decimalPrecision(amount.Quantity)
 		if prec > precisions[commodity] {
 			precisions[commodity] = prec
 		}
@@ -185,27 +224,25 @@ func toleranceForPrecision(precision int32) decimal.Decimal {
 func sumByCommodity(postings []ast.Posting) map[string]decimal.Decimal {
 	balances := make(map[string]decimal.Decimal)
 
-	for _, p := range postings {
+	for i := range postings {
+		p := &postings[i]
+
 		if p.Amount == nil {
+			// A posting that only asserts a balance still contributes: hledger
+			// infers the amount that makes the assertion hold, which for an
+			// account starting at zero is the asserted amount itself.
+			if p.BalanceAssertion != nil {
+				commodity := p.BalanceAssertion.Amount.Commodity.Symbol
+				balances[commodity] = balances[commodity].Add(p.BalanceAssertion.Amount.Quantity)
+			}
 			continue
 		}
 
-		if p.Cost != nil {
-			commodity := p.Cost.Amount.Commodity.Symbol
-			var quantity decimal.Decimal
-			if p.Cost.IsTotal {
-				quantity = p.Cost.Amount.Quantity
-			} else {
-				quantity = p.Cost.Amount.Quantity.Mul(p.Amount.Quantity.Abs())
-			}
-			if p.Amount.Quantity.IsNegative() {
-				quantity = quantity.Neg()
-			}
-			balances[commodity] = balances[commodity].Add(quantity)
-		} else {
-			commodity := p.Amount.Commodity.Symbol
-			balances[commodity] = balances[commodity].Add(p.Amount.Quantity)
+		commodity, quantity, ok := balanceSumContribution(*p)
+		if !ok {
+			continue
 		}
+		balances[commodity] = balances[commodity].Add(quantity)
 	}
 
 	return balances

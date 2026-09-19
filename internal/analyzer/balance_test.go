@@ -363,7 +363,13 @@ func TestCheckBalance_BalanceAssertionOnly_NotCountedAsInferred(t *testing.T) {
 	assert.True(t, result.Balanced, "balance-assertion-only postings should not count as inferred")
 }
 
-func TestCheckBalance_AllBalanceAssertionOnly_Balanced(t *testing.T) {
+func TestCheckBalance_AllBalanceAssertionOnly_Unbalanced(t *testing.T) {
+	// hledger infers an amount for an assertion-only posting so that the
+	// assertion holds, and that inferred amount counts towards the transaction
+	// balance. With every account starting at zero the inferred amounts are the
+	// asserted ones, so this journal sums to 700 CNY and hledger reports
+	// "The real postings' sum should be 0 but is: 700 CNY" (verified with
+	// `hledger -f - print`).
 	input := `2024-01-15 check balances
     assets:bank  1000 CNY
     assets:cash  = 500 CNY
@@ -376,7 +382,9 @@ func TestCheckBalance_AllBalanceAssertionOnly_Balanced(t *testing.T) {
 
 	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
 
-	assert.True(t, result.Balanced, "all balance-assertion-only postings contribute zero, explicit amounts should balance")
+	assert.False(t, result.Balanced, "assertion-only postings contribute their asserted amounts")
+	assert.Equal(t, decimal.NewFromInt(700), result.Differences["CNY"])
+	assert.Equal(t, decimal.NewFromInt(700), result.SignedDifferences["CNY"])
 }
 
 func TestCheckBalance_BalanceAssertionPlusTwoInferred_MultipleInferred(t *testing.T) {
