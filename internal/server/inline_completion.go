@@ -111,15 +111,13 @@ func (s *Server) getPayeeTemplates(uri uri.URI, content string) map[string][]ana
 	if result == nil {
 		path := uriToPath(uri)
 		if path == "" {
-			journal, _ := s.cachedJournal(uri, content)
-			result = s.analyzer.Analyze(journal)
+			result = s.cachedAnalysis(uri, content, analyzer.ExternalDeclarations{})
 		} else {
 			resolved, _ := s.loader.LoadFromContent(path, content)
 			if resolved != nil {
 				result = s.analyzer.AnalyzeResolved(resolved)
 			} else {
-				journal, _ := s.cachedJournal(uri, content)
-				result = s.analyzer.Analyze(journal)
+				result = s.cachedAnalysis(uri, content, analyzer.ExternalDeclarations{})
 			}
 		}
 	}
