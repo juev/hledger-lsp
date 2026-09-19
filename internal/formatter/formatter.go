@@ -803,7 +803,10 @@ func calculateSingleAmountDecimalPrefix(amount *ast.Amount, commodityFormats map
 
 func resolveDecimalMark(amount *ast.Amount, commodityFormats map[string]CommodityFormat) rune {
 	if commodityFormats != nil {
-		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok {
+		// A bare amount is written in the default commodity's number format, so
+		// that format also decides where its decimal mark sits; see
+		// formatAmountQuantity.
+		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok && !amount.Commodity.Inferred {
 			return cf.DecimalMark
 		}
 		if cf, ok := commodityFormats[""]; ok {
@@ -1124,7 +1127,11 @@ func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]Commod
 		return ""
 	}
 	if commodityFormats != nil {
-		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok {
+		// An amount written without a symbol is read with the default commodity
+		// number format (the D directive), so it is rendered with that same
+		// format. Writing a bare number in the style of the commodity it
+		// inherits would change what the text means when it is read again.
+		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok && !amount.Commodity.Inferred {
 			return FormatNumber(amount.Quantity, cf.NumberFormat)
 		}
 		if cf, ok := commodityFormats[""]; ok {

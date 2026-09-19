@@ -101,6 +101,9 @@ func TestFormatDocument_LeftDefaultCommodityKeepsBareAmountsBare(t *testing.T) {
 	assert.Equal(t, "10.00", amountTextOf(t, formatted, "expenses:food"),
 		"the amount is bare, without an injected symbol or separator space")
 	assert.NotContains(t, amountLineOf(t, formatted, "expenses:food"), "$")
+
+	twice := applyLineEdits(t, formatted, FormatDocument(mustParse(t, formatted), formatted))
+	assert.Equal(t, formatted, twice, "a commodity-left default commodity stays idempotent")
 }
 
 // Display paths state the commodity an amount belongs to, so FormatAmount
@@ -121,4 +124,24 @@ func TestFormatAmount_DefaultCommodityRendersAsWritten(t *testing.T) {
 	declared.Commodity.Inferred = false
 	assert.Equal(t, "10,00 RUB", FormatAmount(&declared, formats),
 		"clearing the flag states the commodity, which is what hover does")
+}
+
+// A bare amount is read with the D directive's number format, so formatting it
+// in the style of the commodity it inherits would change its value: here the
+// bare `1.234` means 1234 and must not be rewritten as `1,234.00`.
+func TestFormatDocument_BareAmountKeepsItsValueWhenCommodityStyleDiffers(t *testing.T) {
+	input := "D 1.000,00 RUB\ncommodity 1,000.00 RUB\n\n2024-01-01 mix\n    a:aa      1.234\n    b:bb     -1,234.00 RUB\n"
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	before := journal.Transactions[0].Postings[0].Amount.Quantity
+
+	formatted := applyLineEdits(t, input, FormatDocument(journal, input))
+	assert.Equal(t, "1.234,00", amountTextOf(t, formatted, "a:aa"),
+		"a bare amount is written in the D directive's format")
+
+	reparsed, errs := parser.Parse(formatted)
+	require.Empty(t, errs)
+	assert.Equal(t, before.String(), reparsed.Transactions[0].Postings[0].Amount.Quantity.String(),
+		"formatting must not change the value of a bare amount")
 }
