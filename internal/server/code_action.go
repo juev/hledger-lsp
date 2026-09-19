@@ -683,12 +683,8 @@ type declarationTarget struct {
 }
 
 func (s *Server) quickFixForUndeclaredAccount(uri uri.URI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
-	message, ok := diag.Message.(protocol.String)
-	if !ok {
-		return protocol.CodeAction{}, false
-	}
-	name, ok := extractQuotedName(string(message), "account '", "' is not declared")
-	if !ok || name == "" {
+	name := accountNameFromDiagnostic(diag)
+	if name == "" {
 		return protocol.CodeAction{}, false
 	}
 	target := selectDeclarationInsertion(s.declarationResolved(uri), uri, kindAccount)
@@ -702,12 +698,8 @@ func (s *Server) quickFixForUndeclaredAccount(uri uri.URI, diag protocol.Diagnos
 }
 
 func (s *Server) quickFixForUndeclaredCommodity(uri uri.URI, diag protocol.Diagnostic) (protocol.CodeAction, bool) {
-	message, ok := diag.Message.(protocol.String)
-	if !ok {
-		return protocol.CodeAction{}, false
-	}
-	symbol, ok := extractQuotedName(string(message), "commodity '", "' has no directive")
-	if !ok || symbol == "" {
+	symbol := commodityFromDiagnostic(diag)
+	if symbol == "" {
 		return protocol.CodeAction{}, false
 	}
 	target := selectDeclarationInsertion(s.declarationResolved(uri), uri, kindCommodity)
@@ -841,4 +833,59 @@ func extractQuotedName(msg, prefix, suffix string) (string, bool) {
 		return "", false
 	}
 	return name, true
+}
+
+// accountNameFromDiagnostic reads the account a diagnostic is about. The
+// structured data is authoritative; the message is only a fallback, and it is
+// worded differently in lint and strict mode.
+func accountNameFromDiagnostic(diag protocol.Diagnostic) string {
+	if account := dataStringField(diag.Data, "account"); account != "" {
+		return account
+	}
+
+	message, ok := diag.Message.(protocol.String)
+	if !ok {
+		return ""
+	}
+	if name, ok := extractQuotedName(string(message), "account '", "' is not declared"); ok {
+		return name
+	}
+	if name, ok := extractQuotedName(string(message), "account '", "' has not been declared (hledger --strict)"); ok {
+		return name
+	}
+	return ""
+}
+
+// commodityFromDiagnostic reads the commodity a diagnostic is about.
+func commodityFromDiagnostic(diag protocol.Diagnostic) string {
+	if symbol := dataStringField(diag.Data, "commodity"); symbol != "" {
+		return symbol
+	}
+
+	message, ok := diag.Message.(protocol.String)
+	if !ok {
+		return ""
+	}
+	symbol, ok := extractQuotedName(string(message), "commodity '", "' has no directive")
+	if !ok {
+		return ""
+	}
+	return symbol
+}
+
+// dataStringField reads a string field from a diagnostic's structured data.
+func dataStringField(data protocol.LSPAny, field string) string {
+	if len(data) == 0 {
+		return ""
+	}
+
+	var decoded map[string]any
+	if err := protocol.Unmarshal(data, &decoded); err != nil {
+		return ""
+	}
+	value, ok := decoded[field].(string)
+	if !ok {
+		return ""
+	}
+	return value
 }

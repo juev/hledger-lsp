@@ -212,3 +212,27 @@ func TestParser_HeaderFailureEmitsSingleDiagnostic(t *testing.T) {
 	require.Len(t, journal.Transactions, 1)
 	assert.Equal(t, "good", journal.Transactions[0].Description)
 }
+
+func TestParser_ClockTimeInTransactionHeaderIsText(t *testing.T) {
+	// "2024-01-15 09:30 gym" is a valid transaction whose description starts with
+	// a clock time (verified with hledger 1.52.4). The time token exists for P
+	// directives and must not break a header.
+	input := "2024-01-15 09:30 gym\n    expenses:food  $10\n    assets:cash\n"
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, "09:30 gym", tx.Description)
+	assert.Len(t, tx.Postings, 2)
+}
+
+func TestParser_ClockTimeInPayeeNoteForm(t *testing.T) {
+	input := "2024-01-15 09:30 | gym | note\n    expenses:food  $10\n    assets:cash\n"
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+	assert.Equal(t, "09:30", journal.Transactions[0].Payee)
+}

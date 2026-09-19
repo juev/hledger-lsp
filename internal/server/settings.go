@@ -227,13 +227,15 @@ func (s *Server) setSettings(settings serverSettings) {
 		s.reinitCLI(settings.CLI)
 	}
 	if s.analyzer != nil {
-		s.analyzer.BalanceTolerance = decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance)
-		s.analyzer.AccountCheck = accountCheckMode(settings.Diagnostics.AccountCheck)
+		s.analyzer.SetBalanceTolerance(decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance))
+		s.analyzer.SetAccountCheckMode(accountCheckMode(settings.Diagnostics.AccountCheck))
 	}
 	// Only a real settings change updates the debounce, so tests (and callers)
 	// that set the debounce directly keep their value.
 	if oldSettings.Diagnostics.DebounceMs != settings.Diagnostics.DebounceMs {
+		s.diagMu.Lock()
 		s.diagDebounce = time.Duration(settings.Diagnostics.DebounceMs) * time.Millisecond
+		s.diagMu.Unlock()
 	}
 	if oldSettings.Diagnostics.BalanceTolerance != settings.Diagnostics.BalanceTolerance ||
 		oldSettings.Diagnostics.AccountCheck != settings.Diagnostics.AccountCheck {
@@ -310,11 +312,6 @@ func parseSettingsFromRawWithIssues(base serverSettings, raw interface{}) (serve
 	}
 
 	return normalizeServerSettingsWithIssues(applySettingsMap(base, rawMap))
-}
-
-func parseSettingsFromLSPAny(base serverSettings, raw protocol.LSPAny) serverSettings {
-	settings, _ := parseSettingsFromLSPAnyWithIssues(base, raw)
-	return settings
 }
 
 // parseSettingsFromLSPAnyWithIssues decodes client settings and reports the
@@ -505,8 +502,14 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	if value, ok := toInt(raw["diagnostics.debounceMs"]); ok {
 		settings.Diagnostics.DebounceMs = value
 	}
-	if !accountCheckSet && hasLegacyUndeclared && legacyUndeclared {
-		settings.Diagnostics.AccountCheck = accountCheckLint
+	if !accountCheckSet && hasLegacyUndeclared {
+		// The legacy boolean maps both ways: true keeps the historical soft check,
+		// false turns it off again.
+		if legacyUndeclared {
+			settings.Diagnostics.AccountCheck = accountCheckLint
+		} else {
+			settings.Diagnostics.AccountCheck = accountCheckOff
+		}
 	}
 	if value, ok := toBool(raw["diagnostics.undeclaredCommodities"]); ok {
 		settings.Diagnostics.UndeclaredCommodities = value

@@ -72,6 +72,21 @@ func TestOracle_AssertionVerdictsMatchHledger(t *testing.T) {
     b:bb  = $50
     a:aa  $0
 `,
+		"assertion sees only earlier postings": `2024-01-01 first
+    assets:cash  $100
+    equity
+
+2024-01-02 second
+    assets:cash  $10 = $110
+    assets:cash  $-30
+    expenses  $20
+`,
+		"one elided posting per group": `2024-01-01 x
+    a  $10
+    b
+    [c]  $5
+    [d]
+`,
 	}
 
 	for name, input := range cases {

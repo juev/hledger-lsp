@@ -173,12 +173,16 @@ func (l *Lexer) scanInLine() Token {
 		if l.looksLikeDate() {
 			return l.scanDate()
 		}
-		if l.looksLikeTime() {
-			return l.scanTime()
-		}
-		// Header line: digits are part of description
+		// Header line: digits are part of description. A clock time in a payee
+		// ("2024-01-15 09:30 gym") is description text, not a time token, so this
+		// check must come before the time branch.
 		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
 			return l.scanText()
+		}
+		// hledger allows a clock time between the date and the commodity of a P
+		// directive.
+		if l.looksLikeTime() {
+			return l.scanTime()
 		}
 		return l.scanNumber()
 	case l.isAccountStart(ch) || l.isAccountStartRune(r):

@@ -279,3 +279,39 @@ func TestCompletion_ContextIsEmptyForDirectiveArguments(t *testing.T) {
 		assert.NotEqual(t, "Commodity", completionDetailKind(item))
 	}
 }
+
+func TestCompletion_CRLFDocumentStillCompletesAfterStatusMark(t *testing.T) {
+	// Windows clients send CRLF; the server normalizes on ingestion, and every
+	// position conversion downstream must survive that.
+	ts := newTestServer()
+	docURI := uri.URI("file:///crlf-status.journal")
+
+	require.NoError(t, ts.openDocument(docURI, "2024-01-15 shop\r\n    expenses:food  $50.00\r\n    assets:cash\r\n\r\n2024-01-16 shop\r\n    * exp\r\n"))
+	waitForDocument(t, ts.client, docURI)
+
+	list, err := ts.completion(docURI, 5, 9)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Items, 1)
+	assert.Equal(t, "expenses:food", list.Items[0].Label)
+
+	edit, ok := list.Items[0].TextEdit.(*protocol.TextEdit)
+	require.True(t, ok)
+	assert.Equal(t, uint32(6), edit.Range.Start.Character)
+	assert.Equal(t, uint32(5), edit.Range.Start.Line)
+}
+
+func TestCompletion_CRLFDocumentStillCompletesCommodityAfterMarker(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///crlf-marker.journal")
+
+	content := "commodity $\r\n\r\n2024-01-15 shop\r\n    expenses:food  $50.00 @ $\r\n    assets:cash\r\n"
+	require.NoError(t, ts.openDocument(docURI, content))
+	waitForDocument(t, ts.client, docURI)
+
+	list, err := ts.completion(docURI, 3, 29)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.NotEmpty(t, list.Items, "a CRLF document must still complete the commodity after '@'")
+	assert.Equal(t, "$", list.Items[0].Label)
+}

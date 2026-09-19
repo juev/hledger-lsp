@@ -2,8 +2,13 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewClient(t *testing.T) {
@@ -160,4 +165,29 @@ func TestClient_Run_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
+}
+
+func TestClient_AvailabilityProbeIsLazyAndTimeBoxed(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "slow-hledger")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nsleep 5\n"), 0o700))
+
+	start := time.Now()
+	client := NewClient(script, 100*time.Millisecond)
+	constructed := time.Since(start)
+
+	assert.Less(t, constructed, time.Second,
+		"constructing a client must not wait for the binary: the server does this while handling initialize")
+
+	probeStart := time.Now()
+	available := client.Available()
+	probe := time.Since(probeStart)
+
+	assert.False(t, available, "a binary that never answers is not available")
+	assert.Less(t, probe, 3*time.Second, "the probe must be bounded by the configured timeout")
+
+	// The probe is remembered, so a second call is free.
+	secondStart := time.Now()
+	assert.False(t, client.Available())
+	assert.Less(t, time.Since(secondStart), 100*time.Millisecond, "the probe result is cached")
 }
