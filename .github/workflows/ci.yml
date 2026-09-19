@@ -43,3 +43,9 @@ jobs:
         with:
           go-version: '1.27'
       - run: go build -v ./...
+      # The NFR tests are tagged `perf` and run on demand via `make perf`, not
+      # in CI: ratio thresholds on a shared runner are noise, and a gate that
+      # flakes gets switched off. Compile them here so the suite cannot rot
+      # unnoticed between runs.
+      - name: Compile NFR performance tests
+        run: go vet -tags perf ./internal/benchmark/
