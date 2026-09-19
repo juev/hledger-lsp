@@ -34,6 +34,11 @@ func TestCachedParse_RebuildsOnContentChange(t *testing.T) {
 	assert.NotSame(t, first.journal, changed.journal, "changed content must reparse")
 }
 
+// Invalidation drops the server's per-document record: the next request builds
+// a fresh cachedDoc, so the derived balances and effects it memoized are
+// recomputed. The journal itself may come back from the loader's
+// content-keyed cache, which is shared and bounded on its own terms — that is
+// the point of having one parse per version rather than one per consumer.
 func TestCachedParse_RebuildsAfterInvalidate(t *testing.T) {
 	srv := NewServer()
 	uri := uri.URI("file:///a.journal")
@@ -42,7 +47,8 @@ func TestCachedParse_RebuildsAfterInvalidate(t *testing.T) {
 	srv.invalidateParseCache(uri)
 	second := srv.cachedParse(uri, sampleJournal)
 
-	assert.NotSame(t, first.journal, second.journal, "invalidation must force a reparse")
+	assert.NotSame(t, first, second, "invalidation must drop the per-document record")
+	assert.Equal(t, first.journal, second.journal, "the same content describes the same journal")
 }
 
 func TestCachedParse_ConcurrentSafe(t *testing.T) {

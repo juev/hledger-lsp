@@ -1,6 +1,7 @@
 package include
 
 import (
+	"container/list"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,6 +34,12 @@ type Loader struct {
 	cache     map[string]string
 	canonical map[string]string // absolute path → symlink-resolved path
 	limits    Limits
+
+	// parseMu guards the context-free parse cache; see parse_cache.go.
+	parseMu    sync.Mutex
+	parses     map[string]*parseCacheEntry
+	parseLRU   *list.List
+	parseBytes int
 }
 
 func NewLoader() *Loader {
@@ -40,6 +47,8 @@ func NewLoader() *Loader {
 		cache:     make(map[string]string),
 		canonical: make(map[string]string),
 		limits:    DefaultLimits(),
+		parses:    make(map[string]*parseCacheEntry),
+		parseLRU:  list.New(),
 	}
 }
 

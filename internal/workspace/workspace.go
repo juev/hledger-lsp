@@ -578,7 +578,9 @@ func (w *Workspace) applyDirtyLocked() {
 		if oldIndex != nil {
 			oldIncludes = append([]string(nil), oldIndex.Includes...)
 		}
-		journal, _ := parser.Parse(content)
+		// Shared with the server's request-time parse, so the version is parsed
+		// once rather than once per consumer.
+		journal, _ := w.loader.ParseCached(content)
 		fileIndex := BuildFileIndexFromJournal(path, journal)
 		w.index.SetFileIndex(path, fileIndex)
 		w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
