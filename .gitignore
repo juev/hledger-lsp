@@ -50,3 +50,6 @@ Thumbs.db
 
 # Override global ignore for project docs
 !CLAUDE.md
+
+# Local agent scratch tracking (kept on disk, deliberately not versioned)
+tasks.md
