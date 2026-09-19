@@ -82,7 +82,7 @@ func findCommodityHighlights(mapper *lsputil.PositionMapper, journal *ast.Journa
 		tx := &journal.Transactions[i]
 		for j := range tx.Postings {
 			p := &tx.Postings[j]
-			if p.Amount != nil && p.Amount.Commodity.Symbol == symbol {
+			if p.Amount != nil && p.Amount.Commodity.WrittenSymbol() == symbol {
 				highlights = append(highlights, protocol.DocumentHighlight{
 					Range: astRangeToLSP(mapper, p.Amount.Commodity.Range),
 					Kind:  protocol.DocumentHighlightKindRead,

@@ -325,6 +325,55 @@ func TestAnalyzer_UndeclaredCommodity_Amount(t *testing.T) {
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY diagnostic for EUR")
 }
 
+// A bare amount inherits the default commodity, and hledger's strict commodity
+// check counts it as that commodity — pointing at the bare number, which is the
+// only text there is.
+func TestAnalyzer_UndeclaredCommodity_InferredFromDefaultCommodity(t *testing.T) {
+	input := `commodity USD
+D 1.000,00 RUB
+
+2024-01-15 test
+    expenses:food  50,00
+    assets:cash   -50,00`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	a := New()
+	result := a.Analyze(journal)
+
+	var found []Diagnostic
+	for _, d := range result.Diagnostics {
+		if d.Code == "UNDECLARED_COMMODITY" {
+			found = append(found, d)
+		}
+	}
+	require.Len(t, found, 2, "every bare amount is a RUB occurrence")
+	assert.Equal(t, "commodity 'RUB' has no directive", found[0].Message)
+	for i, wantLine := range []int{5, 6} {
+		assert.Equal(t, wantLine, found[i].Range.Start.Line,
+			"the range points at the amount, not at an empty commodity position")
+		assert.Greater(t, found[i].Range.End.Column, found[i].Range.Start.Column)
+	}
+}
+
+func TestAnalyzer_DeclaredDefaultCommodityIsNotReported(t *testing.T) {
+	input := `commodity RUB
+D 1.000,00 RUB
+
+2024-01-15 test
+    expenses:food  50,00
+    assets:cash   -50,00`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+
+	result := New().Analyze(journal)
+	for _, d := range result.Diagnostics {
+		assert.NotEqual(t, "UNDECLARED_COMMODITY", d.Code, "RUB is declared: %s", d.Message)
+	}
+}
+
 func TestAnalyzer_UndeclaredCommodity_Cost(t *testing.T) {
 	input := `commodity BTC
 

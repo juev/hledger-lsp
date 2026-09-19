@@ -89,7 +89,7 @@ func buildSelectionRange(mapper *lsputil.PositionMapper, journal *ast.Journal, p
 				if rangeContainsPosition(amountRange, pos) {
 					amountSel := protocol.SelectionRange{Range: amountRange, Parent: &postingSel}
 					commodityRange := astRangeToLSP(mapper, p.Amount.Commodity.Range)
-					if p.Amount.Commodity.Symbol != "" && rangeContainsPosition(commodityRange, pos) {
+					if p.Amount.Commodity.WrittenSymbol() != "" && rangeContainsPosition(commodityRange, pos) {
 						return protocol.SelectionRange{Range: commodityRange, Parent: &amountSel}
 					}
 					return amountSel

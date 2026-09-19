@@ -106,7 +106,7 @@ func findCommodityReferences(symbol string, resolved *include.ResolvedJournal, c
 			tx := &journal.Transactions[i]
 			for j := range tx.Postings {
 				p := &tx.Postings[j]
-				if p.Amount != nil && p.Amount.Commodity.Symbol == symbol {
+				if p.Amount != nil && p.Amount.Commodity.WrittenSymbol() == symbol {
 					locations = append(locations, protocol.Location{
 						URI:   pathToURI(filePath),
 						Range: mappers.rangeIn(filePath, p.Amount.Commodity.Range),

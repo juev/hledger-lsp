@@ -125,10 +125,26 @@ type Amount struct {
 }
 
 type Commodity struct {
-	Symbol   string
-	Quoted   bool
+	Symbol string
+	Quoted bool
+	// Inferred marks an amount that was written without a commodity symbol and
+	// inherited the journal's default commodity (the `D` directive) instead.
+	// The amount belongs to Symbol for every semantic purpose, but it has no
+	// commodity text of its own: Range is the zero Range and features that
+	// point at written text must use WrittenSymbol.
+	Inferred bool
 	Position CommodityPosition
 	Range    Range
+}
+
+// WrittenSymbol returns the commodity symbol as it appears in the source, or
+// "" when the amount was written without one. Use it wherever a range or a
+// rendered amount is meant to mirror the document; use Symbol for semantics.
+func (c Commodity) WrittenSymbol() string {
+	if c.Inferred {
+		return ""
+	}
+	return c.Symbol
 }
 
 type CommodityPosition int

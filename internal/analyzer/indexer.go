@@ -481,7 +481,7 @@ func renderTemplateAmount(amount ast.Amount) string {
 		quantity = amount.Quantity.String()
 	}
 
-	symbol := amount.Commodity.Symbol
+	symbol := amount.Commodity.WrittenSymbol()
 	if symbol == "" {
 		return quantity
 	}

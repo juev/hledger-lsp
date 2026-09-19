@@ -126,6 +126,9 @@ func formatInferredAmount(
 		}
 		break
 	}
+	// A journal that never spells this commodity out — every amount inherits it
+	// from the default commodity directive — keeps the inserted amount bare too.
+	amount.Commodity.Inferred = !transactionWritesCommodity(transaction, commodity)
 	if places > 0 {
 		amount.RawQuantity = quantity.StringFixed(places)
 	}
@@ -134,6 +137,41 @@ func formatInferredAmount(
 	}
 
 	return formatter.FormatAmount(amount, formats)
+}
+
+// transactionWritesCommodity reports whether the transaction spells the
+// commodity symbol out anywhere: in a posting amount, a cost, a lot price or a
+// balance assertion.
+func transactionWritesCommodity(transaction *ast.Transaction, commodity string) bool {
+	for i := range transaction.Postings {
+		for _, amt := range postingAmounts(&transaction.Postings[i]) {
+			if amt != nil && amt.Commodity.Symbol == commodity && !amt.Commodity.Inferred {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// postingAmounts lists every amount a posting writes.
+func postingAmounts(posting *ast.Posting) []*ast.Amount {
+	amounts := []*ast.Amount{posting.Amount}
+	if posting.Cost != nil {
+		amounts = append(amounts, &posting.Cost.Amount)
+	}
+	if posting.LotPrice != nil {
+		amounts = append(amounts, posting.LotPrice.Cost)
+	}
+	if posting.BalanceAssertion != nil {
+		amounts = append(amounts, &posting.BalanceAssertion.Amount)
+		if posting.BalanceAssertion.Cost != nil {
+			amounts = append(amounts, &posting.BalanceAssertion.Cost.Amount)
+		}
+		if posting.BalanceAssertion.LotPrice != nil {
+			amounts = append(amounts, posting.BalanceAssertion.LotPrice.Cost)
+		}
+	}
+	return amounts
 }
 
 // postingLineInRange reports whether the posting sits on one of the lines the
