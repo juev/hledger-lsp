@@ -211,3 +211,31 @@ func TestParse_DefaultCommodityAppliesToCosts(t *testing.T) {
 	assert.Equal(t, "RUB", cost.Amount.Commodity.Symbol)
 	assert.True(t, cost.Amount.Commodity.Inferred)
 }
+
+// A bare number is read with the D directive's number format, which can differ
+// from the style declared for the commodity itself. hledger 1.52.4 reads the
+// bare `1.234` below as 1234 (D: dot = thousands, comma = decimal) while the
+// explicitly written RUB amount follows `commodity 1,000.00 RUB`.
+func TestParse_DefaultCommodityNumberFormatWinsForBareAmounts(t *testing.T) {
+	input := `D 1.000,00 RUB
+commodity 1,000.00 RUB
+
+2024-01-01 mix
+    a:aa      1.234
+    b:bb     -1,234.00 RUB
+`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	bare := journal.Transactions[0].Postings[0].Amount
+	written := journal.Transactions[0].Postings[1].Amount
+	require.NotNil(t, bare)
+	require.NotNil(t, written)
+
+	assert.Equal(t, "1234", bare.Quantity.String(), "the D directive's format decides")
+	assert.True(t, bare.Commodity.Inferred)
+	assert.Equal(t, "-1234", written.Quantity.String(), "an explicit amount keeps the commodity's style")
+	assert.False(t, written.Commodity.Inferred)
+}

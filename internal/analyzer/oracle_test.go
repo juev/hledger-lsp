@@ -120,6 +120,16 @@ commodity RUB
     assets:cash   = 1.000,00
     equity
 `,
+		// A bare number follows the D directive's number format even when the
+		// commodity itself declares another style: `1.234` is 1234 here, which
+		// is what makes the transaction balance.
+		"bare numbers follow the default commodity number format": `D 1.000,00 RUB
+commodity 1,000.00 RUB
+
+2024-01-01 mix
+    a:aa      1.234
+    b:bb     -1,234.00 RUB
+`,
 		// The default commodity is not a wildcard: a non-zero assertion in
 		// another commodity still fails in hledger.
 		"default commodity does not match another commodity": `D 1.000,00 RUB
