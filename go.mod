@@ -1,6 +1,6 @@
 module github.com/juev/hledger-lsp
 
-go 1.26
+go 1.27
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.2

@@ -279,9 +279,7 @@ func TestServer_Initialize_WithRootURI(t *testing.T) {
 	srv := NewServer()
 
 	rootURI := uri.URI("file:///tmp/test-workspace")
-	params := &protocol.InitializeParams{
-		RootURI: &rootURI,
-	}
+	params := initParamsWithRootURI(rootURI)
 
 	_, err := srv.Initialize(context.Background(), params)
 	require.NoError(t, err)
@@ -462,7 +460,7 @@ func TestServer_DidClose_RestoresWorkspaceIndexFromDisk(t *testing.T) {
 
 	srv := NewServer()
 	rootURI := uri.File(tmpDir)
-	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
+	_, err := srv.Initialize(context.Background(), initParamsWithRootURI(rootURI))
 	require.NoError(t, err)
 	require.NoError(t, srv.workspace.Initialize())
 
@@ -945,7 +943,7 @@ include transactions.journal`
 	srv.SetClient(client)
 
 	rootURI := uri.File(tmpDir)
-	initParams := &protocol.InitializeParams{RootURI: &rootURI}
+	initParams := initParamsWithRootURI(rootURI)
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
@@ -1015,7 +1013,7 @@ include transactions.journal`
 	srv := NewServer()
 
 	rootURI := uri.File(tmpDir)
-	initParams := &protocol.InitializeParams{RootURI: &rootURI}
+	initParams := initParamsWithRootURI(rootURI)
 	_, err = srv.Initialize(context.Background(), initParams)
 	require.NoError(t, err)
 
@@ -1155,7 +1153,7 @@ include 2025.journal`
 	srv.SetClient(client)
 
 	rootURI := uri.File(tmpDir)
-	_, err = srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
+	_, err = srv.Initialize(context.Background(), initParamsWithRootURI(rootURI))
 	require.NoError(t, err)
 
 	err = srv.Initialized(context.Background(), &protocol.InitializedParams{})
@@ -1713,7 +1711,7 @@ func TestInitialize_RootURIParsing(t *testing.T) {
 func TestInitialize_RootURIFromRootURI(t *testing.T) {
 	srv := NewServer()
 	rootURI := uri.URI("file:///tmp/fallback-workspace")
-	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{RootURI: &rootURI})
+	_, err := srv.Initialize(context.Background(), initParamsWithRootURI(rootURI))
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/fallback-workspace", srv.rootURI)
 }

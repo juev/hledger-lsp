@@ -71,6 +71,15 @@ func (m *integrationMockClient) getLastDiagnostics() *protocol.PublishDiagnostic
 	return &result
 }
 
+// initParamsWithRootURI builds InitializeParams carrying the legacy RootURI
+// field. Initialize falls back to RootURI when the client reports no workspace
+// folders, so tests here exercise a live path; the field itself is deprecated
+// in favour of workspaceFolders, hence the single suppression in this helper
+// instead of one at every call site.
+func initParamsWithRootURI(rootURI uri.URI) *protocol.InitializeParams {
+	return &protocol.InitializeParams{RootURI: &rootURI} //nolint:staticcheck // legacy fallback path under test
+}
+
 type testServer struct {
 	*Server
 	client *integrationMockClient
