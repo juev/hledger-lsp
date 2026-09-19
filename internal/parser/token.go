@@ -37,6 +37,7 @@ const (
 	TokenDoubleLBrace     // {{
 	TokenRBrace           // }
 	TokenDoubleRBrace     // }}
+	TokenTime             // clock time HH:MM[:SS] in a P directive
 )
 
 type Position struct {
@@ -60,7 +61,7 @@ func (t TokenType) String() string {
 		"LParen", "RParen", "LBracket", "RBracket", "Pipe", "Colon", "Semicolon",
 		"Sign", "Tilde", "AutoRule", "QuotedCommodity",
 		"EqualsStar", "DoubleEqualsStar",
-		"LBrace", "DoubleLBrace", "RBrace", "DoubleRBrace",
+		"LBrace", "DoubleLBrace", "RBrace", "DoubleRBrace", "Time",
 	}
 	if int(t) < len(names) {
 		return names[t]

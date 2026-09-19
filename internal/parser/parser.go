@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -12,8 +13,26 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 )
 
+// Parse error codes travel to the client on published diagnostics so editors and
+// tooling can filter or group them without matching message text.
+const (
+	CodeParseError        = "PARSE_ERROR"
+	CodeParseUnexpected   = "PARSE_UNEXPECTED"
+	CodeInvalidDate       = "INVALID_DATE"
+	CodeExpectedAmount    = "EXPECTED_AMOUNT"
+	CodeExpectedCommodity = "EXPECTED_COMMODITY"
+	CodeExpectedAccount   = "EXPECTED_ACCOUNT"
+	CodeUnknownDirective  = "UNKNOWN_DIRECTIVE"
+	CodeMalformedInclude  = "MALFORMED_INCLUDE"
+)
+
+// defaultYearForPartialDates supplies the year hledger assumes when a date is
+// written without one (for example "01-15"). It is a variable so tests can pin it.
+var defaultYearForPartialDates = func() int { return time.Now().Year() }
+
 type ParseError struct {
 	Message string
+	Code    string
 	Pos     Position
 	End     Position
 }
@@ -100,6 +119,10 @@ type Parser struct {
 	checkpoints                  []ContextCheckpoint
 	resolveInclude               IncludeResolver
 	initialCommodityDecimalMarks map[string]string
+	// postingComments collects indented comment lines that belong to the
+	// transaction being parsed: hledger applies their tags to the transaction and
+	// to all of its postings.
+	postingComments []ast.Comment
 }
 
 // Parse turns journal text into an AST. The input must already use LF line
@@ -195,14 +218,14 @@ func (p *Parser) parseJournal() *ast.Journal {
 			// Whitespace-only lines: consume indent, newline handled by next iteration
 			p.advance()
 			if p.current.Type != TokenNewline && p.current.Type != TokenEOF {
-				p.error("unexpected content: %s", p.current.Value)
+				p.errorCode(CodeParseUnexpected, "unexpected content: %s", p.current.Value)
 				p.skipToNextLine()
 			}
 		default:
 			if p.current.Value != "" {
-				p.error("unexpected content: %s", p.current.Value)
+				p.errorCode(CodeParseUnexpected, "unexpected content: %s", p.current.Value)
 			} else {
-				p.error("unexpected content")
+				p.errorCode(CodeParseUnexpected, "unexpected content")
 			}
 			p.skipToNextLine()
 		}
@@ -219,7 +242,10 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 
 	date := p.parseDate()
 	if date == nil {
+		// A header the parser cannot read takes its whole block with it: report
+		// the header once instead of one "unexpected content" per posting.
 		p.skipToNextLine()
+		p.skipIndentedBlock()
 		return nil
 	}
 	tx.Date = *date
@@ -270,9 +296,17 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 	}
 
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
 		posting := p.parsePosting()
 		if posting != nil {
 			tx.Postings = append(tx.Postings, *posting)
+		}
+		// An indented comment line inside a transaction is a transaction
+		// comment: hledger applies its tags to the transaction and to every
+		// posting, so it must not be discarded.
+		if len(p.postingComments) > 0 {
+			tx.Comments = append(tx.Comments, p.postingComments...)
+			p.postingComments = nil
 		}
 		if p.current.Type == TokenNewline {
 			p.advance()
@@ -464,22 +498,28 @@ func (p *Parser) parseDate() *ast.Date {
 
 	switch len(parts) {
 	case 2:
-		if p.defaultYear == 0 {
-			p.errorAt(pos, end, "partial date requires Y directive: %s", value)
-			return nil
+		// hledger accepts a date without a year (a "smart date") and fills in
+		// the current year; it does not require a Y directive.
+		year := p.defaultYear
+		if year == 0 {
+			year = defaultYearForPartialDates()
 		}
 		month, err := strconv.Atoi(parts[0])
 		if err != nil {
-			p.errorAt(pos, end, "invalid month: %s", parts[0])
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid month: %s", parts[0])
 			return nil
 		}
 		day, err := strconv.Atoi(parts[1])
 		if err != nil {
-			p.errorAt(pos, end, "invalid day: %s", parts[1])
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid day: %s", parts[1])
+			return nil
+		}
+		if !IsValidCalendarDate(year, month, day) {
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date: %s", value)
 			return nil
 		}
 		return &ast.Date{
-			Year:  p.defaultYear,
+			Year:  year,
 			Month: month,
 			Day:   day,
 			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
@@ -487,17 +527,21 @@ func (p *Parser) parseDate() *ast.Date {
 	case 3:
 		year, err := strconv.Atoi(parts[0])
 		if err != nil {
-			p.errorAt(pos, end, "invalid year: %s", parts[0])
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid year: %s", parts[0])
 			return nil
 		}
 		month, err := strconv.Atoi(parts[1])
 		if err != nil {
-			p.errorAt(pos, end, "invalid month: %s", parts[1])
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid month: %s", parts[1])
 			return nil
 		}
 		day, err := strconv.Atoi(parts[2])
 		if err != nil {
-			p.errorAt(pos, end, "invalid day: %s", parts[2])
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid day: %s", parts[2])
+			return nil
+		}
+		if !IsValidCalendarDate(year, month, day) {
+			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date: %s", value)
 			return nil
 		}
 		return &ast.Date{
@@ -507,8 +551,36 @@ func (p *Parser) parseDate() *ast.Date {
 			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
 		}
 	default:
-		p.errorAt(pos, end, "invalid date format: %s", value)
+		p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date format: %s", value)
 		return nil
+	}
+}
+
+// IsValidCalendarDate reports whether a year/month/day combination exists in the
+// proleptic Gregorian calendar. hledger refuses to load a journal containing an
+// impossible date such as 2024-02-31, so the parser and the analyzer's date-tag
+// validation share this rule. A zero year means "no year given", which passes.
+func IsValidCalendarDate(year, month, day int) bool {
+	if month < 1 || month > 12 || day < 1 {
+		return false
+	}
+	if year == 0 {
+		return true
+	}
+	return day <= daysInMonth(year, month)
+}
+
+func daysInMonth(year, month int) int {
+	switch month {
+	case 1, 3, 5, 7, 8, 10, 12:
+		return 31
+	case 4, 6, 9, 11:
+		return 30
+	default:
+		if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+			return 29
+		}
+		return 28
 	}
 }
 
@@ -533,7 +605,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 	p.advance()
 
 	if p.current.Type == TokenComment {
-		p.parseComment()
+		p.postingComments = append(p.postingComments, p.parseComment())
 		return nil
 	}
 
@@ -561,7 +633,7 @@ func (p *Parser) parsePosting() *ast.Posting {
 	}
 
 	if p.current.Type != TokenAccount {
-		p.error("expected account name")
+		p.errorCode(CodeExpectedAccount, "expected account name")
 		p.skipToNextLine()
 		return nil
 	}
@@ -598,6 +670,19 @@ func (p *Parser) parsePosting() *ast.Posting {
 		posting.Comment = p.current.Value
 		posting.Tags = parseTags(p.current.Value, p.current.Pos)
 		p.advance()
+	}
+
+	// Text the posting grammar does not cover (for example the `:=` balance
+	// assignment, which hledger 1.52 rejects) is reported and recorded so the
+	// formatter can leave the line alone instead of rewriting it and losing the
+	// text. Skipping to the next line keeps the rest of the transaction intact.
+	if p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenIndent {
+		posting.UnparsedTail = ast.Range{
+			Start: toASTPosition(p.current.Pos),
+			End:   toASTPosition(p.current.End),
+		}
+		p.errorCode(CodeParseUnexpected, "unexpected content: %s", p.current.Value)
+		p.skipToNextLine()
 	}
 
 	posting.Range.End = toASTPosition(p.current.Pos)
@@ -776,6 +861,14 @@ func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
 		closingToken = TokenDoubleRBrace
 	}
 
+	// hledger allows a fixed lot cost, written as {=PRICE} or {{=PRICE}}: the
+	// explicit `=` means the amount states the whole lot cost rather than a
+	// per-unit price.
+	if p.current.Type == TokenEquals {
+		lot.Fixed = true
+		p.advance()
+	}
+
 	if p.current.Type == closingToken {
 		lot.Range.End = toASTPosition(p.current.End)
 		p.advance()
@@ -907,7 +1000,7 @@ func (p *Parser) parseDirective() ast.Directive {
 
 func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 	if p.current.Type != TokenAccount && p.current.Type != TokenText {
-		p.error("expected account name")
+		p.errorCode(CodeExpectedAccount, "expected account name")
 		p.skipToNextLine()
 		return nil
 	}
@@ -1034,7 +1127,7 @@ func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {
 
 	pathStr := strings.TrimSpace(path.String())
 	if pathStr == "" {
-		p.error("expected file path")
+		p.errorCode(CodeMalformedInclude, "expected file path")
 		p.skipToNextLine()
 		return nil
 	}
@@ -1060,6 +1153,12 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	}
 	dir.Date = *date
 
+	// hledger allows an optional clock time between the date and the commodity:
+	// P 2024-01-15 09:30 EUR $1.08
+	if p.current.Type == TokenTime {
+		p.advance()
+	}
+
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
@@ -1071,7 +1170,7 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 		}
 		p.advance()
 	} else {
-		p.error("expected commodity")
+		p.errorCode(CodeExpectedCommodity, "expected commodity")
 		p.skipToNextLine()
 		return nil
 	}
@@ -1440,7 +1539,7 @@ func (p *Parser) parseEndDirective(_ Position) ast.Directive {
 			p.skipToNextLine()
 			return nil
 		default:
-			p.error("unknown 'end' directive type: %s", endType)
+			p.errorCode(CodeUnknownDirective, "unknown 'end' directive type: %s", endType)
 			p.skipToNextLine()
 			return nil
 		}
@@ -1695,13 +1794,41 @@ func (p *Parser) skipToNextLine() {
 	}
 }
 
+// skipIndentedBlock consumes the posting-looking lines that follow a failed
+// transaction header, so one broken header line produces a single diagnostic
+// instead of one "unexpected content" error per posting.
+func (p *Parser) skipIndentedBlock() {
+	for {
+		switch p.current.Type {
+		case TokenNewline:
+			p.advance()
+		case TokenIndent:
+			p.skipToNextLine()
+		default:
+			return
+		}
+	}
+}
+
 func (p *Parser) error(format string, args ...any) {
-	p.errorAt(p.current.Pos, p.current.End, format, args...)
+	p.errorCodeAt(CodeParseError, p.current.Pos, p.current.End, format, args...)
 }
 
 func (p *Parser) errorAt(pos, end Position, format string, args ...any) {
+	p.errorCodeAt(CodeParseError, pos, end, format, args...)
+}
+
+// errorCode records an error under an explicit code, using the current token as
+// the range.
+func (p *Parser) errorCode(code string, format string, args ...any) {
+	p.errorCodeAt(code, p.current.Pos, p.current.End, format, args...)
+}
+
+// errorCodeAt records an error under an explicit code and range.
+func (p *Parser) errorCodeAt(code string, pos, end Position, format string, args ...any) {
 	p.errors = append(p.errors, ParseError{
 		Message: fmt.Sprintf(format, args...),
+		Code:    code,
 		Pos:     pos,
 		End:     end,
 	})

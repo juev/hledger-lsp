@@ -9,6 +9,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 type Analyzer struct {
@@ -593,7 +594,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		if strings.TrimSpace(tag.Value) == "" {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
-				Severity: SeverityWarning,
+				Severity: SeverityError,
 				Code:     "EMPTY_DATE_TAG",
 				Message:  fmt.Sprintf("tag '%s' requires a date value", tag.Name),
 			})
@@ -603,7 +604,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		if !isValidDateValue(tag.Value) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
-				Severity: SeverityWarning,
+				Severity: SeverityError,
 				Code:     "INVALID_DATE_TAG",
 				Message:  fmt.Sprintf("tag '%s' has invalid date value: %s", tag.Name, tag.Value),
 			})
@@ -627,14 +628,16 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	return diags
 }
 
+// isValidDateValue reports whether a date:/date2: tag value is one hledger
+// accepts. hledger requires a day: "; date:2024-01" fails to load while
+// "; date:1/5" is a valid smart date, so a year-month value is rejected here.
 func isValidDateValue(value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
 	}
 
-	// Simple date validation: YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
-	// Also allow partial dates like MM-DD or M-D
+	// Accepted: YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD, MM-DD, M-D.
 	parts := strings.FieldsFunc(value, func(r rune) bool {
 		return r == '-' || r == '/' || r == '.'
 	})
@@ -643,13 +646,24 @@ func isValidDateValue(value string) bool {
 		return false
 	}
 
+	numbers := make([]int, 0, len(parts))
 	for _, part := range parts {
+		number := 0
+		if part == "" {
+			return false
+		}
 		for _, ch := range part {
 			if ch < '0' || ch > '9' {
 				return false
 			}
+			number = number*10 + int(ch-'0')
 		}
+		numbers = append(numbers, number)
 	}
 
-	return true
+	year, month, day := 0, numbers[0], numbers[1]
+	if len(numbers) == 3 {
+		year, month, day = numbers[0], numbers[1], numbers[2]
+	}
+	return parser.IsValidCalendarDate(year, month, day)
 }
