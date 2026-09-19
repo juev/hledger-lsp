@@ -1,4 +1,4 @@
-//go:build !race
+//go:build perf
 
 package benchmark
 
@@ -190,63 +190,165 @@ func newBenchmarkServerWithWorkspace(t *testing.T, dir string) *server.Server {
 	return srv
 }
 
+// Ratios are asserted relative to the 1k baseline rather than against absolute
+// wall-clock limits: shared CI runners vary enough that absolute thresholds
+// flake, while a linear regression in the document-size term moves the ratio
+// regardless of how fast the machine is.
+const (
+	// didChangeRatioLimit bounds 10k/1k for DidChange alone. The handler must
+	// not do document-size work at all, so 2x leaves room for measurement noise.
+	didChangeRatioLimit = 2.0
+	// perKeystrokeCycleRatioLimit bounds 10k/1k for DidChange + Completion. The
+	// cycle still re-parses once per keystroke, so it cannot be flat; 4x against
+	// a linear 11x is the achievable bar without incremental AST parsing.
+	perKeystrokeCycleRatioLimit = 4.0
+	// keystrokeBurstRatioLimit bounds the per-keystroke cost of a burst with one
+	// trailing request, relative to a full cycle per keystroke. Coalescing must
+	// make a burst keystroke at least 2x cheaper than a cold cycle.
+	keystrokeBurstRatioLimit = 0.5
+)
+
+// keystrokeServer builds an initialized workspace-mode server over a generated
+// journal and returns it with the document URI. Workspace mode matters: without
+// it DidChange takes the no-workspace fallback and skips the hot path.
+func keystrokeServer(t *testing.T, transactions int) (*server.Server, uri.URI, string) {
+	t.Helper()
+	content := testutil.GenerateJournal(transactions)
+	tmpDir := t.TempDir()
+	mainPath, err := writeJournalFile(tmpDir, "main.journal", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newBenchmarkServerWithWorkspace(t, tmpDir)
+	docURI := uri.URI("file://" + mainPath)
+	srv.StoreDocument(docURI, content)
+	return srv, docURI, mainPath
+}
+
+// typeKeystroke applies one incremental edit. The insertion point is line 1
+// rather than {0,0}-{0,0}, which the server treats as a full-document replace.
+func typeKeystroke(t *testing.T, srv *server.Server, docURI uri.URI) {
+	t.Helper()
+	change := &protocol.TextDocumentContentChangePartial{
+		Range: protocol.Range{
+			Start: protocol.Position{Line: 1, Character: 0},
+			End:   protocol.Position{Line: 1, Character: 0},
+		},
+		Text: "; k\n",
+	}
+	if err := srv.DidChange(context.Background(), &protocol.DidChangeTextDocumentParams{
+		TextDocument: protocol.VersionedTextDocumentIdentifier{
+			TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
+		},
+		ContentChanges: []protocol.TextDocumentContentChangeEvent{change},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func completionParamsFor(docURI uri.URI) *protocol.CompletionParams {
+	return &protocol.CompletionParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Position:     protocol.Position{Line: 1, Character: 4},
+		},
+	}
+}
+
 // TestNFR_PerKeystrokeCycle measures one DidChange (incremental edit) followed by
-// a Completion request in workspace mode. DidChange parses the edited content
-// once (UpdateFileWithJournal reuses the cached journal); Completion reuses that
-// cached journal instead of reparsing.
+// a Completion request in workspace mode, and asserts the 10k/1k ratio. The
+// handler re-parses the document on every keystroke, so the cycle stays
+// proportional to journal size; what this test guards is that the constant does
+// not carry document-size work beyond the parse itself.
 func TestNFR_PerKeystrokeCycle(t *testing.T) {
-	for _, n := range []int{1000, 10000} {
-		t.Run(fmt.Sprintf("%dtx", n), func(t *testing.T) {
-			content := testutil.GenerateJournal(n)
-			tmpDir := t.TempDir()
-			mainPath, err := writeJournalFile(tmpDir, "main.journal", content)
-			if err != nil {
-				t.Fatal(err)
-			}
-			srv := newBenchmarkServerWithWorkspace(t, tmpDir)
-			docURI := uri.URI("file://" + mainPath)
-			srv.StoreDocument(docURI, content)
+	measure := func(transactions int) time.Duration {
+		srv, docURI, _ := keystrokeServer(t, transactions)
+		completionParams := completionParamsFor(docURI)
+		typeKeystroke(t, srv, docURI)
 
-			completionParams := &protocol.CompletionParams{
-				TextDocumentPositionParams: protocol.TextDocumentPositionParams{
-					TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
-					Position:     protocol.Position{Line: 1, Character: 4},
-				},
-			}
+		const iterations = 50
+		start := time.Now()
+		for range iterations {
+			typeKeystroke(t, srv, docURI)
+			_, _ = srv.Completion(context.Background(), completionParams)
+		}
+		return time.Since(start) / iterations
+	}
 
-			const iterations = 50
-			start := time.Now()
-			for range iterations {
-				// Incremental insert at line 1 (NOT {0,0}-{0,0}, which the server
-				// treats as a full-document replace). Keeps the document large so
-				// each keystroke does a real parse of the whole journal.
-				change := &protocol.TextDocumentContentChangePartial{
-					Range: protocol.Range{
-						Start: protocol.Position{Line: 1, Character: 0},
-						End:   protocol.Position{Line: 1, Character: 0},
-					},
-					Text: "; k\n",
-				}
-				_ = srv.DidChange(context.Background(), &protocol.DidChangeTextDocumentParams{
-					TextDocument: protocol.VersionedTextDocumentIdentifier{
-						TextDocumentIdentifier: protocol.TextDocumentIdentifier{URI: docURI},
-					},
-					ContentChanges: []protocol.TextDocumentContentChangeEvent{change},
-				})
+	small := measure(1000)
+	large := measure(10000)
+	ratio := float64(large) / float64(small)
+	t.Logf("NFR per-keystroke cycle: 1k=%v, 10k=%v (ratio %.2fx)", small, large, ratio)
+
+	if ratio > perKeystrokeCycleRatioLimit {
+		t.Errorf("NFR per-keystroke cycle: 10k (%v) is %.2fx the cost of 1k (%v); expected <= %.1fx",
+			large, ratio, small, perKeystrokeCycleRatioLimit)
+	}
+}
+
+// TestNFR_DidChangeSubLinear verifies criterion 2 literally: the DidChange
+// handler, with no request between keystrokes, must not scale with document
+// size. Parsing is O(n) and is allowed to stay; what must not scale is the
+// include-tree re-resolution and the workspace index rebuild.
+func TestNFR_DidChangeSubLinear(t *testing.T) {
+	measure := func(transactions int) time.Duration {
+		srv, docURI, _ := keystrokeServer(t, transactions)
+		typeKeystroke(t, srv, docURI) // warm the parse cache
+
+		const iterations = 20
+		start := time.Now()
+		for range iterations {
+			typeKeystroke(t, srv, docURI)
+		}
+		return time.Since(start) / iterations
+	}
+
+	small := measure(1000)
+	large := measure(10000)
+	ratio := float64(large) / float64(small)
+	t.Logf("NFR DidChange sub-linear: 1k=%v, 10k=%v (ratio %.2fx)", small, large, ratio)
+
+	if ratio > didChangeRatioLimit {
+		t.Errorf("NFR DidChange: 10k (%v) is %.2fx the cost of 1k (%v); expected <= %.1fx",
+			large, ratio, small, didChangeRatioLimit)
+	}
+}
+
+// TestNFR_KeystrokeBurst verifies that a burst of keystrokes followed by a single
+// request costs far less per keystroke than a full cycle per keystroke: the O(n)
+// work runs once for the burst, not once per edit. The comparison is made at a
+// fixed journal size, so it isolates coalescing from size scaling.
+func TestNFR_KeystrokeBurst(t *testing.T) {
+	const burst = 20
+
+	measure := func(requestPerKeystroke bool) time.Duration {
+		srv, docURI, _ := keystrokeServer(t, 10000)
+		completionParams := completionParamsFor(docURI)
+		typeKeystroke(t, srv, docURI)
+		_, _ = srv.Completion(context.Background(), completionParams)
+
+		start := time.Now()
+		for range burst {
+			typeKeystroke(t, srv, docURI)
+			if requestPerKeystroke {
 				_, _ = srv.Completion(context.Background(), completionParams)
 			}
-			avg := time.Since(start) / iterations
+		}
+		if !requestPerKeystroke {
+			_, _ = srv.Completion(context.Background(), completionParams)
+		}
+		return time.Since(start) / burst
+	}
 
-			limit := 50 * time.Millisecond
-			if n >= 10000 {
-				limit = 200 * time.Millisecond
-			}
-			if avg >= limit {
-				t.Errorf("NFR per-keystroke cycle (%d tx) should be < %v, got %v", n, limit, avg)
-			} else {
-				t.Logf("NFR per-keystroke cycle PASS (%d tx): %v avg (DidChange + Completion, target < %v)", n, avg, limit)
-			}
-		})
+	fullCycle := measure(true)
+	burstCycle := measure(false)
+	ratio := float64(burstCycle) / float64(fullCycle)
+	t.Logf("NFR keystroke burst (%d keystrokes, 10k tx): full cycle=%v/keystroke, burst=%v/keystroke (ratio %.2fx)",
+		burst, fullCycle, burstCycle, ratio)
+
+	if ratio > keystrokeBurstRatioLimit {
+		t.Errorf("NFR keystroke burst: burst costs %.2fx of a full cycle per keystroke (%v vs %v); expected <= %.2fx",
+			ratio, burstCycle, fullCycle, keystrokeBurstRatioLimit)
 	}
 }
 

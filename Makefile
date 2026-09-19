@@ -1,4 +1,4 @@
-.PHONY: all build test lint bench clean install local help
+.PHONY: all build test lint bench perf clean install local help
 
 BINARY := hledger-lsp
 BIN_DIR := ./bin
@@ -12,6 +12,7 @@ help:
 	@echo "  test     Run all tests"
 	@echo "  lint     Run golangci-lint with autofix"
 	@echo "  bench    Run benchmarks"
+	@echo "  perf     Run NFR performance tests (-tags perf, no -race)"
 	@echo "  clean    Remove build artifacts"
 	@echo "  install  Install to GOPATH/bin"
 	@echo "  local    Build binary to ~/Library/Application\ Support/Code/User/globalStorage/evsyukov.hledger/$(BINARY)"
@@ -28,6 +29,12 @@ lint:
 
 bench:
 	go test -bench=. ./...
+
+# NFR tests are tagged `perf` rather than `!race` so that their absence from the
+# -race unit-test job is explicit. Run without -race: the timing assertions in
+# internal/benchmark are meaningless under the race detector.
+perf:
+	go test -tags perf ./internal/benchmark/ -v
 
 clean:
 	rm -rf $(BIN_DIR)
