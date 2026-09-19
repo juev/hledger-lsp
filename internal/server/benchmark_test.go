@@ -230,7 +230,7 @@ func setupBenchServer(b *testing.B, content string, withClient bool) (*Server, u
 	// Register the buffer with the workspace the way DidOpen does, so the
 	// deferred recompute runs exactly once and the benchmarks below measure
 	// steady state rather than a permanently dirty workspace.
-	srv.workspace.MarkFileDirty(mainPath, content)
+	srv.workspace.MarkFileDirty(mainPath, workspace.StaticContent(content))
 
 	return srv, docURI
 }
@@ -318,11 +318,12 @@ func BenchmarkPublishDiagnostics_Small(b *testing.B) {
 	ctx := context.Background()
 
 	revision := srv.workspace.ContentRevision(uriToPath(docURI))
+	text, _ := srv.documents.rope(docURI)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, smallContent, 0, revision)
+		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
 	}
 }
 
@@ -331,11 +332,12 @@ func BenchmarkPublishDiagnostics_Medium(b *testing.B) {
 	ctx := context.Background()
 
 	revision := srv.workspace.ContentRevision(uriToPath(docURI))
+	text, _ := srv.documents.rope(docURI)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, mediumContent, 0, revision)
+		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
 	}
 }
 
@@ -344,10 +346,11 @@ func BenchmarkPublishDiagnostics_Large(b *testing.B) {
 	ctx := context.Background()
 
 	revision := srv.workspace.ContentRevision(uriToPath(docURI))
+	text, _ := srv.documents.rope(docURI)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		srv.publishDiagnostics(ctx, docURI, largeContent, 0, revision)
+		srv.publishDiagnostics(ctx, docURI, text, 0, revision)
 	}
 }

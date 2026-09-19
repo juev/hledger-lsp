@@ -102,19 +102,50 @@ func merge(a, b *node) *node {
 // A Text is safe for concurrent use. Callbacks passed to EachLine run under the
 // read lock, so they must not call back into the same Text.
 type Text struct {
-	mu     sync.RWMutex
-	root   *node
-	cached *string
+	mu      sync.RWMutex
+	root    *node
+	cached  *string
+	version uint64
 }
 
 // NewText builds a Text from content, normalizing CRLF/CR line endings to LF.
 func NewText(content string) *Text {
-	content = textutil.NormalizeLineEndings(content)
 	t := &Text{}
+	t.Replace(content)
+	return t
+}
+
+// Replace discards the current content and rebuilds from content, normalizing
+// line endings. It backs full-document LSP changes.
+func (t *Text) Replace(content string) {
+	content = textutil.NormalizeLineEndings(content)
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.root = nil
 	for _, line := range strings.Split(content, "\n") {
 		t.root = merge(t.root, newNode(line))
 	}
-	return t
+	t.cached = nil
+	t.version++
+}
+
+// Version identifies the current content without materializing it, and must
+// stay cheap: the workspace reads it on the keystroke path to record which
+// revision an edit belongs to.
+func (t *Text) Version() uint64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.version
+}
+
+// Materialize returns the current content. Together with Version it is what the
+// workspace needs from a document it has been handed; read the content first
+// and the version second, so a version that matches the recorded one proves the
+// content was the recorded content.
+func (t *Text) Materialize() string {
+	return t.String()
 }
 
 // LineCount returns the number of lines.
@@ -283,6 +314,7 @@ func (t *Text) ApplyChange(r protocol.Range, text string) {
 	defer t.mu.Unlock()
 
 	t.cached = nil
+	t.version++
 	lineCount := size(t.root)
 	if lineCount == 0 {
 		for _, line := range strings.Split(text, "\n") {
