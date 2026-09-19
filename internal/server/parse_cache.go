@@ -37,13 +37,17 @@ func (s *Server) cachedPostingEffects(docURI uri.URI, content string) []analyzer
 // document's cached content differs. The cache is keyed by URI and validated by
 // content identity, so a caller always receives a journal parsed from exactly
 // the content it passed; invalidation is automatic on content change.
+//
+// The parse itself comes from the loader's content-keyed cache, which the
+// workspace index reads too: a version of a document is parsed once, not once
+// per consumer.
 func (s *Server) cachedParse(docURI uri.URI, content string) *cachedDoc {
 	if v, ok := s.parseCache.Load(docURI); ok {
 		if doc, ok := v.(*cachedDoc); ok && doc.content == content {
 			return doc
 		}
 	}
-	journal, parseErrs := parser.Parse(content)
+	journal, parseErrs := s.loader.ParseCached(content)
 	doc := &cachedDoc{content: content, journal: journal, parseErrs: parseErrs}
 	s.parseCache.Store(docURI, doc)
 	return doc
