@@ -148,6 +148,8 @@ func TestParseWithContext_DefaultCommodityReachesIncludedFile(t *testing.T) {
 	require.NotNil(t, childAmount)
 	assert.Equal(t, "RUB", childAmount.Commodity.Symbol)
 	assert.True(t, childAmount.Commodity.Inferred)
+	assert.Equal(t, ast.CommodityRight, childAmount.Commodity.Position,
+		"the parent directive writes its symbol on the right")
 }
 
 // A D directive inside an included file stays local: the parent keeps its own
@@ -238,4 +240,99 @@ commodity 1,000.00 RUB
 	assert.True(t, bare.Commodity.Inferred)
 	assert.Equal(t, "-1234", written.Quantity.String(), "an explicit amount keeps the commodity's style")
 	assert.False(t, written.Commodity.Inferred)
+}
+
+// `D RUB 1.000,00` is the word-commodity-first form hledger accepts, and it
+// carries the same meaning: bare amounts are RUB and use its number format.
+func TestParse_DefaultCommodityWithWordSymbolFirst(t *testing.T) {
+	input := `D RUB 1.000,00
+
+2024-01-15 x
+    expenses:food   1.000,00
+    assets:cash
+`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+
+	dir, ok := journal.Directives[0].(ast.DefaultCommodityDirective)
+	require.True(t, ok)
+	assert.Equal(t, "RUB", dir.Symbol)
+	assert.Equal(t, "RUB 1.000,00", dir.Format)
+
+	amount := journal.Transactions[0].Postings[0].Amount
+	require.NotNil(t, amount)
+	assert.Equal(t, "RUB", amount.Commodity.Symbol)
+	assert.True(t, amount.Commodity.Inferred)
+	assert.Equal(t, ast.CommodityLeft, amount.Commodity.Position)
+	assert.Equal(t, "1000", amount.Quantity.String())
+}
+
+// A D directive the parser cannot read must not wipe the commodity it already
+// knows: hledger rejects `D RUB` and a bare `D` outright, and an explicit
+// amount of the recorded commodity still has to be read with its number format.
+func TestParse_UnreadableDefaultCommodityKeepsRecordedState(t *testing.T) {
+	input := `D 1.000,00 RUB
+D RUB
+
+2024-01-15 x
+    expenses:food   1.000 RUB
+    assets:cash
+
+D
+
+2024-01-16 y
+    expenses:food   2.000 RUB
+    assets:cash
+`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 2)
+
+	assert.Equal(t, "1000", journal.Transactions[0].Postings[0].Amount.Quantity.String())
+	assert.Equal(t, "2000", journal.Transactions[1].Postings[0].Amount.Quantity.String())
+}
+
+// Regression: `D 1.000,00 RUB` twice, the second time word-commodity-first, used
+// to drop the recorded commodity, after which `1.000 RUB` fell back to the
+// ambiguous-number heuristic and meant 1 instead of 1000.
+func TestParse_WordSymbolFirstDirectiveKeepsNumberFormat(t *testing.T) {
+	input := `D 1.000,00 RUB
+D RUB 1.000,00
+
+2024-01-15 x
+    expenses:food   1.000 RUB
+    assets:cash
+`
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+
+	amount := journal.Transactions[0].Postings[0].Amount
+	require.NotNil(t, amount)
+	assert.Equal(t, "RUB", amount.Commodity.Symbol)
+	assert.Equal(t, "1000", amount.Quantity.String(), "hledger reads this amount as 1000 RUB")
+}
+
+// The layout of the parent's D directive reaches the included file together with
+// the symbol, so a bare amount there is positioned like the directive writes it.
+func TestParseWithContext_DefaultCommodityPositionReachesIncludedFile(t *testing.T) {
+	input := "D $1,000.00\ninclude child.journal\n"
+	childInput := "2024-01-15 child\n    assets:cash   1,000.00\n    equity\n"
+
+	var childAmount *ast.Amount
+	_, errs := ParseWithContext(input, Context{}, func(site IncludeSite) ContextExports {
+		child, childErrs := ParseWithContext(childInput, site.Context, nil)
+		require.Empty(t, childErrs)
+		childAmount = child.Journal.Transactions[0].Postings[0].Amount
+		return child.Exports
+	})
+	require.Empty(t, errs)
+	require.NotNil(t, childAmount)
+
+	assert.Equal(t, "$", childAmount.Commodity.Symbol)
+	assert.True(t, childAmount.Commodity.Inferred)
+	assert.Equal(t, ast.CommodityLeft, childAmount.Commodity.Position,
+		"the parent directive writes its symbol on the left")
 }
