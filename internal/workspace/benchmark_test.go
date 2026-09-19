@@ -63,44 +63,74 @@ func setupWorkspace(b *testing.B, content string) (*Workspace, string) {
 	return ws, mainPath
 }
 
-func BenchmarkWorkspace_UpdateFile_Small(b *testing.B) {
+// MarkFileDirty must not scale with journal size: it records the edit and
+// nothing else. The recompute it defers is measured by ApplyEdit below.
+func BenchmarkWorkspace_MarkFileDirty_Small(b *testing.B) {
 	ws, mainPath := setupWorkspace(b, smallJournal)
 	modified := smallJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.UpdateFile(mainPath, modified)
+		ws.MarkFileDirty(mainPath, modified)
 	}
 }
 
-func BenchmarkWorkspace_UpdateFile_Medium(b *testing.B) {
-	ws, mainPath := setupWorkspace(b, mediumJournal)
-	modified := mediumJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
-
-	b.ResetTimer()
-	for b.Loop() {
-		ws.UpdateFile(mainPath, modified)
-	}
-}
-
-func BenchmarkWorkspace_UpdateFile_Large(b *testing.B) {
+func BenchmarkWorkspace_MarkFileDirty_Large(b *testing.B) {
 	ws, mainPath := setupWorkspace(b, largeJournal)
 	modified := largeJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
 
 	b.ResetTimer()
 	for b.Loop() {
-		ws.UpdateFile(mainPath, modified)
+		ws.MarkFileDirty(mainPath, modified)
 	}
 }
 
-func BenchmarkWorkspace_UpdateFile_Large_Allocs(b *testing.B) {
+// ApplyEdit is one edit plus the read that triggers the deferred recompute:
+// re-parse, index rebuild and include re-resolution. This is the O(n) work the
+// lazy refresh moved off the keystroke, and it still costs what it did — what
+// changed is that a burst of edits pays for it once instead of once per edit.
+func BenchmarkWorkspace_ApplyEdit_Small(b *testing.B) {
+	ws, mainPath := setupWorkspace(b, smallJournal)
+	modified := smallJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
+
+	b.ResetTimer()
+	for b.Loop() {
+		ws.MarkFileDirty(mainPath, modified)
+		_ = ws.IndexSnapshot()
+	}
+}
+
+func BenchmarkWorkspace_ApplyEdit_Medium(b *testing.B) {
+	ws, mainPath := setupWorkspace(b, mediumJournal)
+	modified := mediumJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
+
+	b.ResetTimer()
+	for b.Loop() {
+		ws.MarkFileDirty(mainPath, modified)
+		_ = ws.IndexSnapshot()
+	}
+}
+
+func BenchmarkWorkspace_ApplyEdit_Large(b *testing.B) {
+	ws, mainPath := setupWorkspace(b, largeJournal)
+	modified := largeJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
+
+	b.ResetTimer()
+	for b.Loop() {
+		ws.MarkFileDirty(mainPath, modified)
+		_ = ws.IndexSnapshot()
+	}
+}
+
+func BenchmarkWorkspace_ApplyEdit_Large_Allocs(b *testing.B) {
 	ws, mainPath := setupWorkspace(b, largeJournal)
 	modified := largeJournal + "\n2024-12-31 New Transaction\n    expenses:test  $1\n    assets:cash\n"
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		ws.UpdateFile(mainPath, modified)
+		ws.MarkFileDirty(mainPath, modified)
+		_ = ws.IndexSnapshot()
 	}
 }
 

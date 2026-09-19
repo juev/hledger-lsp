@@ -324,14 +324,14 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.invalidateDocText(params.TextDocument.URI)
+	var revision uint64
 	if s.workspace != nil && s.loader.FileSizeError(content) == nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
-			journal, _ := s.cachedJournal(params.TextDocument.URI, content)
-			s.workspace.UpdateFileWithJournal(path, content, journal)
+			revision = s.workspace.MarkFileDirty(path, content)
 			s.loader.InvalidateFile(path)
 		}
 	}
-	s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version))
+	s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version), revision)
 	return nil
 }
 
@@ -360,12 +360,13 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 		s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
 		s.payeeTemplatesCache.Clear()
 		s.alignmentCache.Delete(params.TextDocument.URI)
+		// Record the edit without parsing or re-resolving anything: the whole
+		// journal is re-parsed and re-indexed on the first read that needs tree
+		// data, so a keystroke stays O(1) and a burst collapses into one pass.
+		var revision uint64
 		if s.workspace != nil {
 			if path := uriToPath(params.TextDocument.URI); path != "" {
-				// Parse once and reuse the cached journal for workspace indexing
-				// (analyze and handlers reuse the same cache entry).
-				journal, _ := s.cachedJournal(params.TextDocument.URI, content)
-				s.workspace.UpdateFileWithJournal(path, content, journal)
+				revision = s.workspace.MarkFileDirty(path, content)
 				s.loader.InvalidateFile(path)
 			}
 		}
@@ -375,7 +376,7 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 		if path := uriToPath(params.TextDocument.URI); path != "" && filetype.IsRules(path) {
 			s.rulesLoader.InvalidateFile(path)
 		}
-		s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version))
+		s.scheduleDiagnostics(params.TextDocument.URI, content, uint32(params.TextDocument.Version), revision)
 	}
 	return nil
 }
@@ -410,7 +411,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
 				s.loader.InvalidateFile(path)
 			}
 		}
@@ -425,9 +426,9 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); path != "" {
 			if content, ok := s.GetDocument(params.TextDocument.URI); ok {
-				s.workspace.UpdateFile(path, content)
+				s.workspace.MarkFileDirty(path, content)
 			} else if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
 			}
 			s.loader.InvalidateFile(path)
 		}
@@ -441,7 +442,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 // scheduleDiagnostics debounces diagnostics computation for the given URI.
 // A trailing timer coalesces rapid edits; the previous in-flight computation
 // is cancelled so a stale result never overwrites newer diagnostics.
-func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uint32) {
+func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uint32, revision uint64) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 
@@ -459,7 +460,7 @@ func (s *Server) scheduleDiagnostics(docURI uri.URI, content string, version uin
 				return
 			default:
 			}
-			s.publishDiagnostics(ctx, docURI, content, version)
+			s.publishDiagnostics(ctx, docURI, content, version, revision)
 		}),
 	}
 }
@@ -474,7 +475,7 @@ func (s *Server) cancelDiagnostics(docURI uri.URI) {
 	}
 }
 
-func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content string, version uint32) {
+func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content string, version uint32, revision uint64) {
 	if s.client == nil {
 		return
 	}
@@ -542,7 +543,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 	var resolved *include.ResolvedJournal
 	var loadErrors []include.LoadError
 	if s.workspace != nil {
-		resolved, loadErrors = s.workspace.ResolvedForRootContent(path, content)
+		resolved, loadErrors = s.workspace.ResolvedForRootContent(path, revision)
 	}
 	if resolved == nil {
 		resolved, loadErrors = s.loader.LoadFromContent(path, content)
@@ -879,10 +880,12 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 		if change.Type == protocol.FileChangeTypeChanged || change.Type == protocol.FileChangeTypeCreated {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.UpdateFile(path, textutil.NormalizeLineEndings(string(data)))
+				s.workspace.MarkFileDirty(path, textutil.NormalizeLineEndings(string(data)))
 			}
 		}
 
+		// Refreshes the pending edits before answering, so the republish below
+		// sees the file as it is on disk now.
 		parents := s.workspace.GetIncludedBy(path)
 		for _, parentPath := range parents {
 			parentURI := pathToURI(parentPath)
@@ -893,8 +896,14 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 	}
 
 	for docURI := range affected {
+		// Revision before content, as in republishDiagnostics: a concurrent edit
+		// can only make the pair mismatch, never wrongly match.
+		var revision uint64
+		if s.workspace != nil {
+			revision = s.workspace.ContentRevision(uriToPath(docURI))
+		}
 		if content, ok := s.GetDocument(docURI); ok {
-			s.publishDiagnostics(ctx, docURI, content, s.documentVersion(docURI))
+			s.publishDiagnostics(ctx, docURI, content, s.documentVersion(docURI), revision)
 		}
 	}
 

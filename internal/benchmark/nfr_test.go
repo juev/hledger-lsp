@@ -115,7 +115,10 @@ func TestNFR_1_3_IncrementalUpdateLatency(t *testing.T) {
 
 	start := time.Now()
 	for i := range iterations {
-		ws.UpdateFile(mainPath, modifiedContents[i])
+		// Marking alone would defer the work and measure nothing; the snapshot
+		// read is what forces the recompute this NFR bounds.
+		ws.MarkFileDirty(mainPath, modifiedContents[i])
+		_ = ws.IndexSnapshot()
 	}
 	totalDuration := time.Since(start)
 	avgDuration := totalDuration / iterations
@@ -171,7 +174,7 @@ func TestNFR_1_4_MemoryUsage(t *testing.T) {
 // newBenchmarkServerWithWorkspace initializes a server in workspace-folder mode
 // so DidChange exercises the real hot path (UpdateFileWithJournal + include
 // resolution) rather than the no-workspace fallback.
-func newBenchmarkServerWithWorkspace(t *testing.T, dir string) *server.Server {
+func newBenchmarkServerWithWorkspace(t testing.TB, dir string) *server.Server {
 	t.Helper()
 	srv := server.NewServer()
 	if _, err := srv.Initialize(context.Background(), &protocol.InitializeParams{
@@ -211,7 +214,7 @@ const (
 // keystrokeServer builds an initialized workspace-mode server over a generated
 // journal and returns it with the document URI. Workspace mode matters: without
 // it DidChange takes the no-workspace fallback and skips the hot path.
-func keystrokeServer(t *testing.T, transactions int) (*server.Server, uri.URI, string) {
+func keystrokeServer(t testing.TB, transactions int) (*server.Server, uri.URI, string) {
 	t.Helper()
 	content := testutil.GenerateJournal(transactions)
 	tmpDir := t.TempDir()
@@ -227,7 +230,7 @@ func keystrokeServer(t *testing.T, transactions int) (*server.Server, uri.URI, s
 
 // typeKeystroke applies one incremental edit. The insertion point is line 1
 // rather than {0,0}-{0,0}, which the server treats as a full-document replace.
-func typeKeystroke(t *testing.T, srv *server.Server, docURI uri.URI) {
+func typeKeystroke(t testing.TB, srv *server.Server, docURI uri.URI) {
 	t.Helper()
 	change := &protocol.TextDocumentContentChangePartial{
 		Range: protocol.Range{

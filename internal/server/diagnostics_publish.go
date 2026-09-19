@@ -154,23 +154,30 @@ func (s *Server) publishDiagnosticSet(ctx context.Context, docURI uri.URI, diagn
 // republishDiagnostics recomputes diagnostics for every open journal. It runs
 // after a settings change so the effect is visible without restarting the server.
 func (s *Server) republishDiagnostics() {
-	s.documents.Range(func(key, value any) bool {
-		docURI, ok := key.(uri.URI)
-		if !ok {
-			return true
+	var docURIs []uri.URI
+	s.documents.Range(func(key, _ any) bool {
+		if docURI, ok := key.(uri.URI); ok && !filetype.IsRules(string(docURI)) {
+			docURIs = append(docURIs, docURI)
 		}
-		content, ok := value.(string)
-		if !ok {
-			return true
-		}
-		if filetype.IsRules(string(docURI)) {
-			return true
-		}
-
-		version := s.documentVersion(docURI)
-		go s.publishDiagnostics(context.Background(), docURI, content, version)
 		return true
 	})
+
+	for _, docURI := range docURIs {
+		// The revision is read before the content, on purpose. An edit marked
+		// between the two reads can then only make the pair mismatch, which
+		// makes publishDiagnostics load the content directly. The other order
+		// could pair older content with a tree built from newer content.
+		var revision uint64
+		if s.workspace != nil {
+			revision = s.workspace.ContentRevision(uriToPath(docURI))
+		}
+		content, ok := s.GetDocument(docURI)
+		if !ok {
+			continue
+		}
+		version := s.documentVersion(docURI)
+		go s.publishDiagnostics(context.Background(), docURI, content, version, revision)
+	}
 }
 
 // setDocumentVersion records the client's version for a document.
