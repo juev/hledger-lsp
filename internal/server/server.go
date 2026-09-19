@@ -688,7 +688,7 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 // is false the balance and assertion codes are skipped: they belong to
 // CheckJournalBalance, which sees the whole include tree in date order.
 func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string, includeJournalBalance bool) []protocol.Diagnostic {
-	journal, parseErrs := s.cachedJournal(docURI, content)
+	_, parseErrs := s.cachedJournal(docURI, content)
 
 	// Analysis runs on every keystroke, and indexing the document costs a pass
 	// over it, so pay for the mapper only when there is a range to convert.
@@ -724,12 +724,7 @@ func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string,
 		external.Commodities = s.workspace.GetDeclaredCommoditiesForFile(path)
 	}
 
-	var result *analyzer.AnalysisResult
-	if external.Accounts != nil || external.Commodities != nil {
-		result = s.analyzer.AnalyzeWithExternalDeclarations(journal, external)
-	} else {
-		result = s.analyzer.Analyze(journal)
-	}
+	result := s.cachedAnalysis(docURI, content, external)
 
 	settings := s.getSettings()
 	for _, diag := range result.Diagnostics {

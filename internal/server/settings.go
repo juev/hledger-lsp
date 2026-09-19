@@ -229,6 +229,11 @@ func (s *Server) setSettings(settings serverSettings) {
 	if s.analyzer != nil {
 		s.analyzer.SetBalanceTolerance(decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance))
 		s.analyzer.SetAccountCheckMode(accountCheckMode(settings.Diagnostics.AccountCheck))
+		// The analyzer reads those two from its own settings, so any analysis
+		// cached against the old ones is now wrong. The cache is keyed by
+		// document content, which a settings change does not touch, so drop it
+		// wholesale rather than trying to express the settings in the key.
+		s.clearParseCache()
 	}
 	// Only a real settings change updates the debounce, so tests (and callers)
 	// that set the debounce directly keep their value.

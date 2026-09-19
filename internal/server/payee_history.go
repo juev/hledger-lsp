@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"go.lsp.dev/protocol"
+
+	"github.com/juev/hledger-lsp/internal/analyzer"
 )
 
 type PayeeAccountHistoryParams struct {
@@ -39,7 +41,7 @@ func (s *Server) PayeeAccountHistory(_ context.Context, params *PayeeAccountHist
 			PairUsage:     make(map[string]int),
 		}, nil
 	}
-	result := s.analyzer.Analyze(journal)
+	result := s.cachedAnalysis(params.TextDocument.URI, content, analyzer.ExternalDeclarations{})
 
 	return &PayeeAccountHistoryResult{
 		PayeeAccounts: result.PayeeAccounts,
