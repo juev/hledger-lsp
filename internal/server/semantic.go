@@ -160,6 +160,10 @@ func (c *semanticTokensCache) delete(uri uri.URI) {
 }
 
 func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.SemanticTokensParams) (*protocol.SemanticTokens, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.SemanticTokens }) {
+		return &protocol.SemanticTokens{}, nil
+	}
+
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return &protocol.SemanticTokens{Data: []uint32{}}, nil
@@ -180,6 +184,10 @@ func (s *Server) SemanticTokensFull(ctx context.Context, params *protocol.Semant
 }
 
 func (s *Server) SemanticTokensRange(ctx context.Context, params *protocol.SemanticTokensRangeParams) (*protocol.SemanticTokens, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.SemanticTokens }) {
+		return &protocol.SemanticTokens{}, nil
+	}
+
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return &protocol.SemanticTokens{Data: []uint32{}}, nil

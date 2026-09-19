@@ -12,6 +12,10 @@ import (
 )
 
 func (s *Server) DocumentLink(ctx context.Context, params *protocol.DocumentLinkParams) ([]protocol.DocumentLink, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.DocumentLinks }) {
+		return nil, nil
+	}
+
 	doc, ok := s.GetDocument(params.TextDocument.URI)
 	if !ok {
 		return nil, nil

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -142,18 +143,48 @@ func defaultServerSettings() serverSettings {
 }
 
 func normalizeServerSettings(settings serverSettings) serverSettings {
+	normalized, _ := normalizeServerSettingsWithIssues(settings)
+	return normalized
+}
+
+// normalizeServerSettingsWithIssues validates settings and reports every value it
+// had to replace. The user must learn about a typo instead of silently getting
+// defaults, which is what the server did before.
+func normalizeServerSettingsWithIssues(settings serverSettings) (serverSettings, []string) {
 	defaults := defaultServerSettings()
+	var issues []string
+
 	if settings.Completion.MaxResults <= 0 {
+		issues = append(issues, fmt.Sprintf("hledger.completion.maxResults=%d is not positive; using %d", settings.Completion.MaxResults, defaults.Completion.MaxResults))
 		settings.Completion.MaxResults = defaults.Completion.MaxResults
 	}
+	switch settings.Completion.AccountScope {
+	case accountScopeNonzero, accountScopeAll:
+		// valid
+	default:
+		issues = append(issues, fmt.Sprintf("hledger.completion.accountScope=%q is not one of %q, %q; using %q",
+			settings.Completion.AccountScope, accountScopeNonzero, accountScopeAll, defaults.Completion.AccountScope))
+		settings.Completion.AccountScope = defaults.Completion.AccountScope
+	}
 	if settings.Formatting.IndentSize <= 0 {
+		issues = append(issues, fmt.Sprintf("hledger.formatting.indentSize=%d is not positive; using %d", settings.Formatting.IndentSize, defaults.Formatting.IndentSize))
 		settings.Formatting.IndentSize = defaults.Formatting.IndentSize
 	}
 	switch settings.Formatting.AmountAlignmentMode {
 	case "right", "decimal", "left":
 		// valid
 	default:
+		issues = append(issues, fmt.Sprintf("hledger.formatting.amountAlignmentMode=%q is not one of \"left\", \"right\", \"decimal\"; using %q",
+			settings.Formatting.AmountAlignmentMode, defaults.Formatting.AmountAlignmentMode))
 		settings.Formatting.AmountAlignmentMode = defaults.Formatting.AmountAlignmentMode
+	}
+	switch settings.Formatting.AmountAlignmentTarget {
+	case "", "cost", "posting":
+		// valid
+	default:
+		issues = append(issues, fmt.Sprintf("hledger.formatting.amountAlignmentTarget=%q is not one of \"cost\", \"posting\"; using the default",
+			settings.Formatting.AmountAlignmentTarget))
+		settings.Formatting.AmountAlignmentTarget = ""
 	}
 	if settings.CLI.Path == "" {
 		settings.CLI.Path = defaults.CLI.Path
@@ -167,22 +198,20 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 	if settings.Limits.MaxIncludeDepth <= 0 {
 		settings.Limits.MaxIncludeDepth = defaults.Limits.MaxIncludeDepth
 	}
-	switch settings.Completion.AccountScope {
-	case accountScopeNonzero, accountScopeAll:
-		// valid
-	default:
-		settings.Completion.AccountScope = defaults.Completion.AccountScope
-	}
 	switch settings.Diagnostics.AccountCheck {
 	case accountCheckOff, accountCheckLint, accountCheckStrict:
 		// valid
 	default:
+		issues = append(issues, fmt.Sprintf("hledger.diagnostics.accountCheck=%q is not one of \"off\", \"lint\", \"strict\"; using %q",
+			settings.Diagnostics.AccountCheck, defaults.Diagnostics.AccountCheck))
 		settings.Diagnostics.AccountCheck = defaults.Diagnostics.AccountCheck
 	}
 	if settings.Diagnostics.DebounceMs <= 0 {
+		issues = append(issues, fmt.Sprintf("hledger.diagnostics.debounceMs=%d is not positive; using %d", settings.Diagnostics.DebounceMs, defaults.Diagnostics.DebounceMs))
 		settings.Diagnostics.DebounceMs = defaults.Diagnostics.DebounceMs
 	}
-	return settings
+
+	return settings, issues
 }
 
 func (s *Server) setSettings(settings serverSettings) {
@@ -239,8 +268,18 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 	if err != nil || len(result) == 0 {
 		return
 	}
-	settings := parseSettingsFromLSPAny(s.getSettings(), result[0])
+
+	settings, issues := parseSettingsFromLSPAnyWithIssues(s.getSettings(), result[0])
+	s.reportSettingsIssues(issues)
 	s.setSettings(settings)
+}
+
+// reportSettingsIssues tells the user about settings values the server rejected.
+func (s *Server) reportSettingsIssues(issues []string) {
+	if len(issues) == 0 {
+		return
+	}
+	s.showMessage(protocol.MessageTypeWarning, "hledger-lsp: ignoring invalid settings: "+strings.Join(issues, "; "))
 }
 
 // DidChangeConfiguration refreshes cached settings but cannot change
@@ -251,27 +290,44 @@ func (s *Server) DidChangeConfiguration(_ context.Context, _ *protocol.DidChange
 }
 
 func parseSettingsFromRaw(base serverSettings, raw interface{}) serverSettings {
-	settings := base
+	settings, _ := parseSettingsFromRawWithIssues(base, raw)
+	return settings
+}
+
+// parseSettingsFromRawWithIssues parses client settings and returns the values it
+// had to reject, so the caller can tell the user.
+func parseSettingsFromRawWithIssues(base serverSettings, raw interface{}) (serverSettings, []string) {
+	if raw == nil {
+		return normalizeServerSettingsWithIssues(base)
+	}
+
 	rawMap, ok := raw.(map[string]interface{})
 	if !ok {
-		return normalizeServerSettings(settings)
+		return normalizeServerSettingsWithIssues(base)
 	}
 	if nested, ok := rawMap["hledger"]; ok {
-		return parseSettingsFromRaw(settings, nested)
+		return parseSettingsFromRawWithIssues(base, nested)
 	}
-	settings = applySettingsMap(settings, rawMap)
-	return normalizeServerSettings(settings)
+
+	return normalizeServerSettingsWithIssues(applySettingsMap(base, rawMap))
 }
 
 func parseSettingsFromLSPAny(base serverSettings, raw protocol.LSPAny) serverSettings {
+	settings, _ := parseSettingsFromLSPAnyWithIssues(base, raw)
+	return settings
+}
+
+// parseSettingsFromLSPAnyWithIssues decodes client settings and reports the
+// values it rejected.
+func parseSettingsFromLSPAnyWithIssues(base serverSettings, raw protocol.LSPAny) (serverSettings, []string) {
 	if len(raw) == 0 {
-		return normalizeServerSettings(base)
+		return normalizeServerSettingsWithIssues(base)
 	}
 	var decoded map[string]interface{}
 	if err := protocol.Unmarshal(raw, &decoded); err != nil {
-		return normalizeServerSettings(base)
+		return normalizeServerSettingsWithIssues(base)
 	}
-	return parseSettingsFromRaw(base, decoded)
+	return parseSettingsFromRawWithIssues(base, decoded)
 }
 
 func applySettingsMap(settings serverSettings, raw map[string]interface{}) serverSettings {

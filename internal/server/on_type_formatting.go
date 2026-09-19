@@ -66,6 +66,10 @@ func classifyLine(line string) lineKind {
 }
 
 func (s *Server) OnTypeFormatting(ctx context.Context, params *protocol.DocumentOnTypeFormattingParams) ([]protocol.TextEdit, error) {
+	if !s.featureEnabled(func(f featureSettings) bool { return f.Formatting }) {
+		return nil, nil
+	}
+
 	// CSV rules files are a different format: journal formatting must not touch
 	// them (full-document Format refuses them too).
 	if filetype.IsRules(string(params.TextDocument.URI)) {
