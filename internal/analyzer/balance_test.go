@@ -662,22 +662,35 @@ func TestCheckBalance_MultiCommodity_OneExceedsTolerance(t *testing.T) {
 }
 
 func TestCheckBalance_LotCost_Ignored(t *testing.T) {
-	// hledger 1: lot cost {} is ignored for balance checking.
-	// 10 AAPL {$150} balances as 10 AAPL (not $1500).
-	// Two explicit postings: 10 AAPL + $-1500 → two different commodities, no inferred → unbalanced.
+	// hledger ignores lot prices for balance checking: 10 AAPL {$150} leaves the
+	// residual AAPL +10 / $ -1400, which hledger accepts through its two-commodity
+	// conversion inference (verified: `hledger -f - print` exits 0).
+	// The same posting written with an explicit cost does NOT balance, because a
+	// cost converts the posting to $ and leaves a single residual commodity.
 	input := `2024-01-15 buy stocks
     assets:stocks  10 AAPL {$150}
-    assets:cash  $-1500`
+    assets:cash  $-1400`
 
 	journal, errs := parser.Parse(input)
 	require.Empty(t, errs)
 	require.Len(t, journal.Transactions, 1)
 
 	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
-	assert.False(t, result.Balanced,
-		"lot cost {$150} must be ignored: AAPL and $ are separate commodities, both unbalanced")
-	assert.Contains(t, result.Differences, "AAPL")
-	assert.Contains(t, result.Differences, "$")
+	assert.True(t, result.Balanced,
+		"lot cost {$150} is not a cost for balancing; hledger accepts the two-commodity residual")
+
+	withCost := `2024-01-15 buy stocks
+    assets:stocks  10 AAPL @ $150
+    assets:cash  $-1400`
+
+	costJournal, costErrs := parser.Parse(withCost)
+	require.Empty(t, costErrs)
+	require.Len(t, costJournal.Transactions, 1)
+
+	costResult := CheckBalance(&costJournal.Transactions[0], decimal.Zero)
+	assert.False(t, costResult.Balanced,
+		"with an explicit @ cost the residual is a single commodity ($100) and cannot be inferred")
+	assert.Equal(t, decimal.NewFromInt(100), costResult.Differences["$"])
 }
 
 func TestCheckBalance_LotCost_UnitPrice(t *testing.T) {
@@ -754,4 +767,177 @@ func TestCheckBalance_LotCost_PrecisionMapping(t *testing.T) {
 	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
 	assert.True(t, result.Balanced,
 		"lot cost ignored: AAPL precision stays on native commodity, diff 0 → balanced")
+}
+
+// hledgerBalanceCase pins one journal to the verdict the installed hledger
+// produces for it, so the two-commodity conversion rule cannot drift.
+type hledgerBalanceCase struct {
+	name     string
+	input    string
+	balanced bool
+}
+
+// hledgerVerifiedCases were each executed with the local hledger CLI
+// (`hledger -f - print`, hledger 1.52.4) and record its exit status: accepted
+// journals must not be reported as unbalanced, rejected ones must be.
+func hledgerVerifiedCases() []hledgerBalanceCase {
+	return []hledgerBalanceCase{
+		{
+			name: "two commodities with opposite signs are a conversion",
+			input: `2024-01-15 convert
+    assets:bank:eur  100 EUR
+    assets:bank:usd  $-110`,
+			balanced: true,
+		},
+		{
+			name: "two commodities with the same sign stay unbalanced",
+			input: `2024-01-15 x
+    a:aa  10 AAPL
+    b:bb  5 EUR`,
+			balanced: false,
+		},
+		{
+			name: "extra commodity that cancels itself leaves two residuals",
+			input: `2024-01-15 x
+    a:aa  10 AAPL
+    b:bb  -5 EUR
+    c:cc  4 EUR`,
+			balanced: true,
+		},
+		{
+			name: "zero-valued third commodity does not block the conversion",
+			input: `2024-01-15 x
+    a:aa  10 AAPL
+    b:bb  $-900
+    c:cc  0 EUR`,
+			balanced: true,
+		},
+		{
+			name: "three non-zero residuals are unbalanced",
+			input: `2024-01-15 x
+    a:aa  10 AAPL
+    b:bb  -5 EUR
+    c:cc  3 GBP`,
+			balanced: false,
+		},
+		{
+			name: "one residual left after cancelling is unbalanced",
+			input: `2024-01-15 x
+    a:aa  10 AAPL
+    b:bb  -5 EUR
+    c:cc  5 EUR`,
+			balanced: false,
+		},
+		{
+			name: "explicit cost blocks the conversion inference",
+			input: `2024-01-15 x
+    a:aa  10 AAPL @ $100
+    b:bb  $-900
+    c:cc  -5 EUR
+    d:dd  4 EUR`,
+			balanced: false,
+		},
+		{
+			name: "lot price is not a cost and does not block the conversion",
+			input: `2024-01-15 buy
+    assets:stocks  10 AAPL {$150}
+    assets:cash  $-1400`,
+			balanced: true,
+		},
+	}
+}
+
+func TestCheckBalance_HledgerVerifiedVerdicts(t *testing.T) {
+	for _, tt := range hledgerVerifiedCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tt.input)
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+			assert.Equal(t, tt.balanced, result.Balanced)
+			if tt.balanced {
+				assert.Empty(t, result.Differences)
+			} else {
+				assert.NotEmpty(t, result.Differences)
+			}
+		})
+	}
+}
+
+func TestCheckBalance_ConversionLeavesNoResiduals(t *testing.T) {
+	input := `2024-01-15 convert
+    assets:bank:eur  100 EUR
+    assets:bank:usd  $-110`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.True(t, result.Balanced)
+	assert.Empty(t, result.Differences)
+	assert.Empty(t, result.SignedDifferences)
+	assert.Equal(t, -1, result.InferredIdx)
+}
+
+func TestCheckBalance_SignedDifferencesKeepDirection(t *testing.T) {
+	input := `2024-01-15 test
+    expenses:food  $50
+    assets:cash  $-40`
+
+	journal, errs := parser.Parse(input)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	result := CheckBalance(&journal.Transactions[0], decimal.Zero)
+
+	assert.False(t, result.Balanced)
+	assert.Equal(t, decimal.NewFromInt(10), result.Differences["$"])
+	assert.Equal(t, decimal.NewFromInt(10), result.SignedDifferences["$"])
+
+	overSpent := `2024-01-15 test
+    expenses:food  $40
+    assets:cash  $-50`
+
+	journal2, errs2 := parser.Parse(overSpent)
+	require.Empty(t, errs2)
+	require.Len(t, journal2.Transactions, 1)
+
+	result2 := CheckBalance(&journal2.Transactions[0], decimal.Zero)
+	assert.False(t, result2.Balanced)
+	assert.Equal(t, decimal.NewFromInt(10), result2.Differences["$"])
+	assert.Equal(t, decimal.NewFromInt(-10), result2.SignedDifferences["$"])
+}
+
+func TestCheckBalance_CostPrecisionStaysOnNativeCommodity(t *testing.T) {
+	// hledger 1.52.4: `1.005 AAPL @ $2` + `$-2.0` exits 0 because $ precision is 1
+	// (tolerance 0.05) — the native amount precision must not be charged to the
+	// cost commodity. `$-2.00` makes hledger fail (precision 2 → tolerance 0.005),
+	// so that case must stay unbalanced.
+	withinTolerance := `2024-01-01
+    a:aa  1.005 AAPL @ $2
+    b:bb  $-2.0`
+
+	journal, errs := parser.Parse(withinTolerance)
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	assert.True(t, CheckBalance(&journal.Transactions[0], decimal.Zero).Balanced,
+		"cost commodity precision comes from amounts denominated in it, not from the native amount")
+
+	beyondTolerance := `2024-01-01
+    a:aa  1.005 AAPL @ $2
+    b:bb  $-2.00`
+
+	journal2, errs2 := parser.Parse(beyondTolerance)
+	require.Empty(t, errs2)
+	require.Len(t, journal2.Transactions, 1)
+
+	result2 := CheckBalance(&journal2.Transactions[0], decimal.Zero)
+	assert.False(t, result2.Balanced, "cash written with 2 decimals makes 0.01 exceed the tolerance")
+	assert.True(t, result2.Differences["$"].Equal(decimal.RequireFromString("0.01")),
+		"residual is 0.01, got %s", result2.Differences["$"])
 }
