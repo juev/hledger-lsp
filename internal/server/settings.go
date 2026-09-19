@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
@@ -40,11 +41,22 @@ type completionSettings struct {
 	IncludeNotes  bool
 }
 
+// Account declaration check modes. hledger only requires every account to be
+// declared under --strict, so the default is off; "lint" keeps the historical
+// soft check, "strict" mirrors --strict.
+const (
+	accountCheckOff    = "off"
+	accountCheckLint   = "lint"
+	accountCheckStrict = "strict"
+)
+
 type diagnosticsSettings struct {
-	UndeclaredAccounts     bool
+	AccountCheck           string
 	UndeclaredCommodities  bool
 	UnbalancedTransactions bool
+	BalanceAssertions      bool
 	BalanceTolerance       float64
+	DebounceMs             int
 }
 
 type formattingSettings struct {
@@ -96,9 +108,11 @@ func defaultServerSettings() serverSettings {
 			IncludeNotes:  true,
 		},
 		Diagnostics: diagnosticsSettings{
-			UndeclaredAccounts:     true,
-			UndeclaredCommodities:  true,
+			AccountCheck:           accountCheckOff,
+			UndeclaredCommodities:  false,
 			UnbalancedTransactions: true,
+			BalanceAssertions:      true,
+			DebounceMs:             100,
 		},
 		Formatting: formattingSettings{
 			IndentSize:          4,
@@ -141,6 +155,15 @@ func normalizeServerSettings(settings serverSettings) serverSettings {
 	if settings.Limits.MaxIncludeDepth <= 0 {
 		settings.Limits.MaxIncludeDepth = defaults.Limits.MaxIncludeDepth
 	}
+	switch settings.Diagnostics.AccountCheck {
+	case accountCheckOff, accountCheckLint, accountCheckStrict:
+		// valid
+	default:
+		settings.Diagnostics.AccountCheck = defaults.Diagnostics.AccountCheck
+	}
+	if settings.Diagnostics.DebounceMs <= 0 {
+		settings.Diagnostics.DebounceMs = defaults.Diagnostics.DebounceMs
+	}
 	return settings
 }
 
@@ -156,8 +179,21 @@ func (s *Server) setSettings(settings serverSettings) {
 	if oldSettings.CLI.Path != settings.CLI.Path || oldSettings.CLI.Timeout != settings.CLI.Timeout {
 		s.reinitCLI(settings.CLI)
 	}
-	if s.analyzer != nil && oldSettings.Diagnostics.BalanceTolerance != settings.Diagnostics.BalanceTolerance {
+	if s.analyzer != nil {
 		s.analyzer.BalanceTolerance = decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance)
+		s.analyzer.AccountCheck = accountCheckMode(settings.Diagnostics.AccountCheck)
+	}
+	// Only a real settings change updates the debounce, so tests (and callers)
+	// that set the debounce directly keep their value.
+	if oldSettings.Diagnostics.DebounceMs != settings.Diagnostics.DebounceMs {
+		s.diagDebounce = time.Duration(settings.Diagnostics.DebounceMs) * time.Millisecond
+	}
+	if oldSettings.Diagnostics.BalanceTolerance != settings.Diagnostics.BalanceTolerance ||
+		oldSettings.Diagnostics.AccountCheck != settings.Diagnostics.AccountCheck {
+		s.invalidateJournalDiagnostics()
+	}
+	if diagnosticsSettingsChanged(oldSettings.Diagnostics, settings.Diagnostics) {
+		s.republishDiagnostics()
 	}
 	if oldSettings.Formatting.IndentSize != settings.Formatting.IndentSize ||
 		oldSettings.Formatting.MinAlignmentColumn != settings.Formatting.MinAlignmentColumn ||
@@ -347,10 +383,18 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		settings.Completion.IncludeNotes = value
 	}
 
-	// Diagnostics
+	// Diagnostics. The legacy boolean undeclaredAccounts is still honoured: it
+	// maps to the "lint" mode unless accountCheck is set explicitly.
+	accountCheckSet := false
+	legacyUndeclared := false
+	hasLegacyUndeclared := false
 	if diagnosticsRaw, ok := raw["diagnostics"].(map[string]interface{}); ok {
+		if value, ok := toString(diagnosticsRaw["accountCheck"]); ok {
+			settings.Diagnostics.AccountCheck = value
+			accountCheckSet = true
+		}
 		if value, ok := toBool(diagnosticsRaw["undeclaredAccounts"]); ok {
-			settings.Diagnostics.UndeclaredAccounts = value
+			legacyUndeclared, hasLegacyUndeclared = value, true
 		}
 		if value, ok := toBool(diagnosticsRaw["undeclaredCommodities"]); ok {
 			settings.Diagnostics.UndeclaredCommodities = value
@@ -358,12 +402,31 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(diagnosticsRaw["unbalancedTransactions"]); ok {
 			settings.Diagnostics.UnbalancedTransactions = value
 		}
+		if value, ok := toBool(diagnosticsRaw["balanceAssertions"]); ok {
+			settings.Diagnostics.BalanceAssertions = value
+		}
 		if value, ok := toFloat64(diagnosticsRaw["balanceTolerance"]); ok {
 			settings.Diagnostics.BalanceTolerance = value
 		}
+		if value, ok := toInt(diagnosticsRaw["debounceMs"]); ok {
+			settings.Diagnostics.DebounceMs = value
+		}
+	}
+	if value, ok := toString(raw["diagnostics.accountCheck"]); ok {
+		settings.Diagnostics.AccountCheck = value
+		accountCheckSet = true
 	}
 	if value, ok := toBool(raw["diagnostics.undeclaredAccounts"]); ok {
-		settings.Diagnostics.UndeclaredAccounts = value
+		legacyUndeclared, hasLegacyUndeclared = value, true
+	}
+	if value, ok := toBool(raw["diagnostics.balanceAssertions"]); ok {
+		settings.Diagnostics.BalanceAssertions = value
+	}
+	if value, ok := toInt(raw["diagnostics.debounceMs"]); ok {
+		settings.Diagnostics.DebounceMs = value
+	}
+	if !accountCheckSet && hasLegacyUndeclared && legacyUndeclared {
+		settings.Diagnostics.AccountCheck = accountCheckLint
 	}
 	if value, ok := toBool(raw["diagnostics.undeclaredCommodities"]); ok {
 		settings.Diagnostics.UndeclaredCommodities = value
@@ -559,4 +622,22 @@ func toString(value interface{}) (string, bool) {
 		return v, true
 	}
 	return "", false
+}
+
+// accountCheckMode maps the settings string to the analyzer's check mode.
+func accountCheckMode(value string) analyzer.AccountCheckMode {
+	switch value {
+	case accountCheckStrict:
+		return analyzer.AccountCheckStrict
+	case accountCheckLint:
+		return analyzer.AccountCheckLint
+	default:
+		return analyzer.AccountCheckOff
+	}
+}
+
+// diagnosticsSettingsChanged reports whether a change affects published
+// diagnostics, so cached results must be dropped and open documents republished.
+func diagnosticsSettingsChanged(old, updated diagnosticsSettings) bool {
+	return old != updated
 }

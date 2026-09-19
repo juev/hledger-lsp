@@ -125,6 +125,7 @@ func TestSemanticTokens_ReportUTF16ColumnsAfterEmoji(t *testing.T) {
 func TestDiagnostics_ReportUTF16RangesForEmojiAccount(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	ts.enableOptInDiagnostics(accountCheckLint)
 	docURI := uri.URI("file:///emoji.journal")
 	// The undeclared account sits behind an emoji, so its column in runes and
 	// its column in UTF-16 code units differ.

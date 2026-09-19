@@ -46,6 +46,21 @@ func (m *mockClient) getDiagnostics() []protocol.PublishDiagnosticsParams {
 	return result
 }
 
+// publishedDiagnosticCodes extracts diagnostic codes as plain strings.
+// protocol.Diagnostic.Code is a union type, so comparing it to a Go string
+// literal would silently never match.
+func publishedDiagnosticCodes(client *mockClient) []string {
+	var codes []string
+	for _, pub := range client.getDiagnostics() {
+		for _, d := range pub.Diagnostics {
+			if code, ok := d.Code.(protocol.String); ok {
+				codes = append(codes, string(code))
+			}
+		}
+	}
+	return codes
+}
+
 func (m *mockClient) getRegistrations() []protocol.Registration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -937,6 +952,10 @@ include transactions.journal`
 	err = srv.workspace.Initialize()
 	require.NoError(t, err)
 
+	settings := srv.getSettings()
+	settings.Diagnostics.UndeclaredCommodities = true
+	srv.setSettings(settings)
+
 	uri := uri.File(txPath)
 	params := &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{
@@ -1283,15 +1302,11 @@ func TestServer_Initialize_FeatureToggles(t *testing.T) {
 }
 
 func TestServer_DiagnosticsSettings(t *testing.T) {
-	t.Run("undeclared accounts disabled", func(t *testing.T) {
+	t.Run("undeclared accounts off by default", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
 		srv.diagDebounce = 0
 		srv.SetClient(client)
-
-		settings := srv.getSettings()
-		settings.Diagnostics.UndeclaredAccounts = false
-		srv.setSettings(settings)
 
 		content := `account assets:cash
 
@@ -1299,32 +1314,80 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
     expenses:food  $50
     assets:cash
 `
-		uri := uri.URI("file:///test.journal")
-		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
-			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
-		})
-		require.NoError(t, err)
+		docURI := uri.URI("file:///test.journal")
+		require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+		}))
 		time.Sleep(100 * time.Millisecond)
 
-		diagnostics := client.getDiagnostics()
-		require.NotEmpty(t, diagnostics)
-
-		for _, pub := range diagnostics {
-			for _, d := range pub.Diagnostics {
-				assert.NotEqual(t, "UNDECLARED_ACCOUNT", d.Code,
-					"undeclared account diagnostics should be filtered out")
-			}
-		}
+		// hledger without --strict does not require account declarations, so the
+		// default must not report the undeclared posting account.
+		require.NotEmpty(t, client.getDiagnostics())
+		assert.NotContains(t, publishedDiagnosticCodes(client), "UNDECLARED_ACCOUNT")
 	})
 
-	t.Run("undeclared commodities disabled", func(t *testing.T) {
+	t.Run("undeclared accounts reported in lint mode", func(t *testing.T) {
 		client := &mockClient{}
 		srv := NewServer()
 		srv.diagDebounce = 0
 		srv.SetClient(client)
 
 		settings := srv.getSettings()
-		settings.Diagnostics.UndeclaredCommodities = false
+		settings.Diagnostics.AccountCheck = accountCheckLint
+		srv.setSettings(settings)
+
+		// "food:snacks" is not one of hledger's built-in account type names, so
+		// the soft check reports it while the account directive does not cover it.
+		content := `account assets:cash
+
+2024-01-15 test
+    food:snacks  $50
+    assets:cash
+`
+		docURI := uri.URI("file:///test.journal")
+		require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+		}))
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Contains(t, publishedDiagnosticCodes(client), "UNDECLARED_ACCOUNT")
+	})
+
+	t.Run("undeclared accounts reported in strict mode", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.diagDebounce = 0
+		srv.SetClient(client)
+
+		settings := srv.getSettings()
+		settings.Diagnostics.AccountCheck = accountCheckStrict
+		srv.setSettings(settings)
+
+		// Under --strict a parent declaration does not cover its subaccounts,
+		// which the lint mode does allow.
+		content := `account assets
+
+2024-01-15 test
+    expenses:food  $50
+    assets:cash
+`
+		docURI := uri.URI("file:///test.journal")
+		require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+		}))
+		time.Sleep(100 * time.Millisecond)
+
+		assert.Contains(t, publishedDiagnosticCodes(client), "UNDECLARED_ACCOUNT")
+	})
+
+	t.Run("undeclared commodities reported when enabled", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.diagDebounce = 0
+		srv.SetClient(client)
+
+		settings := srv.getSettings()
+		settings.Diagnostics.UndeclaredCommodities = true
 		srv.setSettings(settings)
 
 		content := `commodity $
@@ -1333,22 +1396,35 @@ func TestServer_DiagnosticsSettings(t *testing.T) {
     expenses:food  50 EUR
     assets:cash
 `
-		uri := uri.URI("file:///test.journal")
-		err := srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
-			TextDocument: protocol.TextDocumentItem{URI: uri, Text: content},
-		})
-		require.NoError(t, err)
+		docURI := uri.URI("file:///test.journal")
+		require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+		}))
 		time.Sleep(100 * time.Millisecond)
 
-		diagnostics := client.getDiagnostics()
-		require.NotEmpty(t, diagnostics)
+		assert.Contains(t, publishedDiagnosticCodes(client), "UNDECLARED_COMMODITY")
+	})
 
-		for _, pub := range diagnostics {
-			for _, d := range pub.Diagnostics {
-				assert.NotEqual(t, "UNDECLARED_COMMODITY", d.Code,
-					"undeclared commodity diagnostics should be filtered out")
-			}
-		}
+	t.Run("undeclared commodities off by default", func(t *testing.T) {
+		client := &mockClient{}
+		srv := NewServer()
+		srv.diagDebounce = 0
+		srv.SetClient(client)
+
+		content := `commodity $
+
+2024-01-15 test
+    expenses:food  50 EUR
+    assets:cash
+`
+		docURI := uri.URI("file:///test.journal")
+		require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+			TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+		}))
+		time.Sleep(100 * time.Millisecond)
+
+		require.NotEmpty(t, client.getDiagnostics())
+		assert.NotContains(t, publishedDiagnosticCodes(client), "UNDECLARED_COMMODITY")
 	})
 
 	t.Run("unbalanced transactions disabled", func(t *testing.T) {

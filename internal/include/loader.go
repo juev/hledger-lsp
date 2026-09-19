@@ -145,7 +145,7 @@ func (s *loadState) loadOccurrence(path, canonical, content string, context pars
 	})
 	for _, parseErr := range parseErrs {
 		s.errors = append(s.errors, LoadError{
-			Kind: ErrorParseError, Path: path, SourcePath: path, Message: parseErr.Message,
+			Kind: ErrorParseError, Path: path, SourcePath: path, Message: parseErr.Message, Code: parseErr.Code,
 			Range:      ast.Range{Start: ast.Position{Line: parseErr.Pos.Line, Column: parseErr.Pos.Column, Offset: parseErr.Pos.Offset}, End: ast.Position{Line: parseErr.End.Line, Column: parseErr.End.Column, Offset: parseErr.End.Offset}},
 			Provenance: via,
 		})

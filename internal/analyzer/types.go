@@ -20,6 +20,9 @@ type Diagnostic struct {
 	Severity DiagnosticSeverity
 	Message  string
 	Code     string
+	// Data carries structured details for clients that build their own fixes,
+	// mirroring the LSP Diagnostic.data payload.
+	Data map[string]any
 }
 
 type AnalysisResult struct {

@@ -120,6 +120,8 @@ func TestExtractQuotedName_RequiresOwnedDiagnosticFormat(t *testing.T) {
 func TestServer_CodeAction_DeclareAccountQuickFix(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 
 	uri := uri.URI("file:///test.journal")
 	content := `account assets:cash
@@ -156,6 +158,8 @@ account custom:thing
 func TestServer_CodeAction_DeclareCommodityQuickFix(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 
 	uri := uri.URI("file:///test.journal")
 	content := `commodity EUR
@@ -191,6 +195,8 @@ commodity "TEST B"
 func TestServer_CodeAction_DeclareAccount_CJKName(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 
 	uri := uri.URI("file:///test.journal")
 	content := `account assets:cash
@@ -221,6 +227,8 @@ account расходы:еда
 func TestServer_CodeAction_DeclareAccount_CRLF(t *testing.T) {
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 
 	uri := uri.URI("file:///test.journal")
 	content := "account assets:cash\r\n\r\n2024-01-15 grocery\r\n    custom:thing  $50\r\n    assets:cash"
@@ -256,6 +264,8 @@ func TestServer_CodeAction_DeclareAccount_TargetsIncludedFile(t *testing.T) {
 
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 	loader := include.NewLoader()
 	ts.loader = loader
 	ts.workspace = workspace.NewWorkspace(tmpDir, loader)
@@ -291,6 +301,8 @@ func TestServer_CodeAction_DeclareAccount_PrefersOpenIncludedFile(t *testing.T) 
 
 	ts := newTestServer()
 	ts.cliClient = nil
+	// The declaration checks are opt-in, so the quick fix needs them enabled.
+	ts.enableOptInDiagnostics(accountCheckLint)
 	loader := include.NewLoader()
 	ts.loader = loader
 	ts.workspace = workspace.NewWorkspace(tmpDir, loader)

@@ -260,6 +260,8 @@ invalid line here
 
 func TestIntegration_MultipleErrorTypes(t *testing.T) {
 	ts := newTestServer()
+	// The account declaration checks are opt-in, as in hledger without --strict.
+	ts.enableOptInDiagnostics(accountCheckLint)
 	uri := uri.URI("file:///test.journal")
 
 	content := `account expenses:declared
@@ -397,6 +399,8 @@ func applyTextEdits(content string, edits []protocol.TextEdit) string {
 // which distinguishes our LSP from the hledger CLI's own check output.
 func TestIntegration_QuotedCommodityDiagnostics_Issue199(t *testing.T) {
 	ts := newTestServer()
+	// Commodity directives are optional in hledger, so this check is opt-in.
+	ts.enableOptInDiagnostics(accountCheckOff)
 	uri := uri.URI("file:///issue199.journal")
 
 	content := `account monies
