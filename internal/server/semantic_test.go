@@ -1330,6 +1330,7 @@ func TestSemanticTokens_Legend_NegativeModifier(t *testing.T) {
 
 func TestSemanticTokens_DiagnosticModifiers_FullAndRange(t *testing.T) {
 	srv := NewServer()
+	srv.enableOptInDiagnostics(accountCheckLint)
 	docURI := uri.URI("file:///diagnostics.journal")
 	content := `account assets:cash
 account expenses:food
@@ -1402,7 +1403,7 @@ func TestSemanticTokens_DiagnosticModifiers_RespectSettingsAndTolerance(t *testi
 	t.Run("individual diagnostic settings disabled", func(t *testing.T) {
 		srv := NewServer()
 		settings := srv.getSettings()
-		settings.Diagnostics.UndeclaredAccounts = false
+		settings.Diagnostics.AccountCheck = accountCheckOff
 		settings.Diagnostics.UnbalancedTransactions = false
 		srv.setSettings(settings)
 		srv.documents.Store(docURI, content)
@@ -1452,6 +1453,8 @@ func TestSemanticTokens_DiagnosticModifiers_UseWorkspaceDeclarationsAndNormalize
 	require.NoError(t, os.WriteFile(childPath, []byte("account expenses:food\n"), 0o600))
 
 	srv := NewServer()
+	srv.diagDebounce = 0
+	srv.enableOptInDiagnostics(accountCheckLint)
 	srv.workspace = workspace.NewWorkspace(dir, srv.loader)
 	require.NoError(t, srv.workspace.Initialize())
 	docURI := uri.File(mainPath)

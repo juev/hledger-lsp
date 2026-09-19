@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
@@ -56,15 +58,22 @@ func TestDefaultServerSettings(t *testing.T) {
 		t.Error("Completion.IncludeNotes should default to true")
 	}
 
-	// Diagnostics settings
-	if !s.Diagnostics.UndeclaredAccounts {
-		t.Error("Diagnostics.UndeclaredAccounts should default to true")
+	// Diagnostics settings. The defaults follow hledger: account declarations
+	// are only required under --strict, and commodity directives are optional.
+	if s.Diagnostics.AccountCheck != accountCheckOff {
+		t.Errorf("Diagnostics.AccountCheck = %q, want %q", s.Diagnostics.AccountCheck, accountCheckOff)
 	}
-	if !s.Diagnostics.UndeclaredCommodities {
-		t.Error("Diagnostics.UndeclaredCommodities should default to true")
+	if s.Diagnostics.UndeclaredCommodities {
+		t.Error("Diagnostics.UndeclaredCommodities should default to false")
 	}
 	if !s.Diagnostics.UnbalancedTransactions {
 		t.Error("Diagnostics.UnbalancedTransactions should default to true")
+	}
+	if !s.Diagnostics.BalanceAssertions {
+		t.Error("Diagnostics.BalanceAssertions should default to true")
+	}
+	if s.Diagnostics.DebounceMs != 100 {
+		t.Errorf("Diagnostics.DebounceMs = %d, want 100", s.Diagnostics.DebounceMs)
 	}
 
 	// Formatting settings
@@ -171,8 +180,8 @@ func TestParseSettingsFromRaw_Diagnostics(t *testing.T) {
 
 	result := parseSettingsFromRaw(base, raw)
 
-	if result.Diagnostics.UndeclaredAccounts {
-		t.Error("Diagnostics.UndeclaredAccounts should be false")
+	if result.Diagnostics.AccountCheck != accountCheckOff {
+		t.Errorf("Diagnostics.AccountCheck = %q, want %q (legacy false disables the check)", result.Diagnostics.AccountCheck, accountCheckOff)
 	}
 	if result.Diagnostics.UndeclaredCommodities {
 		t.Error("Diagnostics.UndeclaredCommodities should be false")
@@ -180,6 +189,51 @@ func TestParseSettingsFromRaw_Diagnostics(t *testing.T) {
 	if result.Diagnostics.UnbalancedTransactions {
 		t.Error("Diagnostics.UnbalancedTransactions should be false")
 	}
+}
+
+func TestParseSettingsFromRaw_AccountCheck(t *testing.T) {
+	base := defaultServerSettings()
+
+	t.Run("explicit mode wins over the legacy flag", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"diagnostics": map[string]interface{}{
+				"accountCheck":       "strict",
+				"undeclaredAccounts": true,
+			},
+		}
+		assert.Equal(t, accountCheckStrict, parseSettingsFromRaw(base, raw).Diagnostics.AccountCheck)
+	})
+
+	t.Run("legacy true maps to lint", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"diagnostics": map[string]interface{}{"undeclaredAccounts": true},
+		}
+		assert.Equal(t, accountCheckLint, parseSettingsFromRaw(base, raw).Diagnostics.AccountCheck)
+	})
+
+	t.Run("dotted key", func(t *testing.T) {
+		raw := map[string]interface{}{"diagnostics.accountCheck": "lint"}
+		assert.Equal(t, accountCheckLint, parseSettingsFromRaw(base, raw).Diagnostics.AccountCheck)
+	})
+
+	t.Run("unknown value falls back to the default", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"diagnostics": map[string]interface{}{"accountCheck": "sometimes"},
+		}
+		assert.Equal(t, accountCheckOff, parseSettingsFromRaw(base, raw).Diagnostics.AccountCheck)
+	})
+
+	t.Run("balance assertions and debounce", func(t *testing.T) {
+		raw := map[string]interface{}{
+			"diagnostics": map[string]interface{}{
+				"balanceAssertions": false,
+				"debounceMs":        250,
+			},
+		}
+		result := parseSettingsFromRaw(base, raw)
+		assert.False(t, result.Diagnostics.BalanceAssertions)
+		assert.Equal(t, 250, result.Diagnostics.DebounceMs)
+	})
 }
 
 func TestParseSettingsFromRaw_Formatting(t *testing.T) {
@@ -329,8 +383,8 @@ func TestParseSettingsFromRaw_FlatKeys(t *testing.T) {
 	if !result.Features.InlineCompletion {
 		t.Error("Features.InlineCompletion should be true")
 	}
-	if result.Diagnostics.UndeclaredAccounts {
-		t.Error("Diagnostics.UndeclaredAccounts should be false")
+	if result.Diagnostics.AccountCheck != accountCheckOff {
+		t.Errorf("Diagnostics.AccountCheck = %q, want %q", result.Diagnostics.AccountCheck, accountCheckOff)
 	}
 	if result.Formatting.IndentSize != 8 {
 		t.Errorf("Formatting.IndentSize = %d, want 8", result.Formatting.IndentSize)

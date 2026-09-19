@@ -20,6 +20,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 	"github.com/juev/hledger-lsp/internal/textutil"
 	"github.com/juev/hledger-lsp/internal/workspace"
@@ -65,6 +66,10 @@ type Server struct {
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
 	diagEntries  map[uri.URI]*diagEntry
+
+	journalDiagMu sync.Mutex
+	journalDiag   *journalDiagEntry
+	docVersions   sync.Map // map[uri.URI]uint32
 }
 
 func NewServer() *Server {
@@ -301,6 +306,7 @@ func (s *Server) Exit(ctx context.Context) error {
 func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
 	content := textutil.NormalizeLineEndings(params.TextDocument.Text)
 	s.documents.Store(params.TextDocument.URI, content)
+	s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.invalidateDocText(params.TextDocument.URI)
@@ -337,6 +343,7 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 			}
 		}
 		s.documents.Store(params.TextDocument.URI, content)
+		s.setDocumentVersion(params.TextDocument.URI, uint32(params.TextDocument.Version))
 		s.payeeTemplatesCache.Clear()
 		s.alignmentCache.Delete(params.TextDocument.URI)
 		if s.workspace != nil {
@@ -370,7 +377,16 @@ func (s *Server) clearAlignmentCache() {
 
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
 	s.cancelDiagnostics(params.TextDocument.URI)
+	// Drop the published diagnostics with the document, so a closed file does not
+	// keep stale problems in the client's panel.
+	if s.client != nil {
+		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
+			URI:         params.TextDocument.URI,
+			Diagnostics: []protocol.Diagnostic{},
+		})
+	}
 	s.documents.Delete(params.TextDocument.URI)
+	s.docVersions.Delete(params.TextDocument.URI)
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
@@ -450,11 +466,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 
 	settings := s.getSettings()
 	if !settings.Features.Diagnostics {
-		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
-			URI:         docURI,
-			Version:     protocol.NewOptional(int32(version)),
-			Diagnostics: []protocol.Diagnostic{},
-		})
+		s.publishDiagnosticSet(ctx, docURI, []protocol.Diagnostic{}, &version)
 		return
 	}
 
@@ -469,7 +481,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 			URI:         docURI,
 			Version:     protocol.NewOptional(int32(version)),
-			Diagnostics: diagsByURI[docURI],
+			Diagnostics: exactDedupDiagnostics(diagsByURI[docURI]),
 		})
 		// Fan out diagnostics to included child documents.
 		for uri, diags := range diagsByURI {
@@ -478,7 +490,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 			}
 			_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
 				URI:         uri,
-				Diagnostics: diags,
+				Diagnostics: exactDedupDiagnostics(diags),
 			})
 		}
 		return
@@ -495,17 +507,13 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 		if ctx.Err() != nil {
 			return
 		}
-		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
-			URI:     docURI,
-			Version: protocol.NewOptional(int32(version)),
-			Diagnostics: []protocol.Diagnostic{
-				{
-					Severity: protocol.DiagnosticSeverityError,
-					Source:   protocol.NewOptional("hledger-lsp"),
-					Message:  protocol.String(sizeErr.Message),
-				},
+		s.publishDiagnosticSet(ctx, docURI, []protocol.Diagnostic{
+			{
+				Severity: protocol.DiagnosticSeverityError,
+				Source:   protocol.NewOptional("hledger-lsp"),
+				Message:  protocol.String(sizeErr.Message),
 			},
-		})
+		}, &version)
 		return
 	}
 
@@ -522,36 +530,62 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, content
 		s.resolved.Store(docURI, resolved)
 	}
 
-	diagnostics := s.analyze(docURI, path, content)
+	byURI := s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(resolved), settings.Diagnostics)
+
+	// The analysed document always gets a publish, even when it has no problems:
+	// the empty list is what clears previously reported diagnostics.
+	if _, ok := byURI[docURI]; !ok {
+		byURI[docURI] = nil
+	}
+
+	// Per-buffer diagnostics: parse errors, account declarations and date tags.
+	// Balance and assertion codes come from the journal-level pass above, which
+	// evaluates the whole include tree in hledger's date order.
+	byURI[docURI] = append(byURI[docURI], s.analyzeWithJournalBalance(docURI, path, content, false)...)
 
 	if ctx.Err() != nil {
 		return
 	}
 
+	// A load failure belongs to the file that contains the failing directive.
 	for _, err := range loadErrors {
-		if err.Kind == include.ErrorParseError {
+		if err.Kind == include.ErrorParseError && (err.SourcePath == "" || err.SourcePath == path) {
+			// Already reported by the per-buffer analysis of this document.
 			continue
 		}
-		severity := protocol.DiagnosticSeverityError
-		if err.Kind == include.ErrorNotJournal {
-			severity = protocol.DiagnosticSeverityWarning
+
+		target := docURI
+		if err.SourcePath != "" && err.SourcePath != path {
+			target = pathToURI(err.SourcePath)
 		}
-		diagnostics = append(diagnostics, protocol.Diagnostic{
-			Range:    *astRangeToProtocol(err.Range),
-			Severity: severity,
-			Source:   protocol.NewOptional("hledger-lsp"),
-			Message:  protocol.String(err.Message),
-		})
+
+		diagnostic := loadErrorDiagnostic(err)
+		if mapper := s.mapperFor(target); mapper != nil {
+			diagnostic.Range = astRangeToLSP(mapper, err.Range)
+		}
+		byURI[target] = append(byURI[target], diagnostic)
 	}
 
-	_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
-		URI:         docURI,
-		Version:     protocol.NewOptional(int32(version)),
-		Diagnostics: diagnostics,
-	})
+	for target, diagnostics := range byURI {
+		if target == docURI {
+			s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), &version)
+			continue
+		}
+		s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), nil)
+	}
 }
 
+// analyze returns every per-buffer diagnostic, including the balance codes the
+// journal-level pass also produces. Handlers that only need a buffer's own view
+// (code actions, semantic tokens) use it directly.
 func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagnostic {
+	return s.analyzeWithJournalBalance(docURI, path, content, true)
+}
+
+// analyzeWithJournalBalance produces per-buffer diagnostics. When includeJournalBalance
+// is false the balance and assertion codes are skipped: they belong to
+// CheckJournalBalance, which sees the whole include tree in date order.
+func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string, includeJournalBalance bool) []protocol.Diagnostic {
 	journal, parseErrs := s.cachedJournal(docURI, content)
 
 	// Analysis runs on every keystroke, and indexing the document costs a pass
@@ -566,6 +600,10 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 
 	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
 	for _, err := range parseErrs {
+		code := err.Code
+		if code == "" {
+			code = parser.CodeParseError
+		}
 		diagnostics = append(diagnostics, protocol.Diagnostic{
 			Range: protocol.Range{
 				Start: positionMapper().ByteToLSP(err.Pos.Offset),
@@ -574,6 +612,7 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 			Severity: protocol.DiagnosticSeverityError,
 			Source:   protocol.NewOptional("hledger-lsp"),
 			Message:  protocol.String(err.Message),
+			Code:     protocol.String(code),
 		})
 	}
 
@@ -592,16 +631,25 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 
 	settings := s.getSettings()
 	for _, diag := range result.Diagnostics {
+		if !includeJournalBalance && isJournalBalanceCode(diag.Code) {
+			continue
+		}
 		if !s.shouldIncludeDiagnostic(diag.Code, settings.Diagnostics) {
 			continue
 		}
-		diagnostics = append(diagnostics, protocol.Diagnostic{
+		converted := protocol.Diagnostic{
 			Range:    astRangeToLSP(positionMapper(), diag.Range),
 			Severity: toProtocolSeverity(diag.Severity),
 			Source:   protocol.NewOptional("hledger-lsp"),
 			Message:  protocol.String(diag.Message),
 			Code:     protocol.String(diag.Code),
-		})
+		}
+		if len(diag.Data) > 0 {
+			if raw, err := protocol.Marshal(diag.Data); err == nil {
+				converted.Data = protocol.LSPAny(raw)
+			}
+		}
+		diagnostics = append(diagnostics, converted)
 	}
 
 	return diagnostics
@@ -685,8 +733,11 @@ func remapRulesDiagRange(rng ast.Range, sourceMap []rules.SourceMapping, lineOff
 	return rules.RemapRange(rng.Start.Offset, rng.End.Offset, sourceMap, lineOffsets)
 }
 
-// exactDedupDiagnostics removes duplicate diagnostics by exact key
-// (range, message, code, severity).
+// exactDedupDiagnostics removes duplicate diagnostics by (range, message). The
+// code is deliberately not part of the key: the same failure can be reported
+// twice (once by the loader, once by the analyzer, and in rules files once with
+// a code and once without), and the user must still see it only once. When
+// duplicates disagree on severity the most severe one wins.
 func exactDedupDiagnostics(diags []protocol.Diagnostic) []protocol.Diagnostic {
 	if len(diags) <= 1 {
 		return diags
@@ -695,25 +746,24 @@ func exactDedupDiagnostics(diags []protocol.Diagnostic) []protocol.Diagnostic {
 		line, col       uint32
 		endLine, endCol uint32
 		message         string
-		code            interface{}
-		severity        protocol.DiagnosticSeverity
 	}
-	seen := make(map[diagKey]bool, len(diags))
+	seen := make(map[diagKey]int, len(diags))
 	result := make([]protocol.Diagnostic, 0, len(diags))
 	for _, d := range diags {
 		key := diagKey{
-			line:     d.Range.Start.Line,
-			col:      d.Range.Start.Character,
-			endLine:  d.Range.End.Line,
-			endCol:   d.Range.End.Character,
-			message:  fmt.Sprint(d.Message),
-			code:     d.Code,
-			severity: d.Severity,
+			line:    d.Range.Start.Line,
+			col:     d.Range.Start.Character,
+			endLine: d.Range.End.Line,
+			endCol:  d.Range.End.Character,
+			message: fmt.Sprint(d.Message),
 		}
-		if seen[key] {
+		if index, ok := seen[key]; ok {
+			if d.Severity < result[index].Severity {
+				result[index] = d
+			}
 			continue
 		}
-		seen[key] = true
+		seen[key] = len(result)
 		result = append(result, d)
 	}
 	return result
@@ -729,11 +779,13 @@ func rulesDiagSeverity(s rules.DiagnosticSeverity) protocol.DiagnosticSeverity {
 func (s *Server) shouldIncludeDiagnostic(code string, settings diagnosticsSettings) bool {
 	switch code {
 	case "UNDECLARED_ACCOUNT":
-		return settings.UndeclaredAccounts
+		return settings.AccountCheck != accountCheckOff
 	case "UNDECLARED_COMMODITY":
 		return settings.UndeclaredCommodities
-	case "UNBALANCED", "MULTIPLE_INFERRED":
+	case analyzer.CodeUnbalanced, analyzer.CodeMultipleInferred:
 		return settings.UnbalancedTransactions
+	case analyzer.CodeBalanceAssertionFailed:
+		return settings.BalanceAssertions
 	default:
 		return true
 	}
@@ -796,7 +848,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 	for docURI := range affected {
 		if content, ok := s.GetDocument(docURI); ok {
-			s.publishDiagnostics(ctx, docURI, content, 0)
+			s.publishDiagnostics(ctx, docURI, content, s.documentVersion(docURI))
 		}
 	}
 

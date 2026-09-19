@@ -87,6 +87,16 @@ func newTestServer() *testServer {
 	}
 }
 
+// enableOptInDiagnostics turns on the diagnostics hledger only reports on
+// request (account declaration checks and commodity directives), mirroring the
+// settings a user would configure.
+func (s *Server) enableOptInDiagnostics(accountCheck string) {
+	settings := s.getSettings()
+	settings.Diagnostics.AccountCheck = accountCheck
+	settings.Diagnostics.UndeclaredCommodities = true
+	s.setSettings(settings)
+}
+
 func (ts *testServer) openDocument(uri uri.URI, content string) error {
 	params := &protocol.DidOpenTextDocumentParams{
 		TextDocument: protocol.TextDocumentItem{

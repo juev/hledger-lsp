@@ -26,6 +26,9 @@ type LoadError struct {
 	Message    string
 	Range      ast.Range
 	Provenance IncludeProvenance
+	// Code carries the parser's diagnostic code for parse errors, so clients see
+	// the same code as for a parse error in the document itself.
+	Code string
 }
 
 func (e LoadError) Error() string {
@@ -36,6 +39,9 @@ func (e LoadError) Error() string {
 // publishes it as the diagnostic code so clients can filter include failures
 // without matching message text.
 func (e LoadError) ErrorCode() string {
+	if e.Code != "" {
+		return e.Code
+	}
 	switch e.Kind {
 	case ErrorFileNotFound:
 		return "INCLUDE_NOT_FOUND"

@@ -161,7 +161,12 @@ func TestDiagnostics_DidCloseCancelsPending(t *testing.T) {
 	count := len(client.diagnostics)
 	client.mu.Unlock()
 
-	assert.Equal(t, 0, count, "no diagnostics should be published after DidClose")
+	// The pending debounced publish is cancelled, and exactly one empty set is
+	// published so the client clears the closed file's problems.
+	assert.Equal(t, 1, count, "DidClose publishes exactly one empty set")
+	last := client.getLastDiagnostics()
+	require.NotNil(t, last)
+	assert.Empty(t, last.Diagnostics, "closing a document clears its diagnostics")
 }
 
 func TestDiagnostics_IndependentURIsDoNotInterfere(t *testing.T) {

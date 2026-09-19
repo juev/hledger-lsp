@@ -12,8 +12,23 @@ import (
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
+// AccountCheckMode selects how strictly posting accounts must be declared.
+type AccountCheckMode int
+
+const (
+	// AccountCheckLint keeps the historical soft check: warn about accounts no
+	// account directive covers, while at least one directive exists.
+	AccountCheckLint AccountCheckMode = iota
+	// AccountCheckOff disables the check entirely, matching plain hledger.
+	AccountCheckOff
+	// AccountCheckStrict mirrors `hledger --strict`: every posting account needs
+	// its own account directive, and subaccounts are not covered by a parent.
+	AccountCheckStrict
+)
+
 type Analyzer struct {
 	BalanceTolerance decimal.Decimal
+	AccountCheck     AccountCheckMode
 }
 
 func New() *Analyzer {
@@ -69,8 +84,8 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 			result.Diagnostics = append(result.Diagnostics, diag)
 		}
 
-		if len(sortedDeclared) > 0 {
-			undeclaredDiags := checkUndeclaredAccounts(tx, sortedDeclared)
+		if a.AccountCheck != AccountCheckOff && len(sortedDeclared) > 0 {
+			undeclaredDiags := checkUndeclaredAccounts(tx, sortedDeclared, a.AccountCheck == AccountCheckStrict)
 			result.Diagnostics = append(result.Diagnostics, undeclaredDiags...)
 		}
 
@@ -149,8 +164,8 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		if !balanceResult.Balanced {
 			txDiags = append(txDiags, a.createBalanceDiagnostic(&tx, balanceResult))
 		}
-		if len(sortedDeclared) > 0 {
-			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, sortedDeclared)...)
+		if a.AccountCheck != AccountCheckOff && len(sortedDeclared) > 0 {
+			txDiags = append(txDiags, checkUndeclaredAccounts(&tx, sortedDeclared, a.AccountCheck == AccountCheckStrict)...)
 		}
 		if len(declaredCommodities) > 0 {
 			txDiags = append(txDiags, checkUndeclaredCommodities(&tx, declaredCommodities)...)
@@ -484,19 +499,49 @@ func isAccountDeclared(accountName string, sortedDeclared []string) bool {
 	return false
 }
 
-func checkUndeclaredAccounts(tx *ast.Transaction, sortedDeclared []string) []Diagnostic {
+// checkUndeclaredAccounts reports posting accounts that no account directive
+// covers. strict mirrors `hledger --strict`: the account needs its own
+// declaration (an ancestor's declaration does not count and the built-in account
+// type names are not exempt), and hledger refuses to load the journal, so the
+// diagnostic is an error. The soft mode warns and keeps the historical
+// exemptions.
+func checkUndeclaredAccounts(tx *ast.Transaction, sortedDeclared []string, strict bool) []Diagnostic {
 	var diags []Diagnostic
-	for _, posting := range tx.Postings {
-		if !isAccountDeclared(posting.Account.GetResolvedName(), sortedDeclared) {
-			diags = append(diags, Diagnostic{
-				Range:    posting.Account.Range,
-				Severity: SeverityWarning,
-				Code:     "UNDECLARED_ACCOUNT",
-				Message:  fmt.Sprintf("account '%s' is not declared", posting.Account.GetResolvedName()),
-			})
+	for i := range tx.Postings {
+		posting := &tx.Postings[i]
+		name := posting.Account.GetResolvedName()
+
+		declared := isAccountDeclared(name, sortedDeclared)
+		severity := SeverityWarning
+		if strict {
+			declared = isAccountDeclaredStrict(name, sortedDeclared)
+			severity = SeverityError
 		}
+		if declared {
+			continue
+		}
+
+		message := fmt.Sprintf("account '%s' is not declared", name)
+		if strict {
+			message = fmt.Sprintf("account '%s' has not been declared (hledger --strict)", name)
+		}
+
+		diags = append(diags, Diagnostic{
+			Range:    posting.Account.Range,
+			Severity: severity,
+			Code:     "UNDECLARED_ACCOUNT",
+			Message:  message,
+			Data:     map[string]any{"kind": "undeclaredAccount", "account": name, "strict": strict},
+		})
 	}
 	return diags
+}
+
+// isAccountDeclaredStrict reports whether the account has its own account
+// directive, mirroring `hledger --strict`.
+func isAccountDeclaredStrict(accountName string, sortedDeclared []string) bool {
+	i := sort.SearchStrings(sortedDeclared, accountName)
+	return i < len(sortedDeclared) && sortedDeclared[i] == accountName
 }
 
 func (a *Analyzer) createBalanceDiagnostic(tx *ast.Transaction, br *BalanceResult) Diagnostic {
@@ -555,6 +600,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 				Severity: SeverityWarning,
 				Code:     "UNDECLARED_COMMODITY",
 				Message:  fmt.Sprintf("commodity '%s' has no directive", symbol),
+				Data:     map[string]any{"kind": "undeclaredCommodity", "commodity": symbol},
 			})
 		}
 	}
@@ -597,6 +643,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 				Severity: SeverityError,
 				Code:     "EMPTY_DATE_TAG",
 				Message:  fmt.Sprintf("tag '%s' requires a date value", tag.Name),
+				Data:     map[string]any{"kind": "dateTag", "tag": tag.Name, "value": tag.Value},
 			})
 			return
 		}
@@ -607,6 +654,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 				Severity: SeverityError,
 				Code:     "INVALID_DATE_TAG",
 				Message:  fmt.Sprintf("tag '%s' has invalid date value: %s", tag.Name, tag.Value),
+				Data:     map[string]any{"kind": "dateTag", "tag": tag.Name, "value": tag.Value},
 			})
 		}
 	}
