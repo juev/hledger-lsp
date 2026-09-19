@@ -29,13 +29,18 @@ type Limits struct {
 // Loader caches normalized source text. Parsed journals are occurrence-specific
 // because parser context depends on the include site.
 type Loader struct {
-	mu     sync.RWMutex
-	cache  map[string]string
-	limits Limits
+	mu        sync.RWMutex
+	cache     map[string]string
+	canonical map[string]string // absolute path → symlink-resolved path
+	limits    Limits
 }
 
 func NewLoader() *Loader {
-	return &Loader{cache: make(map[string]string), limits: DefaultLimits()}
+	return &Loader{
+		cache:     make(map[string]string),
+		canonical: make(map[string]string),
+		limits:    DefaultLimits(),
+	}
 }
 
 func DefaultLimits() Limits {
@@ -70,7 +75,7 @@ func (l *Loader) Load(path string) (*ResolvedJournal, []LoadError) {
 
 func (l *Loader) LoadWithOptions(path string, options LoadOptions) (*ResolvedJournal, []LoadError) {
 	path = absoluteClean(path)
-	options = snapshotLoadOptions(options)
+	options = l.snapshotLoadOptions(options)
 	content, err := l.readRoot(path, options)
 	if err != nil {
 		return nil, []LoadError{*err}
@@ -85,7 +90,7 @@ func (l *Loader) LoadFromContent(path, content string) (*ResolvedJournal, []Load
 		return nil, []LoadError{{Kind: ErrorFileTooLarge, Path: path, SourcePath: path, Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), limits.MaxFileSizeBytes)}}
 	}
 	return l.load(path, textutil.NormalizeLineEndings(content), LoadOptions{Overlays: map[string]OverlayEntry{
-		canonicalPath(path): {SourcePath: path, Content: content},
+		l.canonicalPath(path): {SourcePath: path, Content: content},
 	}})
 }
 
@@ -104,7 +109,7 @@ func (l *Loader) load(path, content string, options LoadOptions) (*ResolvedJourn
 	result := NewResolvedJournal(nil)
 	result.Items = make([]ResolvedItem, 0)
 	state := loadState{loader: l, options: options, result: result, limits: l.getLimits(), children: make(map[OccurrenceID]map[int][]OccurrenceID)}
-	state.loadOccurrence(path, canonicalPath(path), content, parser.Context{}, IncludeProvenance{SourcePath: path}, 0)
+	state.loadOccurrence(path, l.canonicalPath(path), content, parser.Context{}, IncludeProvenance{SourcePath: path}, 0)
 	result.Items = state.inlineItems(1)
 	result.Errors = state.errors
 	return result, state.errors
@@ -222,7 +227,7 @@ func (s *loadState) resolveInclude(parentID OccurrenceID, basePath string, site 
 			s.errors = append(s.errors, LoadError{Kind: ErrorNotJournal, Path: path, SourcePath: basePath, Message: fmt.Sprintf("included file is not a journal file: %s", filepath.Base(path)), Range: site.Include.Range, Provenance: provenance})
 			continue
 		}
-		canonical := canonicalPath(path)
+		canonical := s.loader.canonicalPath(path)
 		if canonical == s.active[len(s.active)-1] {
 			continue
 		}
@@ -263,13 +268,13 @@ func (s *loadState) includePaths(basePath, pattern string) ([]string, error) {
 
 func (s *loadState) readIncluded(path string) (string, *LoadError) {
 	path = absoluteClean(path)
-	if content, ok := s.options.overlay(path); ok {
+	if content, ok := s.options.overlay(s.loader, path); ok {
 		if int64(len(content)) > s.limits.MaxFileSizeBytes {
 			return "", &LoadError{Kind: ErrorFileTooLarge, Path: path, Message: fmt.Sprintf("included file too large: %d bytes (max %d)", len(content), s.limits.MaxFileSizeBytes)}
 		}
 		return textutil.NormalizeLineEndings(content), nil
 	}
-	canonical := canonicalPath(path)
+	canonical := s.loader.canonicalPath(path)
 	s.loader.mu.RLock()
 	content, ok := s.loader.cache[canonical]
 	s.loader.mu.RUnlock()
@@ -295,7 +300,7 @@ func (s *loadState) readIncluded(path string) (string, *LoadError) {
 }
 
 func (l *Loader) readRoot(path string, options LoadOptions) (string, *LoadError) {
-	if content, ok := options.overlay(path); ok {
+	if content, ok := options.overlay(l, path); ok {
 		if int64(len(content)) > l.getLimits().MaxFileSizeBytes {
 			return "", &LoadError{Kind: ErrorFileTooLarge, Path: path, SourcePath: path, Message: fmt.Sprintf("file too large: %d bytes (max %d)", len(content), l.getLimits().MaxFileSizeBytes)}
 		}
@@ -350,9 +355,10 @@ func (l *Loader) ClearCache() {
 }
 
 func (l *Loader) InvalidateFile(path string) {
+	canonical := l.canonicalPath(path)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.cache, canonicalPath(path))
+	delete(l.cache, canonical)
 }
 
 func absoluteClean(path string) string {
@@ -363,8 +369,36 @@ func absoluteClean(path string) string {
 	return filepath.Clean(abs)
 }
 
-func canonicalPath(path string) string {
+// canonicalPath resolves symlinks in path, memoized per loader. Resolution is a
+// chain of lstat calls down the whole path, and InvalidateFile runs on the
+// keystroke path, where it measured at 12% of DidChange. Every caller must go
+// through here: the canonical form is used as a cache key, so two functions
+// disagreeing about it would silently miss the entry they were meant to find.
+//
+// A symlink chain is assumed stable for the loader's lifetime. A stale entry
+// costs a text-cache miss, not a wrong answer: the file is read from disk again.
+func (l *Loader) canonicalPath(path string) string {
 	path = absoluteClean(path)
+
+	l.mu.RLock()
+	cached, ok := l.canonical[path]
+	l.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	canonical := resolveCanonicalPath(path)
+
+	l.mu.Lock()
+	l.canonical[path] = canonical
+	l.mu.Unlock()
+	return canonical
+}
+
+// resolveCanonicalPath is the unmemoized form, for the few callers that have no
+// Loader in hand. It is deterministic, so its results are interchangeable with
+// the loader's cached ones.
+func resolveCanonicalPath(path string) string {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return path
@@ -372,14 +406,14 @@ func canonicalPath(path string) string {
 	return absoluteClean(canonical)
 }
 
-func snapshotLoadOptions(options LoadOptions) LoadOptions {
+func (l *Loader) snapshotLoadOptions(options LoadOptions) LoadOptions {
 	if len(options.Overlays) == 0 {
 		return LoadOptions{}
 	}
 
 	snapshot := LoadOptions{Overlays: make(map[string]OverlayEntry, len(options.Overlays))}
 	for key, entry := range options.Overlays {
-		canonical := canonicalPath(key)
+		canonical := l.canonicalPath(key)
 		entry.SourcePath = absoluteClean(entry.SourcePath)
 		current, exists := snapshot.Overlays[canonical]
 		if !exists || entry.Revision > current.Revision || (entry.Revision == current.Revision && entry.SourcePath < current.SourcePath) {

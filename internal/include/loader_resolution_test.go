@@ -117,7 +117,7 @@ func TestLoader_GlobMatchesSameCanonicalTwice(t *testing.T) {
 	if got, want := len(result.Occurrences), 3; got != want {
 		t.Fatalf("occurrences = %d, want %d", got, want)
 	}
-	canonical := canonicalPath(realPath)
+	canonical := resolveCanonicalPath(absoluteClean(realPath))
 	if got, want := len(result.ByCanonical[canonical]), 2; got != want {
 		t.Fatalf("ByCanonical[real] = %d, want %d", got, want)
 	}
@@ -249,7 +249,7 @@ func TestLoader_ByCanonicalFindsSymlinkOccurrence(t *testing.T) {
 	if got, want := byCanonical[0].Path, linkPath; got != want {
 		t.Errorf("canonical occurrence Path = %q, want symlink path %q", got, want)
 	}
-	if got, want := byCanonical[0].CanonicalPath, canonicalPath(realPath); got != want {
+	if got, want := byCanonical[0].CanonicalPath, resolveCanonicalPath(absoluteClean(realPath)); got != want {
 		t.Errorf("canonical occurrence CanonicalPath = %q, want %q", got, want)
 	}
 	if got, want := len(result.OccurrencesForPath(linkPath)), 1; got != want {
