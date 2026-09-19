@@ -15,6 +15,7 @@ package document
 import (
 	"math/rand"
 	"strings"
+	"sync"
 
 	"go.lsp.dev/protocol"
 
@@ -24,16 +25,19 @@ import (
 
 // node is one line in an implicit treap ordered by line index. size is the
 // number of lines in the subtree; it drives index-based split and select.
+// bytes is the length of those lines plus one for the newline after each,
+// which makes the byte offset of a line a subtree sum instead of a walk.
 type node struct {
 	line     string
 	priority uint32
 	size     int
+	bytes    int
 	left     *node
 	right    *node
 }
 
 func newNode(line string) *node {
-	return &node{line: line, priority: rand.Uint32(), size: 1}
+	return &node{line: line, priority: rand.Uint32(), size: 1, bytes: len(line) + 1}
 }
 
 func size(n *node) int {
@@ -43,9 +47,17 @@ func size(n *node) int {
 	return n.size
 }
 
+func nodeBytes(n *node) int {
+	if n == nil {
+		return 0
+	}
+	return n.bytes
+}
+
 func update(n *node) {
 	if n != nil {
 		n.size = 1 + size(n.left) + size(n.right)
+		n.bytes = len(n.line) + 1 + nodeBytes(n.left) + nodeBytes(n.right)
 	}
 }
 
@@ -86,7 +98,11 @@ func merge(a, b *node) *node {
 
 // Text is an editable, line-indexed rope. The zero value is not usable; create
 // one with NewText.
+//
+// A Text is safe for concurrent use. Callbacks passed to EachLine run under the
+// read lock, so they must not call back into the same Text.
 type Text struct {
+	mu     sync.RWMutex
 	root   *node
 	cached *string
 }
@@ -103,12 +119,20 @@ func NewText(content string) *Text {
 
 // LineCount returns the number of lines.
 func (t *Text) LineCount() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return size(t.root)
 }
 
 // Line returns the i-th line (without its trailing newline), or "" if i is out
 // of range. O(log n).
 func (t *Text) Line(i int) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.line(i)
+}
+
+func (t *Text) line(i int) string {
 	if i < 0 {
 		return ""
 	}
@@ -128,12 +152,108 @@ func (t *Text) Line(i int) string {
 	return ""
 }
 
+// ByteOffsetOf returns the byte offset at which line starts, or the end of the
+// document when line is LineCount() or beyond. O(log n).
+func (t *Text) ByteOffsetOf(line int) int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.byteOffsetOf(line)
+}
+
+func (t *Text) byteOffsetOf(line int) int {
+	if line <= 0 {
+		return 0
+	}
+	n, base := t.root, 0
+	for n != nil {
+		leftSize := size(n.left)
+		lineStart := base + nodeBytes(n.left)
+		switch {
+		case line < leftSize:
+			n = n.left
+		case line == leftSize:
+			return lineStart
+		default:
+			line -= leftSize + 1
+			base = lineStart + len(n.line) + 1
+			n = n.right
+		}
+	}
+	return t.byteLength()
+}
+
+// LineAtByte returns the line containing byte offset off and the offset within
+// that line. An off past the end of the document resolves to the end of the
+// last line. O(log n).
+func (t *Text) LineAtByte(off int) (string, int) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	n, base := t.root, 0
+	for n != nil {
+		lineStart := base + nodeBytes(n.left)
+		lineEnd := lineStart + len(n.line)
+		switch {
+		case off < lineStart:
+			n = n.left
+		case off <= lineEnd:
+			return n.line, off - lineStart
+		default:
+			base = lineEnd + 1
+			n = n.right
+		}
+	}
+	last := t.line(size(t.root) - 1)
+	return last, len(last)
+}
+
+// EachLine visits every line in order, without materializing the document or
+// allocating a line slice. Iteration stops when f returns false.
+func (t *Text) EachLine(f func(i int, line string) bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	i := 0
+	var walk func(n *node) bool
+	walk = func(n *node) bool {
+		if n == nil {
+			return true
+		}
+		if !walk(n.left) {
+			return false
+		}
+		if !f(i, n.line) {
+			return false
+		}
+		i++
+		return walk(n.right)
+	}
+	walk(t.root)
+}
+
+// byteLength is the length of the materialized document: every line plus the
+// newline that follows it, less the one that does not follow the last.
+func (t *Text) byteLength() int {
+	total := nodeBytes(t.root)
+	if total == 0 {
+		return 0
+	}
+	return total - 1
+}
+
 // String materializes the full document. O(n), cached until the next ApplyChange.
 func (t *Text) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.string()
+}
+
+func (t *Text) string() string {
 	if t.cached != nil {
 		return *t.cached
 	}
 	var sb strings.Builder
+	sb.Grow(t.byteLength())
 	first := true
 	var walk func(n *node)
 	walk = func(n *node) {
@@ -159,6 +279,9 @@ func (t *Text) String() string {
 // edit itself is O(log n) in the line count plus O(len(text)); the cached
 // materialized string is invalidated.
 func (t *Text) ApplyChange(r protocol.Range, text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	t.cached = nil
 	lineCount := size(t.root)
 	if lineCount == 0 {
@@ -174,10 +297,10 @@ func (t *Text) ApplyChange(r protocol.Range, text string) {
 	// clamping into the last line, which would corrupt the buffer.
 	resolve := func(line, char uint32) (int, int) {
 		if int(line) >= lineCount {
-			last := t.Line(lineCount - 1)
+			last := t.line(lineCount - 1)
 			return lineCount - 1, len(last)
 		}
-		l := t.Line(int(line))
+		l := t.line(int(line))
 		b := lsputil.UTF16OffsetToByteOffset(l, int(char))
 		if b > len(l) {
 			b = len(l)
@@ -195,8 +318,8 @@ func (t *Text) ApplyChange(r protocol.Range, text string) {
 		scBytes, ecBytes = ecBytes, scBytes
 	}
 
-	startLine := t.Line(sl)
-	endLine := t.Line(el)
+	startLine := t.line(sl)
+	endLine := t.line(el)
 
 	prefix := startLine[:scBytes]
 	suffix := endLine[ecBytes:]
