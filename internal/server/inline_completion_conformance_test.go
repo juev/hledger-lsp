@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,6 +72,33 @@ func TestInlineCompletion_QuotedCommodityKeepsQuotes(t *testing.T) {
 	ghost := ghostTextFor(t, ts, docURI, 5)
 	assert.Contains(t, ghost, "\"green apples\"",
 		"an unquoted multi-word commodity is not valid hledger")
+}
+
+func TestInlineCompletion_DefaultCommodityPreservesWrittenAmountStyle(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///default-ghost.journal")
+	content := "D 1.000,00 RUB\n\n2024-01-10 Market\n    expenses:food  50,00\n    assets:cash  -50,00 RUB\n\n2024-01-15 Market\n"
+	ts.StoreDocument(docURI, content)
+
+	ghost := ghostTextFor(t, ts, docURI, 7)
+	lines := strings.Split(ghost, "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, "50,00", strings.Fields(lines[0])[1], "a bare amount stays bare")
+	assert.NotContains(t, lines[0], "RUB", "the default commodity must stay implicit")
+	assert.Contains(t, lines[1], "-50,00 RUB", "an explicit commodity stays explicit")
+}
+
+func TestInlineCompletion_UsesTemplateFromIncludedJournal(t *testing.T) {
+	ts := newTestServer()
+	dir := t.TempDir()
+	child := "2024-01-10 Market\n    expenses:food  $50.00\n    assets:cash\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "child.journal"), []byte(child), 0600))
+	docURI := uri.File(filepath.Join(dir, "main.journal"))
+	ts.StoreDocument(docURI, "include child.journal\n\n2024-01-15 Market\n")
+
+	ghost := ghostTextFor(t, ts, docURI, 3)
+	assert.Contains(t, ghost, "expenses:food")
+	assert.Contains(t, ghost, "$50.00")
 }
 
 func TestCompletion_DetailCountIgnoresPayeeBoost(t *testing.T) {

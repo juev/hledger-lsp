@@ -184,9 +184,14 @@ func ComputeAlignment(journal *ast.Journal, content string, commodityFormats map
 }
 
 func computeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
-	if journal == nil || len(AllPostings(journal)) == 0 || !opts.AlignAmounts {
+	if journal == nil || !opts.AlignAmounts {
 		return AlignmentInfo{}
 	}
+	postings := AllPostings(journal)
+	if len(postings) == 0 {
+		return AlignmentInfo{}
+	}
+	lines := strings.Split(content, "\n")
 
 	indentSize := opts.IndentSize
 	if indentSize <= 0 {
@@ -195,7 +200,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
 
-	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(AllPostings(journal), indentSize)
+	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(postings, indentSize)
 	globalAccountCol := naturalAccountCol
 	if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 		globalAccountCol = opts.MinAlignmentColumn - 1
@@ -208,25 +213,25 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		if opts.AmountAlignmentColumn > 0 {
 			globalDecimalCol = opts.AmountAlignmentColumn
 		} else {
-			globalDecimalCol = CalculateGlobalDecimalCol(AllPostings(journal), commodityFormats, globalAccountCol, target)
-			if detected := DetectExistingDecimalColumn(content, AllPostings(journal), commodityFormats, target); detected > globalDecimalCol {
+			globalDecimalCol = CalculateGlobalDecimalCol(postings, commodityFormats, globalAccountCol, target)
+			if detected := detectExistingDecimalColumn(lines, postings, commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
 		}
 	case "left":
 		if opts.AmountAlignmentColumn > 0 {
 			globalAccountCol = opts.AmountAlignmentColumn
-		} else if detected := DetectExistingAmountColumn(content, AllPostings(journal)); detected > globalAccountCol {
+		} else if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
 	default:
 		// Smart detection: if the file already has hand-aligned
 		// amounts, use the most common existing start column as the
 		// base. Decimal mode uses decimal-target detection instead.
-		if detected := DetectExistingAmountColumn(content, AllPostings(journal)); detected > globalAccountCol {
+		if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
-		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(AllPostings(journal)) {
+		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings) {
 			globalAmountEndCol = opts.AmountAlignmentColumn
 			break
 		}
@@ -238,9 +243,9 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// MinAlignmentColumn also falls back to start-column —
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
-		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(AllPostings(journal)) {
-			if endCol := DetectExistingAmountEndColumn(content, AllPostings(journal), commodityFormats, target); endCol > 0 {
-				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(AllPostings(journal), commodityFormats, target)
+		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings) {
+			if endCol := detectExistingAmountEndColumn(lines, postings, commodityFormats, target); endCol > 0 {
+				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
 				globalAmountEndCol = max(naturalEndCol, endCol)
 			}
 		}
@@ -251,7 +256,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
-	alignment.CommentColumn = commentColumn(content, AllPostings(journal))
+	alignment.CommentColumn = commentColumn(lines, postings)
 	return alignment
 }
 
@@ -286,13 +291,13 @@ func AllPostings(journal *ast.Journal) []ast.Posting {
 //
 // The writer still enforces a two-space minimum, so a preserved column can never
 // make a comment collide with the amount, assertion or cost text.
-func commentColumn(content string, postings []ast.Posting) int {
+func commentColumn(lines []string, postings []ast.Posting) int {
 	var columns []int
 	for i := range postings {
 		if postings[i].Comment == "" {
 			continue
 		}
-		if column := displayColumn(content, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column); column > 0 {
+		if column := displayColumn(lines, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column); column > 0 {
 			columns = append(columns, column)
 		}
 	}
@@ -319,40 +324,17 @@ func columnCount(columns []int, column int) int {
 
 // displayColumn converts a 1-indexed rune column on a line into a display column,
 // which is the metric alignment arithmetic uses.
-func displayColumn(content string, line, column int) int {
-	if column <= 1 {
+func displayColumn(lines []string, line, column int) int {
+	if column <= 1 || line <= 0 || line > len(lines) {
 		return 0
 	}
 
-	text := lineText(content, line)
+	text := lines[line-1]
 	runes := []rune(text)
 	if column-1 > len(runes) {
 		column = len(runes) + 1
 	}
 	return displayWidth(string(runes[:column-1]))
-}
-
-func lineText(content string, line int) string {
-	if line <= 0 {
-		return ""
-	}
-
-	current := 1
-	start := 0
-	for i := 0; i < len(content); i++ {
-		if content[i] != '\n' {
-			continue
-		}
-		if current == line {
-			return content[start:i]
-		}
-		current++
-		start = i + 1
-	}
-	if current == line {
-		return content[start:]
-	}
-	return ""
 }
 
 func trimTrailingSpacesEdits(content string, mapper *lsputil.PositionMapper, postingLines map[int]bool) []protocol.TextEdit {
@@ -581,13 +563,17 @@ func selectModalColumn(columns []int) int {
 // a column into display cells: a CJK or emoji account name before the amount
 // occupies more cells than it has runes.
 func DetectExistingAmountColumn(content string, postings []ast.Posting) int {
+	return detectExistingAmountColumn(strings.Split(content, "\n"), postings)
+}
+
+func detectExistingAmountColumn(lines []string, postings []ast.Posting) int {
 	var columns []int
 	for i := range postings {
 		p := &postings[i]
 		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		columns = append(columns, displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column))
+		columns = append(columns, displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column))
 	}
 	return selectModalColumn(columns)
 }
@@ -609,6 +595,10 @@ func DetectExistingAmountColumn(content string, postings []ast.Posting) int {
 // amounts are ignored — those are aligned by start column via the sibling
 // DetectExistingAmountColumn so the commodity symbol (e.g. $) stays put.
 func DetectExistingAmountEndColumn(content string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
+	return detectExistingAmountEndColumn(strings.Split(content, "\n"), postings, commodityFormats, target)
+}
+
+func detectExistingAmountEndColumn(lines []string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
 	for i := range postings {
 		p := &postings[i]
@@ -618,7 +608,7 @@ func DetectExistingAmountEndColumn(content string, postings []ast.Posting, commo
 		if p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		startCol := displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		startCol := displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
 		endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats, target)
 		columns = append(columns, endCol)
 	}
@@ -626,13 +616,17 @@ func DetectExistingAmountEndColumn(content string, postings []ast.Posting, commo
 }
 
 func DetectExistingDecimalColumn(content string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
+	return detectExistingDecimalColumn(strings.Split(content, "\n"), postings, commodityFormats, target)
+}
+
+func detectExistingDecimalColumn(lines []string, postings []ast.Posting, commodityFormats map[string]CommodityFormat, target string) int {
 	var columns []int
 	for i := range postings {
 		p := &postings[i]
 		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		startCol := displayColumn(content, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		startCol := displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
 		columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
 	}
 	return selectModalColumn(columns)

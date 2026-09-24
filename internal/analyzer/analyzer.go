@@ -167,7 +167,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 	result.Tags = collectTagsFromResolved(resolved)
 	result.TagValues = collectTagValuesFromResolved(resolved)
 	result.Dates = collectDatesFromResolved(resolved)
-	result.PayeeTemplates = collectPayeeTemplatesFromResolved(resolved)
+	result.PayeeTemplates = CollectPayeeTemplatesFromResolved(resolved)
 	result.AccountCounts = collectAccountCountsFromResolved(resolved)
 	result.PayeeCounts = collectPayeeCountsFromResolved(resolved)
 	result.DescriptionCounts = collectDescriptionCountsFromResolved(resolved)
@@ -349,12 +349,15 @@ func collectDatesFromResolved(resolved *include.ResolvedJournal) []string {
 	return dates
 }
 
-// collectPayeeTemplatesFromResolved collects payee templates across the resolved
+// CollectPayeeTemplatesFromResolved collects payee templates across the resolved
 // journal. With occurrences present, transactions are evaluated in textual-inline
 // order so an include-site conflict resolves to the last inline occurrence. The
 // legacy fallback preserves the historical FileOrder-then-Primary precedence for
 // consumers that still mutate the projection directly.
-func collectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
+func CollectPayeeTemplatesFromResolved(resolved *include.ResolvedJournal) map[string][]PostingTemplate {
+	if resolved == nil || resolved.Primary == nil {
+		return make(map[string][]PostingTemplate)
+	}
 	if len(resolved.Occurrences) > 0 {
 		combined := &ast.Journal{Transactions: resolved.AllTransactions()}
 		return CollectPayeeTemplates(combined)
