@@ -224,7 +224,7 @@ func CollectPayeeTemplates(journal *ast.Journal) map[string][]PostingTemplate {
 				if pt.Amount == "" {
 					pt.Amount = p.Amount.Quantity.String()
 				}
-				pt.Commodity = p.Amount.Commodity.Symbol
+				pt.Commodity = p.Amount.Commodity.WrittenSymbol()
 				pt.CommodityLeft = p.Amount.Commodity.Position == ast.CommodityLeft
 			}
 			if p.Cost != nil {

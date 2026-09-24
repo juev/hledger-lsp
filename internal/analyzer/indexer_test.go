@@ -686,6 +686,8 @@ func TestCollectPayeeTemplates_KeepsBareDefaultCommodity(t *testing.T) {
 	assert.Equal(t, "@ 100,00", stock.Cost, "the bare cost stays bare")
 
 	cash := postings[1]
-	assert.Equal(t, "RUB", cash.Commodity, "the amount itself belongs to the default commodity")
+	assert.Equal(t, "RUB", journal.Transactions[0].Postings[1].Amount.Commodity.Symbol,
+		"the parsed amount still belongs to the default commodity")
+	assert.Empty(t, cash.Commodity, "the template keeps the bare amount bare")
 	assert.Equal(t, "= -1.000,00", cash.Assertion, "the bare assertion stays bare")
 }

@@ -101,32 +101,32 @@ func (s *Server) getPayeeTemplates(uri uri.URI, content string) map[string][]ana
 		}
 	}
 
-	var result *analyzer.AnalysisResult
+	var templates map[string][]analyzer.PostingTemplate
 	if s.workspace != nil {
 		resolved := s.workspace.GetResolvedForFile(uriToPath(uri))
 		if resolved != nil {
-			result = s.analyzer.AnalyzeResolved(resolved)
+			templates = analyzer.CollectPayeeTemplatesFromResolved(resolved)
 		}
 	}
-	if result == nil {
+	if templates == nil {
 		path := uriToPath(uri)
-		if path == "" {
-			result = s.cachedAnalysis(uri, content, analyzer.ExternalDeclarations{})
-		} else {
+		journal, _ := s.cachedJournal(uri, content)
+		if path != "" && journal != nil && len(journal.Includes) > 0 {
 			resolved, _ := s.loader.LoadFromContent(path, content)
 			if resolved != nil {
-				result = s.analyzer.AnalyzeResolved(resolved)
-			} else {
-				result = s.cachedAnalysis(uri, content, analyzer.ExternalDeclarations{})
+				templates = analyzer.CollectPayeeTemplatesFromResolved(resolved)
 			}
+		}
+		if templates == nil && journal != nil {
+			templates = analyzer.CollectPayeeTemplates(journal)
 		}
 	}
 
 	s.payeeTemplatesCache.Store(uri, &cachedPayeeTemplates{
 		content:   content,
-		templates: result.PayeeTemplates,
+		templates: templates,
 	})
-	return result.PayeeTemplates
+	return templates
 }
 
 func fuzzyMatchPayeeTemplate(templates map[string][]analyzer.PostingTemplate, payee string) ([]analyzer.PostingTemplate, bool) {

@@ -143,6 +143,30 @@ func BenchmarkCompletion_Payee(b *testing.B) {
 	}
 }
 
+// Measure the first ghost-text request after each edit, rather than repeated
+// requests for the same cached document version.
+func BenchmarkInlineCompletion_AfterEdit_Large(b *testing.B) {
+	base := largeContent + "2025-01-01 * Payee 999\n"
+	srv, docURI := setupBenchServer(b, base, false)
+	path := uriToPath(docURI)
+	line := uint32(strings.Count(base, "\n"))
+	params := inlineCompletionParams(docURI, line, 0)
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		content := base + strings.Repeat(" ", i%2)
+		srv.StoreDocument(docURI, content)
+		srv.workspace.MarkFileDirty(path, workspace.StaticContent(content))
+		result, err := srv.InlineCompletion(ctx, params)
+		list, ok := result.(*protocol.InlineCompletionList)
+		if err != nil || !ok || len(list.Items) != 1 {
+			b.Fatalf("inline completion: %v", err)
+		}
+	}
+}
+
 func BenchmarkCompletion_Commodity(b *testing.B) {
 	srv := NewServer()
 	docURI := uri.URI("file:///bench.journal")
