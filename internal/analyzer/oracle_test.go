@@ -81,6 +81,78 @@ func TestOracle_AssertionVerdictsMatchHledger(t *testing.T) {
     assets:cash  $-30
     expenses  $20
 `,
+		"backdated assertion": `2026-02-01 opening
+    assets:bank  -699.41 CNY
+    equity
+
+2026-02-07 later
+    assets:bank  -6130.28 CNY
+    equity
+
+2026-02-08 reconcile
+    assets:bank  0 CNY = -699.41 CNY  ; date:2026-02-06
+    equity  0 CNY
+`,
+		"future dated assertion fails": `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-04 deposit
+    assets:bank  5 CNY
+    equity
+
+2026-02-02 reconcile
+    assets:bank  0 CNY = 10 CNY  ; date:2026-02-05
+    equity  0 CNY
+`,
+		"backdated posting contributes": `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-07 deposit
+    assets:bank  5 CNY  ; date:2026-02-04
+    equity
+
+2026-02-05 reconcile
+    assets:bank  0 CNY = 15 CNY
+    equity  0 CNY
+`,
+		"backdated inferred amount contributes": `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-08 backdated
+    assets:bank  5 CNY  ; date:2026-02-04
+    equity  ; date:2026-02-04
+
+2026-02-05 reconcile
+    equity  0 CNY = -15 CNY
+    assets:bank  0 CNY
+`,
+		"same posting date uses parse order": `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-08 reconcile
+    assets:bank  0 CNY = 10 CNY  ; date:2026-02-06
+    equity  0 CNY
+
+2026-02-07 deposit
+    assets:bank  5 CNY  ; date:2026-02-06
+    equity
+`,
+		"bracketed posting date": `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-07 deposit
+    assets:bank  5 CNY
+    equity
+
+2026-02-08 reconcile
+    assets:bank  0 CNY = 10 CNY  ; [2026-02-06]
+    equity  0 CNY
+`,
 		"one elided posting per group": `2024-01-01 x
     a  $10
     b

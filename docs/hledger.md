@@ -502,7 +502,7 @@ assets            $0       ==* $10000
 
 ### Balance Assertion Without Amount
 
-Postings can have a balance assertion without an explicit amount. The posting contributes zero to the transaction but still validates the account balance:
+Postings can have a balance assertion without an explicit amount. hledger infers the amount needed to reach the asserted balance; that amount may be nonzero. Write an explicit `0` amount to check a balance without changing it:
 
 ```
 ; Balance assertion only (no amount)
@@ -514,11 +514,14 @@ assets                    ==* $10000
 ; Compact format (no space after =)
 assets:checking           =$5000
 assets:checking           =$-1775.30
+
+; Check without changing the balance
+assets:checking           $0 = $5000
 ```
 
 **Use cases:**
 
-- Verifying balance at a point in time without affecting transaction
+- Setting an account to a known balance with an inferred posting amount
 - Reconciliation checkpoints
 - Opening balance verification
 
@@ -530,7 +533,7 @@ amount explicitly.
 
 ### Assertion Behavior
 
-- Checked in **date order** (not parse order)
+- Checked by primary posting date (`date:` or `[DATE]`), then parse order on the same day; `date2:` does not change this order
 - **Enabled by default**; disable with `-I/--ignore-assertions`
 - **Include virtual postings** (not affected by `-R` flag or `real:` query)
 - **Work across include files** when using `include` directive
