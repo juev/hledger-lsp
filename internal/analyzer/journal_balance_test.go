@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,6 +90,127 @@ func TestCheckJournalBalance_FailedAssertionReported(t *testing.T) {
 	assert.Equal(t, "50", diagnostic.Data["expected"])
 	assert.Equal(t, "-100", diagnostic.Data["actual"])
 	assert.Equal(t, false, diagnostic.Data["strict"])
+}
+
+func TestCheckJournalBalance_PostingDateBeforeTransactionDate(t *testing.T) {
+	// Issue juev/hledger-vscode#316: the February 6 assertion must not see the
+	// February 7 card activity, even though its transaction is dated February 8.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2026-02-01 opening
+    负债:信用卡:中国银行:万事达卡3796  -699.41 CNY
+    equity
+
+2026-02-07 later
+    负债:信用卡:中国银行:万事达卡3796  -6130.28 CNY
+    equity
+
+2026-02-08 reconcile
+    负债:信用卡:中国银行:万事达卡3796  0 CNY = -699.41 CNY  ; date:2026-02-06
+    equity  0 CNY
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
+
+func TestCheckJournalBalance_PostingDateAfterTransactionDate(t *testing.T) {
+	journal := `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-04 deposit
+    assets:bank  5 CNY
+    equity
+
+2026-02-02 reconcile
+    assets:bank  0 CNY = 10 CNY  ; date:2026-02-05
+    equity  0 CNY
+`
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: journal})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Equal(t, "15", diagnostics[0].Data["actual"])
+}
+
+func TestCheckJournalBalance_BackdatedPostingContributesBeforeAssertion(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-07 deposit
+    assets:bank  5 CNY  ; date:2026-02-04
+    equity
+
+2026-02-05 reconcile
+    assets:bank  0 CNY = 15 CNY
+    equity  0 CNY
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
+
+func TestCheckJournalBalance_BackdatedInferredAmountContributesBeforeAssertion(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-08 backdated
+    assets:bank  5 CNY  ; date:2026-02-04
+    equity  ; date:2026-02-04
+
+2026-02-05 reconcile
+    equity  0 CNY = -15 CNY
+    assets:bank  0 CNY
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
+
+func TestCheckJournalBalance_SamePostingDateUsesParseOrder(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-08 reconcile
+    assets:bank  0 CNY = 10 CNY  ; date:2026-02-06
+    equity  0 CNY
+
+2026-02-07 deposit
+    assets:bank  5 CNY  ; date:2026-02-06
+    equity
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
+
+func TestCheckJournalBalance_PostingDateSyntaxAndDate2(t *testing.T) {
+	cases := []struct {
+		name     string
+		comment  string
+		expected string
+	}{
+		{name: "yearless date tag", comment: "; date:2/6", expected: "10"},
+		{name: "bracketed posting date", comment: "; [2026-02-06]", expected: "10"},
+		{name: "secondary date does not change primary balance", comment: "; date2:2026-02-06", expected: "15"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			content := fmt.Sprintf(`2026-02-01 opening
+    assets:bank  10 CNY
+    equity
+
+2026-02-07 deposit
+    assets:bank  5 CNY
+    equity
+
+2026-02-08 reconcile
+    assets:bank  0 CNY = %s CNY  %s
+    equity  0 CNY
+`, tc.expected, tc.comment)
+			resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: content})
+			assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+		})
+	}
 }
 
 func TestCheckJournalBalance_DateOrderBeatsFileOrder(t *testing.T) {

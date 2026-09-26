@@ -387,6 +387,43 @@ func TestPublishDiagnostics_AssistantSummary(t *testing.T) {
 	t.Fatal("no diagnostics published")
 }
 
+func TestPublishDiagnostics_BackdatedAssertionMatchesHledger(t *testing.T) {
+	content := `2026-02-01 opening
+    负债:信用卡  -699.41 CNY
+    equity
+
+2026-02-07 later
+    负债:信用卡  -6130.28 CNY
+    equity
+
+2026-02-08 reconcile
+    负债:信用卡  0 CNY = -699.41 CNY  ; date:2026-02-06
+    equity  0 CNY
+`
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			journal := strings.ReplaceAll(content, "\n", tc.newline)
+			valid, err := ts.openAndWait(uri.URI("file:///posting-date-valid.journal"), journal)
+			require.NoError(t, err)
+			assert.Nil(t, diagnosticWithCode(valid, "BALANCE_ASSERTION_FAILED"), "got %v", codesIn(valid))
+
+			invalidJournal := strings.Replace(journal, "= -699.41 CNY", "= -700.41 CNY", 1)
+			invalid, err := ts.openAndWait(uri.URI("file:///posting-date-invalid.journal"), invalidJournal)
+			require.NoError(t, err)
+			failure := diagnosticWithCode(invalid, "BALANCE_ASSERTION_FAILED")
+			require.NotNil(t, failure, "a genuinely wrong assertion must still be reported, got %v", codesIn(invalid))
+			assert.Contains(t, tooltipString(failure.Message), "calculated -699.41 CNY")
+		})
+	}
+}
+
 func TestPublishDiagnostics_IncludedAssertionRangeUsesItsOwnFile(t *testing.T) {
 	// A multi-byte account in the included file must still map to the right
 	// UTF-16 column, which requires the range conversion to use that file's

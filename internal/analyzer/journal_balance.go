@@ -3,12 +3,14 @@ package analyzer
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/shopspring/decimal"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/parser"
 )
 
 // Diagnostic codes produced by the journal-level pass.
@@ -110,8 +112,10 @@ func (b accountBalances) otherCommodities(account, except string, inclusive bool
 
 // journalEvaluator carries the mutable state of one journal evaluation.
 type journalEvaluator struct {
-	balances  accountBalances
-	tolerance decimal.Decimal
+	balances        accountBalances
+	tolerance       decimal.Decimal
+	events          []postingBalanceEvent
+	trackAssertions bool
 	// partialContext qualifies assertion verdicts that were computed from one
 	// file's transactions only.
 	partialContext bool
@@ -125,20 +129,21 @@ type postingEffective struct {
 	precision int32
 }
 
+type postingBalanceEvent struct {
+	date         ast.Date
+	tx           *ast.Transaction
+	path         string
+	sourceOrder  int
+	postingIndex int
+	contribution map[string]decimal.Decimal
+}
+
 // CheckJournalBalance evaluates hledger's balance rules and balance assertions
 // over a resolved journal.
 //
-// hledger processes a journal in date order, so an assertion sees every posting
-// dated before it regardless of which file contains it. The evaluation therefore
-// walks transactions sorted by (date, tree order) and keeps running per-account
-// balances, which also lets an amount-less posting that carries a balance
-// assertion take the amount hledger infers for it (asserted minus the account's
-// balance at that point).
-//
-// Deliberate simplification: postings are ordered by their transaction date, and
-// posting-level `date:`/`date2:` tags do not move a posting between transactions.
-// hledger reorders individual postings; journals that rely on that remain rare,
-// and treating the transaction as the unit keeps the pass linear.
+// Transaction balancing and amount inference happen first. Assertions are then
+// checked against postings in primary posting-date order, with parse order as
+// the tie breaker, as hledger does. A posting's date2: does not affect this pass.
 func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decimal.Decimal, options ...JournalCheckOptions) []SourcedDiagnostic {
 	if resolved == nil {
 		return nil
@@ -152,31 +157,51 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 	if len(sourced) == 0 {
 		return nil
 	}
+	trackAssertions := false
+	for _, source := range sourced {
+		for _, posting := range source.Transaction.Postings {
+			if posting.BalanceAssertion != nil {
+				trackAssertions = true
+				break
+			}
+		}
+		if trackAssertions {
+			break
+		}
+	}
 
-	ordered := make([]include.SourcedTransaction, len(sourced))
-	copy(ordered, sourced)
+	ordered := make([]int, len(sourced))
+	for i := range sourced {
+		ordered[i] = i
+	}
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return compareDates(ordered[i].Transaction.Date, ordered[j].Transaction.Date) < 0
+		return compareDates(sourced[ordered[i]].Transaction.Date, sourced[ordered[j]].Transaction.Date) < 0
 	})
 
-	evaluator := &journalEvaluator{balances: accountBalances{}, tolerance: userTolerance}
+	evaluator := &journalEvaluator{
+		balances:        accountBalances{},
+		tolerance:       userTolerance,
+		trackAssertions: trackAssertions,
+	}
 
 	evaluator.partialContext = opts.PartialContext
 
 	var diagnostics []SourcedDiagnostic
-	for i := range ordered {
-		diagnostics = append(diagnostics, evaluator.evaluate(&ordered[i].Transaction, ordered[i].Path)...)
+	for _, index := range ordered {
+		diagnostics = append(diagnostics, evaluator.evaluate(&sourced[index].Transaction, sourced[index].Path, index)...)
 	}
+	diagnostics = append(diagnostics, evaluator.checkAssertions()...)
 	return diagnostics
 }
 
-func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedDiagnostic {
+func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, sourceOrder int) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
 	var diagnostics []SourcedDiagnostic
 
-	// Written order matters: an assertion-only posting takes the amount that
-	// makes its assertion hold against the balance including the postings
-	// written before it, exactly like hledger.
+	// The transaction pass infers assertion-only amounts from the running
+	// transaction-date balance. hledger rejects a custom date on the assignment
+	// itself; effects of other backdated postings on assignments are still outside
+	// this pass.
 	groups := postingGroups(tx.Postings)
 
 	// hledger infers at most one amount per balancing group, and parenthesised
@@ -217,12 +242,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedD
 		}
 
 		e.apply(p.Account.GetResolvedName(), effective[i].native)
-
-		// hledger checks an assertion when the posting is processed, not at the
-		// end of the transaction: a later posting must not change the verdict.
-		if p.BalanceAssertion != nil {
-			diagnostics = append(diagnostics, e.assertionDiagnostics(tx, i, path)...)
-		}
+		e.recordEvent(tx, path, sourceOrder, i, effective[i].native)
 	}
 
 	// More than one amount-less posting in a group cannot be inferred, so the
@@ -253,12 +273,111 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string) []SourcedD
 
 	for group, index := range elidedByGroup {
 		elided := tx.Postings[index]
-		e.apply(elided.Account.GetResolvedName(), e.elidedContribution(tx, effective, index, groups[group]))
+		contribution := e.elidedContribution(tx, effective, index, groups[group])
+		e.apply(elided.Account.GetResolvedName(), contribution)
+		e.recordEvent(tx, path, sourceOrder, index, contribution)
 	}
 
 	diagnostics = append(diagnostics, e.balanceDiagnostics(tx, path, effective, elidedByGroup, groups)...)
 
 	return diagnostics
+}
+
+func (e *journalEvaluator) recordEvent(tx *ast.Transaction, path string, sourceOrder, postingIndex int, contribution map[string]decimal.Decimal) {
+	if !e.trackAssertions {
+		return
+	}
+	e.events = append(e.events, postingBalanceEvent{
+		date:         primaryPostingDate(tx, &tx.Postings[postingIndex]),
+		tx:           tx,
+		path:         path,
+		sourceOrder:  sourceOrder,
+		postingIndex: postingIndex,
+		contribution: contribution,
+	})
+}
+
+func (e *journalEvaluator) checkAssertions() []SourcedDiagnostic {
+	sort.SliceStable(e.events, func(i, j int) bool {
+		a, b := e.events[i], e.events[j]
+		if byDate := compareDates(a.date, b.date); byDate != 0 {
+			return byDate < 0
+		}
+		if a.sourceOrder != b.sourceOrder {
+			return a.sourceOrder < b.sourceOrder
+		}
+		return a.postingIndex < b.postingIndex
+	})
+
+	e.balances = accountBalances{}
+	var diagnostics []SourcedDiagnostic
+	for _, event := range e.events {
+		posting := &event.tx.Postings[event.postingIndex]
+		e.apply(posting.Account.GetResolvedName(), event.contribution)
+		if posting.BalanceAssertion != nil {
+			diagnostics = append(diagnostics, e.assertionDiagnostics(event.tx, event.postingIndex, event.path)...)
+		}
+	}
+	return diagnostics
+}
+
+// primaryPostingDate returns a posting's date: or bracketed-date override. A
+// yearless value inherits the transaction year. Invalid date: values have their
+// own diagnostic and fall back to the transaction date here.
+func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
+	for _, tag := range posting.Tags {
+		if tag.Name == "date" {
+			if date, ok := parsePostingDateValue(tag.Value, tx.Date.Year); ok {
+				return date
+			}
+		}
+	}
+
+	comment := posting.Comment
+	for {
+		start := strings.IndexByte(comment, '[')
+		if start < 0 {
+			break
+		}
+		comment = comment[start+1:]
+		end := strings.IndexByte(comment, ']')
+		if end < 0 {
+			break
+		}
+		primary, _, _ := strings.Cut(comment[:end], "=")
+		if date, ok := parsePostingDateValue(primary, tx.Date.Year); ok {
+			return date
+		}
+		comment = comment[end+1:]
+	}
+	return tx.Date
+}
+
+func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
+	value = strings.TrimSpace(value)
+	separator := strings.IndexAny(value, "-/.")
+	if separator < 0 {
+		return ast.Date{}, false
+	}
+	parts := strings.Split(value, string(value[separator]))
+	if len(parts) != 2 && len(parts) != 3 {
+		return ast.Date{}, false
+	}
+	year := transactionYear
+	if len(parts) == 3 {
+		parsed, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return ast.Date{}, false
+		}
+		year = parsed
+		parts = parts[1:]
+	}
+	month, monthErr := strconv.Atoi(parts[0])
+	day, dayErr := strconv.Atoi(parts[1])
+	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(year, month, day) {
+		return ast.Date{}, false
+	}
+	return ast.Date{Year: year, Month: month, Day: day}, true
 }
 
 // groupOf returns the index of the balancing group that contains a posting.
