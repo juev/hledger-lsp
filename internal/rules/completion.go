@@ -2,6 +2,7 @@ package rules
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -65,13 +66,16 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string, reso
 		return declaredFields
 	}
 
-	if sep, fields, ok := enclosingIfTable(lines, lineNum); ok {
-		return completeIfTableRow(prefix, sep, fields, workspaceAccounts, getDeclaredFields)
-	}
-
-	// Cursor in an if table header, past the separator after `if`.
-	if _, ok := ifTableSeparator(prefix); ok {
-		return fieldNameCompletions()
+	if cell, ok := ifTableCellAt(lines, lineNum, prefix); ok {
+		switch cell.kind {
+		case ifTableHeaderCell:
+			return ifTableFieldNameCompletions()
+		case ifTableMatcherCell, ifTableFieldRefCell:
+			return fieldReferenceCompletions(getDeclaredFields())
+		case ifTableAccountCell:
+			return accountCompletions(workspaceAccounts)
+		}
+		return nil
 	}
 
 	// Cursor on the `if` line itself, in pattern position (after `if<space>`
@@ -201,34 +205,104 @@ func enclosingIfTable(lines []string, lineNum int) (rune, []string, bool) {
 	return 0, nil, false
 }
 
-// IfTableSeparatorAt returns the separator of the if table that line lineNum belongs
-// to, either as one of its rows or as its header. Completion edits use it so that
-// replacing a cell's text stops at the separator.
-func IfTableSeparatorAt(lines []string, lineNum int) (rune, bool) {
-	if sep, _, ok := enclosingIfTable(lines, lineNum); ok {
-		return sep, true
+type ifTableCellKind int
+
+const (
+	ifTableOtherCell ifTableCellKind = iota
+	ifTableHeaderCell
+	ifTableMatcherCell
+	ifTableFieldRefCell
+	ifTableAccountCell
+)
+
+// ifTableCell describes the if table cell the cursor is in: what to complete there,
+// and the byte offset in the line where the text a completion replaces starts.
+type ifTableCell struct {
+	kind  ifTableCellKind
+	start int
+}
+
+// ifTableCellAt reports whether the cursor (prefix is the line up to it) is in an
+// if table header or row, and if so which kind of cell it is in.
+func ifTableCellAt(lines []string, lineNum int, prefix string) (ifTableCell, bool) {
+	if sep, fields, ok := enclosingIfTable(lines, lineNum); ok {
+		return ifTableRowCell(prefix, sep, fields), true
 	}
+	if sep, ok := ifTableSeparator(prefix); ok {
+		return ifTableCell{kind: ifTableHeaderCell, start: cellStart(prefix, sep)}, true
+	}
+	return ifTableCell{}, false
+}
+
+// ifTableRowCell classifies the cursor position in an if table row. The matcher
+// column completes field references word by word, keeping operators such as ! or
+// && written before a %field. In a value, a %field reference being typed is
+// completed on its own, so the text before it in the cell is kept; otherwise an
+// account column completes the whole cell, since account names may contain spaces.
+func ifTableRowCell(prefix string, sep rune, fields []string) ifTableCell {
+	column := strings.Count(prefix, string(sep))
+	if column == 0 {
+		start := strings.LastIndexAny(prefix, " \t") + 1
+		if i, ok := fieldReferenceStart(prefix[start:]); ok {
+			start += i
+		}
+		return ifTableCell{kind: ifTableMatcherCell, start: start}
+	}
+	start := cellStart(prefix, sep)
+	cell := prefix[start:]
+	if i, ok := fieldReferenceStart(cell); ok {
+		return ifTableCell{kind: ifTableFieldRefCell, start: start + i}
+	}
+	if column <= len(fields) && strings.HasPrefix(fields[column-1], "account") {
+		return ifTableCell{kind: ifTableAccountCell, start: start + len(cell) - len(strings.TrimLeft(cell, " \t"))}
+	}
+	return ifTableCell{kind: ifTableOtherCell, start: len(prefix)}
+}
+
+// fieldReferenceStart reports whether text ends in a %field reference being typed,
+// that is a % followed only by characters hledger allows in a field reference
+// (letters, digits, _ and -), and returns the byte offset of the %.
+func fieldReferenceStart(text string) (int, bool) {
+	i := strings.LastIndexByte(text, '%')
+	if i < 0 {
+		return 0, false
+	}
+	for _, r := range text[i+1:] {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '_' && r != '-' {
+			return 0, false
+		}
+	}
+	return i, true
+}
+
+// cellStart returns the byte offset just past the last sep in prefix.
+func cellStart(prefix string, sep rune) int {
+	return strings.LastIndex(prefix, string(sep)) + utf8.RuneLen(sep)
+}
+
+// IfTableEditStart reports whether the cursor at (lineNum, col) is in an if table
+// header or row, and if so returns the UTF-16 column where the text replaced by a
+// completion there starts. It agrees with the completions Complete returns.
+func IfTableEditStart(lines []string, lineNum int, col int) (int, bool) {
 	if lineNum < 0 || lineNum >= len(lines) {
 		return 0, false
 	}
-	return ifTableSeparator(strings.TrimRight(lines[lineNum], "\r"))
+	line := lines[lineNum]
+	prefix := line[:lsputil.UTF16OffsetToByteOffset(line, col)]
+	cell, ok := ifTableCellAt(lines, lineNum, prefix)
+	if !ok {
+		return 0, false
+	}
+	return lsputil.ByteOffsetToUTF16(line, cell.start), true
 }
 
-// completeIfTableRow completes an if table row: field references in the matcher
-// column, and values according to the header field of the column being typed.
-func completeIfTableRow(prefix string, sep rune, fields []string, workspaceAccounts []string, declaredFields func() []string) []CompletionItem {
-	column := strings.Count(prefix, string(sep))
-	if column == 0 {
-		return fieldReferenceCompletions(declaredFields())
-	}
-	cell := prefix[strings.LastIndex(prefix, string(sep))+utf8.RuneLen(sep):]
-	if cursorWordStartsWithPercent(cell) {
-		return fieldReferenceCompletions(declaredFields())
-	}
-	if column <= len(fields) && strings.HasPrefix(fields[column-1], "account") {
-		return accountCompletions(workspaceAccounts)
-	}
-	return nil
+// ifTableFieldNameCompletions returns the field names an if table header accepts:
+// the builtin fields plus hledger's skip and end pseudo-fields.
+func ifTableFieldNameCompletions() []CompletionItem {
+	return append(fieldNameCompletions(),
+		CompletionItem{Label: "skip", Detail: "skip the matching record", Kind: KindField},
+		CompletionItem{Label: "end", Detail: "stop processing at the matching record", Kind: KindField},
+	)
 }
 
 // isContinuationOfIfBlock reports whether the line is a pattern, continuation,
