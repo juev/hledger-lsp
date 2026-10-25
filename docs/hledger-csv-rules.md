@@ -268,6 +268,9 @@ if;description
   can be, including `%field` and `&&`) up to the first separator, then one
   value per header field, separated by the separator. Values may be empty.
   Rows start at the beginning of the line; hledger rejects indented rows.
+- A row that starts with the separator has an empty matcher. hledger accepts
+  it, but the row never matches, so the LSP reports it as a warning. With `;`,
+  `#` or `*` as the separator, such a row is a comment line instead.
 - A row is equivalent to an if block with that matcher and those assignments;
   the parser records each row in `RulesFile.IfBlocks` and the whole table in
   `RulesFile.IfTables`.

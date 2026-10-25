@@ -236,14 +236,14 @@ func TestParse_IfTableErrors(t *testing.T) {
 			message: "if table row should have 1 value, but has 0",
 		},
 		{
-			name:    "empty matcher",
-			input:   "if,account2\n,expenses:foo",
-			want:    []string{"EMPTY_PATTERN"},
-			message: "empty if table pattern",
-		},
-		{
 			name:    "indented row",
 			input:   "if,account2\n  FOO,expenses:foo",
+			want:    []string{"INDENTED_IF_TABLE_ROW"},
+			message: "if table rows must not be indented",
+		},
+		{
+			name:    "indented empty matcher",
+			input:   "if,account2\n  ,expenses:foo",
 			want:    []string{"INDENTED_IF_TABLE_ROW"},
 			message: "if table rows must not be indented",
 		},
@@ -268,6 +268,40 @@ func TestParse_IfTableErrors(t *testing.T) {
 			}
 			if diags[0].Message != tt.message {
 				t.Errorf("message: got %q, want %q", diags[0].Message, tt.message)
+			}
+		})
+	}
+}
+
+// hledger accepts a row with an empty matcher; the row just never matches,
+// so it is reported as a warning rather than an error.
+func TestParse_IfTableEmptyMatcher(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "ascii", input: "if,account2\n,expenses:foo"},
+		{name: "cyrillic", input: "if|account2\n|расходы:еда"},
+		{name: "crlf", input: "if,account2\r\n,expenses:foo\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rf, diags := Parse(tt.input)
+			if got := diagCodes(diags); !reflect.DeepEqual(got, []string{"EMPTY_PATTERN"}) {
+				t.Fatalf("diagnostic codes: got %v (%v)", got, diags)
+			}
+			d := diags[0]
+			if d.Severity != SeverityWarning {
+				t.Errorf("severity: got %v, want warning", d.Severity)
+			}
+			if d.Message != "empty if table pattern: this row never matches" {
+				t.Errorf("message: got %q", d.Message)
+			}
+			if d.Range.Start.Line != 2 || d.Range.Start.Column != 1 {
+				t.Errorf("range: got %+v", d.Range)
+			}
+			if len(rf.IfBlocks) != 1 || len(rf.IfBlocks[0].Assignments) != 1 {
+				t.Errorf("row should still be parsed: got %+v", rf.IfBlocks)
 			}
 		})
 	}

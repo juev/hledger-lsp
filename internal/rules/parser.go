@@ -318,28 +318,31 @@ func (p *parser) parseIfTableRow(fields []string) IfBlock {
 	block := IfBlock{}
 	end := startTok.End
 
+	indented := false
 	if p.current.Type == TokenRegex {
 		matcher := p.current.Value
 		if pattern := strings.TrimSpace(matcher); pattern != "" {
 			block.Patterns = append(block.Patterns, pattern)
-			// hledger requires a row's matcher to start at the beginning of the line.
-			if strings.TrimLeft(matcher, " \t") != matcher {
-				p.diags = append(p.diags, Diagnostic{
-					Range:    tokenRange(p.current),
-					Message:  "if table rows must not be indented",
-					Code:     "INDENTED_IF_TABLE_ROW",
-					Severity: SeverityError,
-				})
-			}
+		}
+		// hledger requires a row's matcher to start at the beginning of the line.
+		if strings.TrimLeft(matcher, " \t") != matcher {
+			indented = true
+			p.diags = append(p.diags, Diagnostic{
+				Range:    tokenRange(p.current),
+				Message:  "if table rows must not be indented",
+				Code:     "INDENTED_IF_TABLE_ROW",
+				Severity: SeverityError,
+			})
 		}
 		p.advance()
 	}
-	if len(block.Patterns) == 0 {
+	// hledger accepts a row that starts with the separator, but such a row never matches.
+	if len(block.Patterns) == 0 && !indented {
 		p.diags = append(p.diags, Diagnostic{
 			Range:    tokenRange(startTok),
-			Message:  "empty if table pattern",
+			Message:  "empty if table pattern: this row never matches",
 			Code:     "EMPTY_PATTERN",
-			Severity: SeverityError,
+			Severity: SeverityWarning,
 		})
 	}
 
