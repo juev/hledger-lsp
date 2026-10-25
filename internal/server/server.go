@@ -798,7 +798,12 @@ func (s *Server) analyzeRulesResolved(path, content string) map[uri.URI][]protoc
 
 	// Load errors include remapped parse errors (from the loader's source
 	// map) and structural errors (cycle, depth, file not found, etc.).
+	// Parse errors are skipped: the semantic diagnostics above already
+	// carry them with their own severity and code.
 	for _, e := range loadErrors {
+		if e.Kind == rules.ErrorParseError {
+			continue
+		}
 		targetPath := e.SourcePath
 		if targetPath == "" {
 			targetPath = path
@@ -816,7 +821,7 @@ func (s *Server) analyzeRulesResolved(path, content string) map[uri.URI][]protoc
 		})
 	}
 
-	// Exact-dedup by (range, message, code, severity).
+	// Exact-dedup by (range, message).
 	for uri, diags := range byURI {
 		byURI[uri] = exactDedupDiagnostics(diags)
 	}
