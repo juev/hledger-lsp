@@ -573,7 +573,7 @@ func detectExistingAmountColumn(lines []string, postings []ast.Posting) int {
 		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		columns = append(columns, displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column))
+		columns = append(columns, displayColumn(lines, p.Amount.Range.Start.Line, amountTextStartColumn(p)))
 	}
 	return selectModalColumn(columns)
 }
@@ -608,7 +608,7 @@ func detectExistingAmountEndColumn(lines []string, postings []ast.Posting, commo
 		if p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		startCol := displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		startCol := displayColumn(lines, p.Amount.Range.Start.Line, amountTextStartColumn(p))
 		endCol := startCol + calculateAlignmentTargetLen(p, commodityFormats, target)
 		columns = append(columns, endCol)
 	}
@@ -626,10 +626,28 @@ func detectExistingDecimalColumn(lines []string, postings []ast.Posting, commodi
 		if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
 			continue
 		}
-		startCol := displayColumn(lines, p.Amount.Range.Start.Line, p.Amount.Range.Start.Column)
+		startCol := displayColumn(lines, p.Amount.Range.Start.Line, amountTextStartColumn(p))
 		columns = append(columns, startCol+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
 	}
 	return selectModalColumn(columns)
+}
+
+// amountTextStartColumn returns the column where a posting's amount text
+// starts: at the `*` of an auto posting rule multiplier, which the parser
+// leaves out of the amount's range, and at the amount itself otherwise.
+func amountTextStartColumn(p *ast.Posting) int {
+	if p.Multiplier {
+		return p.Amount.Range.Start.Column - 1
+	}
+	return p.Amount.Range.Start.Column
+}
+
+// multiplierLen is the width of the `*` written before a multiplier amount.
+func multiplierLen(p *ast.Posting) int {
+	if p.Multiplier {
+		return 1
+	}
+	return 0
 }
 
 // allAmountsCommodityRight reports whether every posting that carries an
@@ -692,7 +710,7 @@ func calculateAlignmentTargetLen(posting *ast.Posting, commodityFormats map[stri
 		return 0
 	}
 
-	length := calculateSingleAmountLen(posting.Amount, commodityFormats)
+	length := multiplierLen(posting) + calculateSingleAmountLen(posting.Amount, commodityFormats)
 	if target == AlignTargetPosting {
 		return length
 	}
@@ -731,12 +749,12 @@ func calculateAlignmentTargetDecimalPrefix(posting *ast.Posting, commodityFormat
 		return 0
 	}
 
-	prefix := calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats)
+	prefix := multiplierLen(posting) + calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats)
 	if target == AlignTargetPosting || posting.Cost == nil {
 		return prefix
 	}
 
-	amountLen := calculateSingleAmountLen(posting.Amount, commodityFormats)
+	amountLen := multiplierLen(posting) + calculateSingleAmountLen(posting.Amount, commodityFormats)
 	separatorLen := 3 // " @ "
 	if posting.Cost.IsTotal {
 		separatorLen = 4 // " @@ "
@@ -879,7 +897,18 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		}
 		sb.WriteString(strings.Repeat(" ", spaces))
 
+		if posting.Multiplier {
+			sb.WriteByte('*')
+		}
 		writeAmountWithSign(&sb, posting.Amount, commodityFormats)
+	} else if posting.Multiplier {
+		// A multiplier without an amount, which hledger reads as zero.
+		spaces := minSpaces
+		if alignAmounts && alignment.AccountCol > 0 {
+			spaces = max(alignment.AccountCol-displayWidth(sb.String()), minSpaces)
+		}
+		sb.WriteString(strings.Repeat(" ", spaces))
+		sb.WriteByte('*')
 	}
 
 	if posting.LotPrice != nil {

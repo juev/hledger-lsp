@@ -831,6 +831,11 @@ end comment
 | `$100` | Fixed amount |
 | `*0.10` | 10% of matched posting |
 | `*-0.10` | Negative 10% of matched |
+| `*$2` | Twice the matched amount, in `$` |
+
+The `*` must come directly before the amount: hledger 1.52 rejects `* -1`. A
+bare `*` is accepted and generates a zero amount. The multiplier is valid only
+in auto posting rules; in regular and periodic transactions hledger rejects it.
 
 ### Examples
 

@@ -125,6 +125,9 @@ type Parser struct {
 	// transaction being parsed: hledger applies their tags to the transaction and
 	// to all of its postings.
 	postingComments []ast.Comment
+	// inAutoPostingRule is set while parsing the postings of an auto posting
+	// rule, the only place hledger accepts a `*` multiplier amount.
+	inAutoPostingRule bool
 }
 
 // Parse turns journal text into an AST. The input must already use LF line
@@ -464,6 +467,8 @@ func (p *Parser) parseAutoPostingRule() *ast.AutoPostingRule {
 	}
 
 	// Parse postings
+	p.inAutoPostingRule = true
+	defer func() { p.inAutoPostingRule = false }()
 	for p.current.Type == TokenIndent {
 		posting := p.parsePosting()
 		if posting != nil {
@@ -476,6 +481,19 @@ func (p *Parser) parseAutoPostingRule() *ast.AutoPostingRule {
 
 	rule.Range.End = toASTPosition(p.current.Pos)
 	return rule
+}
+
+// isMultiplier reports whether the current `*` token is an auto posting rule
+// multiplier. Like hledger, the amount must follow the `*` directly; a `*`
+// followed only by spaces and an optional comment is a multiplier without an
+// amount, while `* -1` is not a multiplier at all.
+func (p *Parser) isMultiplier() bool {
+	line, _, _ := strings.Cut(p.lexer.input[p.current.End.Offset:], "\n")
+	if line != "" && line[0] != ' ' && line[0] != '\t' {
+		return true
+	}
+	trimmed := strings.TrimLeft(line, " \t")
+	return trimmed == "" || trimmed[0] == ';'
 }
 
 func (p *Parser) parseDate() *ast.Date {
@@ -652,6 +670,11 @@ func (p *Parser) parsePosting() *ast.Posting {
 	p.advance()
 
 	if closingToken != 0 && p.current.Type == closingToken {
+		p.advance()
+	}
+
+	if p.inAutoPostingRule && p.current.Type == TokenStatus && p.current.Value == "*" && p.isMultiplier() {
+		posting.Multiplier = true
 		p.advance()
 	}
 
