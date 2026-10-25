@@ -13,8 +13,9 @@ For the journal format, see [`hledger.md`](./hledger.md).
 3. [Field Assignments](#field-assignments)
 4. [Field Reference Interpolation](#field-reference-interpolation)
 5. [If Block Grammar](#if-block-grammar)
-6. [Edge Cases and Examples](#edge-cases-and-examples)
-7. [References](#references)
+6. [If Table Grammar](#if-table-grammar)
+7. [Edge Cases and Examples](#edge-cases-and-examples)
+8. [References](#references)
 
 ---
 
@@ -246,6 +247,40 @@ whose first word is in `KnownDirectives`, `{if, end}`, or `BuiltinFieldNames`.
 Blank lines and comment lines (`#`, `;`, `*`) inside the pattern list do not
 terminate the block.
 
+## If Table Grammar
+
+An `if` table is a compact way to write many if blocks that assign the same
+fields. `if` is followed directly (no space) by a **separator**, any character
+that is neither alphanumeric nor whitespace, and then the field names,
+separated by it:
+
+```text
+if,account2,comment
+WHOLE FOODS,expenses:groceries,food
+SHELL,expenses:auto:fuel,
+%description netflix && %amount -15,expenses:subscriptions,streaming
+
+if;description
+%description groceries|food;expenses:food
+```
+
+- Each following line is a **row**: a matcher (anything an if block pattern
+  can be, including `%field` and `&&`) up to the first separator, then one
+  value per header field, separated by the separator. Values may be empty.
+  Rows start at the beginning of the line; hledger rejects indented rows.
+- A row is equivalent to an if block with that matcher and those assignments;
+  the parser records each row in `RulesFile.IfBlocks` and the whole table in
+  `RulesFile.IfTables`.
+- Comment lines (optionally indented) may appear between rows.
+- The table ends at the first **blank line** or the end of the file. Until
+  then, every line is a row, even one that looks like a directive.
+- Besides the usual field names, the header may use the `skip` and `end`
+  pseudo-fields.
+
+hledger rejects a table whose header has no rows, a row whose number of
+values differs from the number of header fields, and indented rows; the LSP
+reports these as errors.
+
 ## Edge Cases and Examples
 
 The following examples are derived from
@@ -315,11 +350,13 @@ if
   <https://hledger.org/hledger.html#csv>
 - Official `if block` reference:
   <https://hledger.org/hledger.html#if-block>
+- Official `if table` reference:
+  <https://hledger.org/hledger.html#if-table>
 - hledger CSV examples:
   <https://github.com/simonmichael/hledger/tree/main/examples/csv>
 - Parser source of truth (Haskell):
   `hledger-lib/Hledger/Read/RulesReader.hs` (`conditionalblockp`,
-  `matcherprefixp`, `fieldmatcherp`, `renderTemplate`)
+  `conditionaltablep`, `matcherprefixp`, `fieldmatcherp`, `renderTemplate`)
 - Local lexer / directive list: `internal/rules/lexer.go`
 - Local parser: `internal/rules/parser.go`
 - Local completion provider: `internal/rules/completion.go`

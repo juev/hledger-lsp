@@ -13,6 +13,7 @@ const (
 	TokenFieldName
 	TokenText
 	TokenRegex
+	TokenSeparator
 )
 
 type Position struct {
@@ -31,7 +32,7 @@ type Token struct {
 func (t TokenType) String() string {
 	names := []string{
 		"EOF", "Newline", "Indent", "Comment", "Directive",
-		"IfKeyword", "EndKeyword", "FieldName", "Text", "Regex",
+		"IfKeyword", "EndKeyword", "FieldName", "Text", "Regex", "Separator",
 	}
 	if int(t) < len(names) {
 		return names[t]

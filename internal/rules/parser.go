@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -37,7 +38,13 @@ func (p *parser) parseFile() (*RulesFile, []Diagnostic) {
 			rf.Comments = append(rf.Comments, p.parseComment())
 
 		case TokenIfKeyword:
-			rf.IfBlocks = append(rf.IfBlocks, p.parseIfBlock())
+			ifTok := p.current
+			p.advance() // consume "if"
+			if p.current.Type == TokenSeparator {
+				p.parseIfTable(rf, ifTok)
+			} else {
+				rf.IfBlocks = append(rf.IfBlocks, p.parseIfBlock(ifTok))
+			}
 
 		case TokenEndKeyword:
 			p.advance()
@@ -134,12 +141,11 @@ func (p *parser) parseDirective(rf *RulesFile) {
 	}
 }
 
-func (p *parser) parseIfBlock() IfBlock {
-	startTok := p.current
+// parseIfBlock parses an if block; startTok is the already-consumed "if" keyword.
+func (p *parser) parseIfBlock(startTok Token) IfBlock {
 	block := IfBlock{}
 
 	// Collect inline pattern from TokenRegex on the "if" line
-	p.advance() // consume "if"
 	if p.current.Type == TokenRegex || p.current.Type == TokenText {
 		block.Patterns = append(block.Patterns, p.current.Value)
 		p.advance()
@@ -229,6 +235,163 @@ loop:
 	return block
 }
 
+// parseIfTable parses an if table; ifTok is the already-consumed "if" keyword and
+// the current token is the header's first separator. Each row becomes an if block.
+func (p *parser) parseIfTable(rf *RulesFile, ifTok Token) {
+	table := IfTable{}
+	headerEnd := ifTok.End
+
+	// Every separator in the header opens a field-name slot.
+	slotOpen := false
+	var lastSep Token
+	closeEmptySlot := func() {
+		if slotOpen {
+			table.Fields = append(table.Fields, "")
+			p.diags = append(p.diags, Diagnostic{
+				Range:    tokenRange(lastSep),
+				Message:  "missing field name in if table header",
+				Code:     "EMPTY_FIELD_NAME",
+				Severity: SeverityError,
+			})
+		}
+	}
+	for p.current.Type != TokenNewline && p.current.Type != TokenEOF {
+		tok := p.current
+		switch tok.Type {
+		case TokenSeparator:
+			closeEmptySlot()
+			slotOpen = true
+			lastSep = tok
+		default:
+			if tok.Type != TokenFieldName {
+				p.diags = append(p.diags, Diagnostic{
+					Range:    tokenRange(tok),
+					Message:  "unknown field name: " + tok.Value,
+					Code:     "UNKNOWN_FIELD",
+					Severity: SeverityWarning,
+				})
+			}
+			table.Fields = append(table.Fields, tok.Value)
+			slotOpen = false
+		}
+		headerEnd = tok.End
+		p.advance()
+	}
+	closeEmptySlot()
+
+	// The lexer ends a table at the first blank line, so table rows are exactly
+	// the lines that start with a matcher or a separator.
+rows:
+	for {
+		switch {
+		case p.current.Type == TokenNewline:
+			p.advance()
+		case p.current.Type == TokenComment:
+			rf.Comments = append(rf.Comments, p.parseComment())
+		case (p.current.Type == TokenRegex || p.current.Type == TokenSeparator) && p.current.Pos.Column == 1:
+			table.Rows = append(table.Rows, p.parseIfTableRow(table.Fields))
+		default:
+			break rows
+		}
+	}
+
+	headerRange := ast.Range{Start: posFromToken(ifTok), End: astPos(headerEnd)}
+	table.Range = headerRange
+	if len(table.Rows) == 0 {
+		p.diags = append(p.diags, Diagnostic{
+			Range:    headerRange,
+			Message:  "if table has no rows",
+			Code:     "IF_TABLE_NO_ROWS",
+			Severity: SeverityError,
+		})
+	} else {
+		table.Range.End = table.Rows[len(table.Rows)-1].Range.End
+	}
+
+	rf.IfBlocks = append(rf.IfBlocks, table.Rows...)
+	rf.IfTables = append(rf.IfTables, table)
+}
+
+// parseIfTableRow parses one "matcher<sep>value<sep>value…" row of an if table.
+func (p *parser) parseIfTableRow(fields []string) IfBlock {
+	startTok := p.current
+	block := IfBlock{}
+	end := startTok.End
+
+	if p.current.Type == TokenRegex {
+		matcher := p.current.Value
+		if pattern := strings.TrimSpace(matcher); pattern != "" {
+			block.Patterns = append(block.Patterns, pattern)
+			// hledger requires a row's matcher to start at the beginning of the line.
+			if strings.TrimLeft(matcher, " \t") != matcher {
+				p.diags = append(p.diags, Diagnostic{
+					Range:    tokenRange(p.current),
+					Message:  "if table rows must not be indented",
+					Code:     "INDENTED_IF_TABLE_ROW",
+					Severity: SeverityError,
+				})
+			}
+		}
+		p.advance()
+	}
+	if len(block.Patterns) == 0 {
+		p.diags = append(p.diags, Diagnostic{
+			Range:    tokenRange(startTok),
+			Message:  "empty if table pattern",
+			Code:     "EMPTY_PATTERN",
+			Severity: SeverityError,
+		})
+	}
+
+	// Each separator starts a value; a text token after it fills the value in.
+	var values []FieldAssignment
+	for p.current.Type == TokenSeparator || p.current.Type == TokenText {
+		tok := p.current
+		if tok.Type == TokenSeparator {
+			pos := astPos(tok.End)
+			values = append(values, FieldAssignment{Range: ast.Range{Start: pos, End: pos}})
+		} else if len(values) > 0 {
+			values[len(values)-1].Value = tok.Value
+			values[len(values)-1].Range = tokenRange(tok)
+		}
+		end = tok.End
+		p.advance()
+	}
+	if p.current.Type == TokenNewline {
+		p.advance()
+	}
+
+	block.Range = ast.Range{Start: posFromToken(startTok), End: astPos(end)}
+
+	if len(values) != len(fields) {
+		p.diags = append(p.diags, Diagnostic{
+			Range:    block.Range,
+			Message:  fmt.Sprintf("if table row should have %s, but has %d", pluralize(len(fields), "value"), len(values)),
+			Code:     "IF_TABLE_VALUE_COUNT",
+			Severity: SeverityError,
+		})
+	}
+
+	for i, v := range values {
+		if i >= len(fields) {
+			break
+		}
+		if fields[i] == "" {
+			continue
+		}
+		v.Field = fields[i]
+		block.Assignments = append(block.Assignments, v)
+	}
+	return block
+}
+
+func pluralize(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
 // parseIndentedAssignment handles a top-level indented line as a field assignment
 // outside of any if block (adds to rf.Assignments).
 func (p *parser) parseIndentedAssignment(rf *RulesFile) {
@@ -296,4 +459,8 @@ func tokenRange(tok Token) ast.Range {
 
 func posFromToken(tok Token) ast.Position {
 	return ast.Position{Line: tok.Pos.Line, Column: tok.Pos.Column, Offset: tok.Pos.Offset}
+}
+
+func astPos(pos Position) ast.Position {
+	return ast.Position{Line: pos.Line, Column: pos.Column, Offset: pos.Offset}
 }

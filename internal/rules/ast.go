@@ -8,6 +8,7 @@ type RulesFile struct {
 	FieldsDefs  []FieldsDirective
 	Assignments []FieldAssignment
 	IfBlocks    []IfBlock
+	IfTables    []IfTable
 	Includes    []IncludeDirective
 	Sources     []SourceDirective
 	Comments    []RulesComment
@@ -38,6 +39,14 @@ type IfBlock struct {
 	Patterns    []string
 	Assignments []FieldAssignment
 	Range       ast.Range
+}
+
+// IfTable represents an "if" table ("if,account2,comment" followed by rows).
+// Each row is equivalent to an if block, and is also listed in RulesFile.IfBlocks.
+type IfTable struct {
+	Fields []string
+	Rows   []IfBlock
+	Range  ast.Range
 }
 
 // IncludeDirective represents an "include path" directive.

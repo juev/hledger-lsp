@@ -2,6 +2,7 @@ package rules
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juev/hledger-lsp/internal/lsputil"
 )
@@ -62,6 +63,15 @@ func Complete(doc string, lineNum int, col int, workspaceAccounts []string, reso
 			declaredFieldsLoaded = true
 		}
 		return declaredFields
+	}
+
+	if sep, fields, ok := enclosingIfTable(lines, lineNum); ok {
+		return completeIfTableRow(prefix, sep, fields, workspaceAccounts, getDeclaredFields)
+	}
+
+	// Cursor in an if table header, past the separator after `if`.
+	if _, ok := ifTableSeparator(prefix); ok {
+		return fieldNameCompletions()
 	}
 
 	// Cursor on the `if` line itself, in pattern position (after `if<space>`
@@ -170,6 +180,57 @@ func isInsideIfBlock(lines []string, lineNum int) bool {
 	return false
 }
 
+// enclosingIfTable reports whether line lineNum is a row of an if table, returning
+// the table's separator and header field names. Like hledger, every line between a
+// table header and the next blank line is a row; comment lines are skipped. The
+// cursor line itself may be blank, since that is where a new row is being typed.
+func enclosingIfTable(lines []string, lineNum int) (rune, []string, bool) {
+	for i := min(lineNum, len(lines)) - 1; i >= 0; i-- {
+		line := strings.TrimRight(lines[i], "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			return 0, nil, false
+		}
+		if isCommentLine(trimmed) {
+			continue
+		}
+		if sep, ok := ifTableSeparator(line); ok {
+			return sep, strings.Split(line, string(sep))[1:], true
+		}
+	}
+	return 0, nil, false
+}
+
+// IfTableSeparatorAt returns the separator of the if table that line lineNum belongs
+// to, either as one of its rows or as its header. Completion edits use it so that
+// replacing a cell's text stops at the separator.
+func IfTableSeparatorAt(lines []string, lineNum int) (rune, bool) {
+	if sep, _, ok := enclosingIfTable(lines, lineNum); ok {
+		return sep, true
+	}
+	if lineNum < 0 || lineNum >= len(lines) {
+		return 0, false
+	}
+	return ifTableSeparator(strings.TrimRight(lines[lineNum], "\r"))
+}
+
+// completeIfTableRow completes an if table row: field references in the matcher
+// column, and values according to the header field of the column being typed.
+func completeIfTableRow(prefix string, sep rune, fields []string, workspaceAccounts []string, declaredFields func() []string) []CompletionItem {
+	column := strings.Count(prefix, string(sep))
+	if column == 0 {
+		return fieldReferenceCompletions(declaredFields())
+	}
+	cell := prefix[strings.LastIndex(prefix, string(sep))+utf8.RuneLen(sep):]
+	if cursorWordStartsWithPercent(cell) {
+		return fieldReferenceCompletions(declaredFields())
+	}
+	if column <= len(fields) && strings.HasPrefix(fields[column-1], "account") {
+		return accountCompletions(workspaceAccounts)
+	}
+	return nil
+}
+
 // isContinuationOfIfBlock reports whether the line is a pattern, continuation,
 // comment, blank line, or indented — i.e., it does not itself close an if block.
 func isContinuationOfIfBlock(line string) bool {
@@ -208,11 +269,14 @@ func isTopLevelCloser(line string) bool {
 	return firstWordIsTopLevelKeyword(trimmed)
 }
 
-// firstWordIsTopLevelKeyword reports whether the first word of trimmed is
-// a known top-level keyword (directive, `if`, `end`) or a builtin field name
-// (which would form an unindented field assignment). Anything else is treated
+// firstWordIsTopLevelKeyword reports whether trimmed is an if table header, or
+// its first word is a known top-level keyword (directive, `if`, `end`) or a
+// builtin field name (which would form an unindented field assignment). Anything else is treated
 // as a raw-regex pattern by the if-block heuristic.
 func firstWordIsTopLevelKeyword(trimmed string) bool {
+	if _, ok := ifTableSeparator(trimmed); ok {
+		return true
+	}
 	word := firstWord(trimmed)
 	if word == "" {
 		return false

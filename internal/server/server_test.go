@@ -1655,6 +1655,19 @@ func TestServer_RulesSourceDirective_NoDiagnostics(t *testing.T) {
 	assert.Empty(t, diags, "valid rules file with source directive should have no diagnostics")
 }
 
+func TestServer_RulesIfTables_NoDiagnostics(t *testing.T) {
+	ts := newTestServer()
+	uri := uri.URI("file:///bank.csv.rules")
+
+	// Reproduction from issue #87.
+	content := "skip 1\nfields date, description, amount\naccount1 assets:checking\n\n" +
+		"if,account2,comment\nWHOLE FOODS,expenses:groceries,food\nSHELL,expenses:auto:fuel,\nNETFLIX,expenses:subscriptions,streaming\n\n" +
+		"if;description\n%description groceries|food;expenses:food\n"
+	diags, err := ts.openAndWait(uri, content)
+	require.NoError(t, err)
+	assert.Empty(t, diags, "if tables should not produce diagnostics")
+}
+
 func TestServer_RulesIncludeDirective_NoDiagnostics(t *testing.T) {
 	ts := newTestServer()
 	uri := uri.URI("file:///test.rules")

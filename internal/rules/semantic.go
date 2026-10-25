@@ -97,7 +97,7 @@ func SemanticTokens(content string) []RulesSemanticToken {
 				TokenType: SemTokenString,
 			})
 
-		case TokenNewline, TokenIndent:
+		case TokenNewline, TokenIndent, TokenSeparator:
 			// intentionally skipped: structural tokens carry no semantic meaning
 		}
 	}
