@@ -341,6 +341,7 @@ func TestComplete_IfTable(t *testing.T) {
 		wantNone bool
 	}{
 		{name: "header field name", doc: doc, line: 2, col: len("if,acc"), wantAny: []string{"account2", "comment"}},
+		{name: "header pseudo-fields", doc: doc, line: 2, col: len("if,"), wantAny: []string{"skip", "end"}},
 		{name: "header after separator", doc: doc, line: 2, col: len("if,account2,"), wantAny: []string{"comment"}},
 		{name: "matcher column", doc: doc, line: rowLine, col: len("WHOLE"), wantAny: []string{"%description"}},
 		{name: "account column", doc: doc, line: rowLine, col: len("WHOLE FOODS,exp"), wantAny: []string{"expenses:groceries"}},
@@ -352,6 +353,41 @@ func TestComplete_IfTable(t *testing.T) {
 			line:    2,
 			col:     len("FOO,%desc"),
 			wantAny: []string{"%description"},
+		},
+		{
+			name:    "field reference embedded in account value",
+			doc:     "fields date, payee\nif,account2\nFOO,expenses:%pa",
+			line:    2,
+			col:     len("FOO,expenses:%pa"),
+			wantAny: []string{"%payee"},
+		},
+		{
+			name:    "field reference embedded in other value",
+			doc:     "fields date, payee\nif,comment\nFOO,paid to %pa",
+			line:    2,
+			col:     len("FOO,paid to %pa"),
+			wantAny: []string{"%payee"},
+		},
+		{
+			name:     "punctuation after percent in other value",
+			doc:      "fields date, payee\nif,comment\nFOO,paid (%pa)",
+			line:     2,
+			col:      len("FOO,paid (%pa)"),
+			wantNone: true,
+		},
+		{
+			name:    "negated matcher",
+			doc:     "fields date, description\nif,account2\n!%desc",
+			line:    2,
+			col:     len("!%desc"),
+			wantAny: []string{"%description"},
+		},
+		{
+			name:    "account after completed field reference",
+			doc:     "fields date, payee\nif,account2\nFOO,expenses:%payee food",
+			line:    2,
+			col:     len("FOO,expenses:%payee food"),
+			wantAny: []string{"expenses:groceries"},
 		},
 		{
 			name:    "after table and blank line",
@@ -387,5 +423,38 @@ func TestIsInsideIfBlock_TableHeaderClosesBlock(t *testing.T) {
 	}
 	if isInsideIfBlock(lines, 2) {
 		t.Error("an if table header should close the preceding if block")
+	}
+}
+
+func TestIfTableEditStart(t *testing.T) {
+	tests := []struct {
+		name      string
+		doc       string
+		line      int
+		col       int // UTF-16
+		wantStart int // UTF-16
+		wantOK    bool
+	}{
+		{name: "header cell", doc: "if,account2,comm", line: 0, col: 16, wantStart: 12, wantOK: true},
+		{name: "header multi-byte separator", doc: "if→account2→comm", line: 0, col: 16, wantStart: 12, wantOK: true},
+		{name: "matcher word", doc: "if,account2\nWHOLE FO", line: 1, col: 8, wantStart: 6, wantOK: true},
+		{name: "account with spaces", doc: "if,account2\nFOO,Expenses:Dining O", line: 1, col: 21, wantStart: 4, wantOK: true},
+		{name: "account after leading space", doc: "if,account2\nFOO, Expenses:Din", line: 1, col: 17, wantStart: 5, wantOK: true},
+		{name: "embedded field reference", doc: "if,account2\nFOO,expenses:%pa", line: 1, col: 16, wantStart: 13, wantOK: true},
+		{name: "non-ASCII before cell", doc: "if,account2\nCAFÉ 😀,Expenses:Din", line: 1, col: 20, wantStart: 8, wantOK: true},
+		{name: "matcher keeps negation", doc: "if,account2\n!%desc", line: 1, col: 6, wantStart: 1, wantOK: true},
+		{name: "matcher keeps unspaced and", doc: "if,account2\n%payee foo &&%am", line: 1, col: 16, wantStart: 13, wantOK: true},
+		{name: "matcher keeps spaced and", doc: "if,account2\n%payee foo && %am", line: 1, col: 17, wantStart: 14, wantOK: true},
+		{name: "punctuation after percent is not a reference", doc: "if,account2\nFOO,Expenses:(%pa)", line: 1, col: 18, wantStart: 4, wantOK: true},
+		{name: "not in a table", doc: "account1 Expenses:Dining O", line: 0, col: 26, wantOK: false},
+		{name: "header before separator", doc: "if", line: 0, col: 2, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, ok := IfTableEditStart(strings.Split(tt.doc, "\n"), tt.line, tt.col)
+			if ok != tt.wantOK || (ok && start != tt.wantStart) {
+				t.Errorf("IfTableEditStart = %d, %v; want %d, %v", start, ok, tt.wantStart, tt.wantOK)
+			}
+		})
 	}
 }

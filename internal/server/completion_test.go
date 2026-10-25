@@ -4498,6 +4498,9 @@ func TestRulesCompletion_IfTable_TextEditStopsAtSeparator(t *testing.T) {
 	}{
 		{name: "header field", content: "if,account2,comm", line: 0, character: 16, label: "comment", wantStart: 12},
 		{name: "value field reference", content: "fields date, description\nif,comment\nWHOLE FOODS,%desc", line: 2, character: 17, label: "%description", wantStart: 12},
+		{name: "header pseudo-field", content: "if,account2,sk", line: 0, character: 14, label: "skip", wantStart: 12},
+		{name: "embedded field reference keeps text before it", content: "fields date, payee\nif,account2\nFOO,expenses:%pa", line: 2, character: 16, label: "%payee", wantStart: 13},
+		{name: "negated matcher keeps operator", content: "fields date, description\nif,comment\n!%desc", line: 2, character: 6, label: "%description", wantStart: 1},
 		{name: "multi-byte separator", content: "fields date, description\nif→comment\nWHOLE FOODS→%desc", line: 2, character: 17, label: "%description", wantStart: 12},
 		{name: "matcher still stops at space", content: "fields date, description\nif,comment\nWHOLE %desc", line: 2, character: 11, label: "%description", wantStart: 6},
 	}
