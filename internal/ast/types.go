@@ -86,7 +86,11 @@ type Posting struct {
 	CommentRange Range
 	Tags         []Tag
 	Virtual      VirtualType
-	Range        Range
+	// Multiplier marks an auto posting rule amount written as `*AMOUNT`: the
+	// generated posting gets the matched amount multiplied by Amount. hledger
+	// accepts it only in auto posting rules, and also without an amount.
+	Multiplier bool
+	Range      Range
 	// UnparsedTail marks text on the posting line that the parser did not
 	// consume (for example `:=` balance assignment, which hledger 1.52 rejects).
 	// The formatter leaves such lines untouched instead of rebuilding them from
