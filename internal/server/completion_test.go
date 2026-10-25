@@ -4484,3 +4484,48 @@ func TestCompletion_PayeeAwareRanking_RecencyTiebreaker(t *testing.T) {
 		"More recently used assets:bank (SortText=%s) should rank before assets:cash (SortText=%s)",
 		completionSortText(*bankItem), completionSortText(*cashItem))
 }
+
+// Regression: issue #87 — completing inside an if table replaces only the cell
+// being typed, not the text back to the previous space.
+func TestRulesCompletion_IfTable_TextEditStopsAtSeparator(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		line      uint32
+		character uint32
+		label     string
+		wantStart uint32
+	}{
+		{name: "header field", content: "if,account2,comm", line: 0, character: 16, label: "comment", wantStart: 12},
+		{name: "value field reference", content: "fields date, description\nif,comment\nWHOLE FOODS,%desc", line: 2, character: 17, label: "%description", wantStart: 12},
+		{name: "multi-byte separator", content: "fields date, description\nif→comment\nWHOLE FOODS→%desc", line: 2, character: 17, label: "%description", wantStart: 12},
+		{name: "matcher still stops at space", content: "fields date, description\nif,comment\nWHOLE %desc", line: 2, character: 11, label: "%description", wantStart: 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer()
+			docURI := uri.URI("file:///test.rules")
+			srv.documents.Store(docURI, tt.content)
+
+			result, err := srv.completion(context.Background(), &protocol.CompletionParams{
+				TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+					Position:     protocol.Position{Line: tt.line, Character: tt.character},
+				},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			for _, it := range result.Items {
+				if it.Label != tt.label {
+					continue
+				}
+				edit := completionTextEdit(it)
+				assert.Equal(t, protocol.Position{Line: tt.line, Character: tt.wantStart}, edit.Range.Start)
+				assert.Equal(t, protocol.Position{Line: tt.line, Character: tt.character}, edit.Range.End)
+				return
+			}
+			t.Fatalf("expected %q among completions", tt.label)
+		})
+	}
+}

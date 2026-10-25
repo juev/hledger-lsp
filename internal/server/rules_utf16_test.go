@@ -40,7 +40,7 @@ func TestRulesTextEditRange_UTF16(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := rulesTextEditRange(tt.line, tt.lineNum, tt.col)
+			got := rulesTextEditRange(tt.line, tt.lineNum, tt.col, 0)
 			if got == nil {
 				t.Fatal("expected non-nil range")
 			}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"go.lsp.dev/protocol"
 
@@ -1495,14 +1496,21 @@ func filterByPrefix(items []protocol.CompletionItem, query string) []scoredItem 
 	return result
 }
 
-func rulesTextEditRange(line string, lineNum, col int) *protocol.Range {
+// rulesTextEditRange returns the range a rules completion replaces: the text before
+// the cursor back to the previous whitespace, or to cellSep (an if table separator,
+// 0 for none) if that comes first.
+func rulesTextEditRange(line string, lineNum, col int, cellSep rune) *protocol.Range {
 	byteCol := lsputil.UTF16OffsetToByteOffset(line, col)
 	if byteCol > len(line) {
 		byteCol = len(line)
 	}
 	byteStart := byteCol
-	for byteStart > 0 && line[byteStart-1] != ' ' && line[byteStart-1] != '\t' {
-		byteStart--
+	for byteStart > 0 {
+		r, size := utf8.DecodeLastRuneInString(line[:byteStart])
+		if r == ' ' || r == '\t' || (cellSep != 0 && r == cellSep) {
+			break
+		}
+		byteStart -= size
 	}
 	return &protocol.Range{
 		Start: protocol.Position{Line: uint32(lineNum), Character: uint32(lsputil.ByteOffsetToUTF16(line, byteStart))},
@@ -1539,7 +1547,8 @@ func (s *Server) rulesCompletion(doc string, params *protocol.CompletionParams) 
 	}
 
 	rulesItems := rules.Complete(doc, lineNum, col, workspaceAccounts, resolvedIncludes)
-	editRange := rulesTextEditRange(line, lineNum, col)
+	cellSep, _ := rules.IfTableSeparatorAt(lines, lineNum)
+	editRange := rulesTextEditRange(line, lineNum, col, cellSep)
 
 	items := make([]protocol.CompletionItem, len(rulesItems))
 	for i, ri := range rulesItems {

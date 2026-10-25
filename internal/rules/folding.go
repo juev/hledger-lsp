@@ -1,5 +1,7 @@
 package rules
 
+import "github.com/juev/hledger-lsp/internal/ast"
+
 const (
 	FoldingKindRegion  = "region"
 	FoldingKindComment = "comment"
@@ -20,9 +22,16 @@ func FoldingRanges(rf *RulesFile) []FoldingRange {
 
 	ranges := []FoldingRange{}
 
+	regions := make([]ast.Range, 0, len(rf.IfBlocks)+len(rf.IfTables))
 	for _, block := range rf.IfBlocks {
-		startLine := uint32(max(0, block.Range.Start.Line-1))
-		endLine := uint32(max(0, block.Range.End.Line-1))
+		regions = append(regions, block.Range)
+	}
+	for _, table := range rf.IfTables {
+		regions = append(regions, table.Range)
+	}
+	for _, r := range regions {
+		startLine := uint32(max(0, r.Start.Line-1))
+		endLine := uint32(max(0, r.End.Line-1))
 		if endLine > startLine {
 			ranges = append(ranges, FoldingRange{
 				StartLine: startLine,
