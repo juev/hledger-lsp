@@ -22,6 +22,7 @@ type Lexer struct {
 	afterNumber    bool
 	virtualCloser  rune
 	insideBraces   int
+	prevType       TokenType
 }
 
 func NewLexer(input string) *Lexer {
@@ -41,6 +42,12 @@ func NewLexer(input string) *Lexer {
 }
 
 func (l *Lexer) Next() Token {
+	tok := l.scan()
+	l.prevType = tok.Type
+	return tok
+}
+
+func (l *Lexer) scan() Token {
 	if l.pos >= len(l.input) {
 		return l.makeToken(TokenEOF, "")
 	}
@@ -151,6 +158,11 @@ func (l *Lexer) scanInLine() Token {
 	case ch == '=':
 		return l.scanEquals()
 	case ch == '*' || ch == '!':
+		// Header line: only a mark right after the date is a status. Any later
+		// one, such as the second '*' in "2024-01-01 * *STAR", is description.
+		if l.inTransaction && !l.onPostingLine && !l.afterIndent && l.prevType != TokenDate {
+			return l.scanText()
+		}
 		return l.scanStatus()
 	case l.isCurrencySymbol(r):
 		// Header line: currency symbols are part of description

@@ -1535,3 +1535,50 @@ func assertNoDiagnosticModifiers(t *testing.T, tokens []semanticToken) {
 		assert.Zero(t, token.modifiers&(1<<ModifierUnbalanced))
 	}
 }
+
+func TestSemanticTokens_StatusMarkerInDescription(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantPayee semanticToken
+		wantNote  *semanticToken
+	}{
+		{
+			name:      "cyrillic description",
+			content:   "2024-01-01 ! !Кафе\n    a  1 USD\n    b\n",
+			wantPayee: semanticToken{col: 13, length: 5},
+		},
+		{
+			name:      "note keeps its marker",
+			content:   "2024-01-01 a | *b\n    a  1 USD\n    b\n",
+			wantPayee: semanticToken{col: 11, length: 1},
+			wantNote:  &semanticToken{col: 15, length: 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var payee, note *semanticToken
+			for _, tok := range tokenizeForSemantics(tt.content) {
+				if tok.line != 0 {
+					continue
+				}
+				switch tok.tokenType {
+				case TokenTypePayee:
+					payee = &tok
+				case TokenTypeNote:
+					note = &tok
+				}
+			}
+
+			require.NotNil(t, payee)
+			assert.Equal(t, tt.wantPayee.col, payee.col)
+			assert.Equal(t, tt.wantPayee.length, payee.length)
+			if tt.wantNote != nil {
+				require.NotNil(t, note)
+				assert.Equal(t, tt.wantNote.col, note.col)
+				assert.Equal(t, tt.wantNote.length, note.length)
+			}
+		})
+	}
+}

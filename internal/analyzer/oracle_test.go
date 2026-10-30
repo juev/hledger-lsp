@@ -204,6 +204,14 @@ commodity 1,000.00 RUB
 `,
 		// The default commodity is not a wildcard: a non-zero assertion in
 		// another commodity still fails in hledger.
+		"description starting with a status marker keeps its postings": `2024-01-01 * *STAR
+    a  -64 USD
+    b
+
+2024-01-02 check
+    a  0 USD = -64 USD
+    b  0 USD
+`,
 		"default commodity does not match another commodity": `D 1.000,00 RUB
 commodity RUB
 
