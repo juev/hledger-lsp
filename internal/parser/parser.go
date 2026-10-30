@@ -2,6 +2,8 @@ package parser
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +51,20 @@ type Context struct {
 	commodityDecimalMarks       map[string]string
 	accountPrefixes             []string
 	basicAliases                []basicAlias
+}
+
+// Equal reports whether a journal parsed under either context would parse the
+// same way.
+func (c Context) Equal(other Context) bool {
+	return c.defaultYear == other.defaultYear &&
+		c.decimalMark == other.decimalMark &&
+		c.decimalMarkExplicit == other.decimalMarkExplicit &&
+		c.defaultCommodityDecimalMark == other.defaultCommodityDecimalMark &&
+		c.defaultCommoditySymbol == other.defaultCommoditySymbol &&
+		c.defaultCommodityPosition == other.defaultCommodityPosition &&
+		maps.Equal(c.commodityDecimalMarks, other.commodityDecimalMarks) &&
+		slices.Equal(c.accountPrefixes, other.accountPrefixes) &&
+		slices.Equal(c.basicAliases, other.basicAliases)
 }
 
 type basicAlias struct {
@@ -1799,7 +1815,14 @@ func MergeContextExports(exports ...ContextExports) ContextExports {
 }
 
 func (p *Parser) context() Context {
-	return cloneContext(Context{
+	return cloneContext(p.liveContext())
+}
+
+// liveContext returns the parser's state without copying it, so the result
+// aliases maps and slices the parser goes on to mutate. It must not outlive the
+// call that asked for it; context returns a snapshot that can.
+func (p *Parser) liveContext() Context {
+	return Context{
 		defaultYear:                 p.defaultYear,
 		decimalMark:                 p.decimalMark,
 		decimalMarkExplicit:         p.decimalMarkExplicit,
@@ -1809,13 +1832,22 @@ func (p *Parser) context() Context {
 		commodityDecimalMarks:       p.commodityDecimalMarks,
 		accountPrefixes:             p.accountPrefixes,
 		basicAliases:                p.basicAliases,
-	})
+	}
 }
 
+// checkpoint records the context after a directive. Most directives leave it
+// alone (a price history is thousands of them), so an unchanged context shares
+// the previous snapshot rather than copying every commodity once per directive.
 func (p *Parser) checkpoint() {
+	var context Context
+	if last := len(p.checkpoints) - 1; last >= 0 && p.checkpoints[last].Context.Equal(p.liveContext()) {
+		context = p.checkpoints[last].Context
+	} else {
+		context = p.context()
+	}
 	p.checkpoints = append(p.checkpoints, ContextCheckpoint{
 		Offset:  p.current.Pos.Offset,
-		Context: p.context(),
+		Context: context,
 	})
 }
 

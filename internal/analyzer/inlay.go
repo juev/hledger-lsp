@@ -8,6 +8,11 @@ import (
 
 // PostingEffect contains the facts derived while applying one posting. All map
 // fields are owned by this result and may be safely changed by its caller.
+//
+// BalanceAfter holds only the posting's own account. Snapshotting every account
+// would cost O(postings × accounts) memory, all of it live until the walk ends:
+// over a few thousand transactions and a few hundred accounts that is a gigabyte
+// per call.
 type PostingEffect struct {
 	TransactionIndex int
 	PostingIndex     int
@@ -41,7 +46,7 @@ func calculatePostingEffectsFromTransactions(transactions []ast.Transaction) ([]
 				PostingIndex:     postingIndex,
 				InferredAmounts:  cloneAmounts(inferred[postingIndex]),
 				CostContribution: costContribution(posting),
-				BalanceAfter:     cloneAccountBalances(balances),
+				BalanceAfter:     accountBalanceSnapshot(balances, posting.Account.GetResolvedName()),
 			})
 		}
 	}
@@ -110,10 +115,6 @@ func cloneAmounts(amounts map[string]decimal.Decimal) map[string]decimal.Decimal
 	return cloned
 }
 
-func cloneAccountBalances(balances AccountBalances) AccountBalances {
-	cloned := make(AccountBalances, len(balances))
-	for account, amounts := range balances {
-		cloned[account] = cloneAmounts(amounts)
-	}
-	return cloned
+func accountBalanceSnapshot(balances AccountBalances, account string) AccountBalances {
+	return AccountBalances{account: cloneAmounts(balances[account])}
 }

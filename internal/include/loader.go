@@ -28,7 +28,8 @@ type Limits struct {
 }
 
 // Loader caches normalized source text. Parsed journals are occurrence-specific
-// because parser context depends on the include site.
+// because parser context depends on the include site, so a parse is reused only
+// for the same text under the same context; see occurrence_parse.go.
 type Loader struct {
 	mu        sync.RWMutex
 	cache     map[string]string
@@ -40,6 +41,10 @@ type Loader struct {
 	parses     map[string]*parseCacheEntry
 	parseLRU   *list.List
 	parseBytes int
+
+	// occurrenceMu guards occurrenceParses; see occurrence_parse.go.
+	occurrenceMu     sync.Mutex
+	occurrenceParses map[string]*occurrenceParse
 }
 
 func NewLoader() *Loader {
@@ -49,6 +54,8 @@ func NewLoader() *Loader {
 		limits:    DefaultLimits(),
 		parses:    make(map[string]*parseCacheEntry),
 		parseLRU:  list.New(),
+
+		occurrenceParses: make(map[string]*occurrenceParse),
 	}
 }
 
@@ -152,11 +159,15 @@ func (s *loadState) loadOccurrence(path, canonical, content string, context pars
 	children := make(map[int][]OccurrenceID)
 	s.children[id] = children
 	includeIndex := 0
-	parseResult, parseErrs := parser.ParseWithContext(content, context, func(site parser.IncludeSite) parser.ContextExports {
-		currentIndex := includeIndex
-		includeIndex++
-		return s.resolveInclude(id, path, site, depth, children, currentIndex)
-	})
+	parseResult, parseErrs, reused := s.loader.reusableParse(canonical, content, context)
+	if !reused {
+		parseResult, parseErrs = parser.ParseWithContext(content, context, func(site parser.IncludeSite) parser.ContextExports {
+			currentIndex := includeIndex
+			includeIndex++
+			return s.resolveInclude(id, path, site, depth, children, currentIndex)
+		})
+		s.loader.rememberParse(canonical, content, context, parseResult, parseErrs)
+	}
 	for _, parseErr := range parseErrs {
 		s.errors = append(s.errors, LoadError{
 			Kind: ErrorParseError, Path: path, SourcePath: path, Message: parseErr.Message, Code: parseErr.Code,
@@ -359,15 +370,23 @@ func (l *Loader) ExpandGlob(basePath, pattern string) ([]string, error) {
 
 func (l *Loader) ClearCache() {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.cache = make(map[string]string)
+	l.mu.Unlock()
+
+	l.occurrenceMu.Lock()
+	defer l.occurrenceMu.Unlock()
+	l.occurrenceParses = make(map[string]*occurrenceParse)
 }
 
 func (l *Loader) InvalidateFile(path string) {
 	canonical := l.canonicalPath(path)
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	delete(l.cache, canonical)
+	l.mu.Unlock()
+
+	l.occurrenceMu.Lock()
+	defer l.occurrenceMu.Unlock()
+	delete(l.occurrenceParses, canonical)
 }
 
 func absoluteClean(path string) string {

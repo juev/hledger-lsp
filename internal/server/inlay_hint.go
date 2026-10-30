@@ -33,20 +33,27 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
 	effects := s.cachedPostingEffects(params.TextDocument.URI, content)
-	runningBalances := chronologicalBalances(journal)
+	// Replaying the balances walks the whole include tree, so it runs only when
+	// the result will be read.
+	var runningBalances map[postingKey]analyzer.AccountBalances
+	if settings.InlayHints.RunningBalances {
+		runningBalances = chronologicalBalances(journal)
+	}
+	var resolved *include.ResolvedJournal
 	var occurrenceID include.OccurrenceID
-	runningFromResolved := map[postingKey]analyzer.AccountBalances(nil)
 	if s.workspace != nil {
-		resolved, unique := s.workspace.GetUniqueResolvedForFile(uriToPath(params.TextDocument.URI))
+		tree, unique := s.workspace.GetUniqueResolvedForFile(uriToPath(params.TextDocument.URI))
 		occurrences := []include.JournalOccurrence(nil)
-		if unique && resolved != nil {
-			occurrences = resolved.OccurrencesForCanonical(uriToPath(params.TextDocument.URI))
+		if unique && tree != nil {
+			occurrences = tree.OccurrencesForCanonical(uriToPath(params.TextDocument.URI))
 		}
 		if len(occurrences) != 1 {
 			runningBalances = nil
 		} else {
-			occurrenceID = occurrences[0].ID
-			runningFromResolved = resolvedChronologicalBalances(resolved)
+			resolved, occurrenceID = tree, occurrences[0].ID
+			if settings.InlayHints.RunningBalances {
+				runningBalances = resolvedChronologicalBalances(resolved, occurrenceID)
+			}
 		}
 	}
 	mapper := lsputil.NewPositionMapper(content)
@@ -54,11 +61,14 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 	for _, effect := range effects {
 		transaction := &journal.Transactions[effect.TransactionIndex]
 		posting := &transaction.Postings[effect.PostingIndex]
+		// Commodity formats below are rebuilt per posting, so a posting the client
+		// did not ask about must not reach them.
+		if !postingTouchesRange(mapper, posting, params.Range) {
+			continue
+		}
 		formats := localCommodityFormatsAt(journal, posting.Range.Start.Offset)
-		if occurrenceID != 0 {
-			if resolved, ok := s.workspace.GetUniqueResolvedForFile(uriToPath(params.TextDocument.URI)); ok {
-				formats = resolved.FormatsAt(occurrenceID, posting.Range.Start.Offset)
-			}
+		if resolved != nil {
+			formats = resolved.FormatsAt(occurrenceID, posting.Range.Start.Offset)
 		}
 		if settings.InlayHints.InferredAmounts && len(effect.InferredAmounts) > 0 {
 			// Anchored past the end of the line rather than after the account
@@ -83,11 +93,7 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		}
 		if settings.InlayHints.RunningBalances && !transactionHasPostingDateOverride(transaction) {
 			account := posting.Account.GetResolvedName()
-			balances := runningBalances
-			if runningFromResolved != nil {
-				balances = runningFromResolved
-			}
-			if amounts := balances[postingKey{effect.TransactionIndex, effect.PostingIndex}][account]; len(amounts) > 0 {
+			if amounts := runningBalances[postingKey{effect.TransactionIndex, effect.PostingIndex}][account]; len(amounts) > 0 {
 				hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
 					Position:    mapper.ByteToLSP(posting.Range.End.Offset),
 					Label:       protocol.String("balance: " + formatAmounts(amounts, formats)),
@@ -100,7 +106,10 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 	return hints, nil
 }
 
-func resolvedChronologicalBalances(resolved *include.ResolvedJournal) map[postingKey]analyzer.AccountBalances {
+// resolvedChronologicalBalances replays the whole tree in date order and returns
+// the balances for the postings of one occurrence. Keys are indices within that
+// occurrence, so postings of any other occurrence must stay out of the result.
+func resolvedChronologicalBalances(resolved *include.ResolvedJournal, id include.OccurrenceID) map[postingKey]analyzer.AccountBalances {
 	type ref struct {
 		id          include.OccurrenceID
 		index       int
@@ -132,9 +141,12 @@ func resolvedChronologicalBalances(resolved *include.ResolvedJournal) map[postin
 		transactions[i] = refs[i].transaction
 	}
 	effects := analyzer.CalculatePostingEffects(&ast.Journal{Transactions: transactions})
-	balances := make(map[postingKey]analyzer.AccountBalances, len(effects))
+	balances := make(map[postingKey]analyzer.AccountBalances)
 	for _, effect := range effects {
-		balances[postingKey{refs[effect.TransactionIndex].index, effect.PostingIndex}] = effect.BalanceAfter
+		reference := refs[effect.TransactionIndex]
+		if reference.id == id {
+			balances[postingKey{reference.index, effect.PostingIndex}] = effect.BalanceAfter
+		}
 	}
 	return balances
 }
@@ -188,6 +200,15 @@ func appendHintInRange(hints []protocol.InlayHint, requestRange protocol.Range, 
 		return append(hints, hint)
 	}
 	return hints
+}
+
+// postingTouchesRange reports whether any line of posting lies in rng. Every hint
+// for a posting sits on one of its lines, so this only ever discards postings
+// that could not produce a visible hint.
+func postingTouchesRange(mapper *lsputil.PositionMapper, posting *ast.Posting, rng protocol.Range) bool {
+	first := mapper.ByteToLSP(posting.Range.Start.Offset).Line
+	last := mapper.ByteToLSP(posting.Range.End.Offset).Line
+	return last >= rng.Start.Line && first <= rng.End.Line
 }
 
 func positionInProtocolRange(position protocol.Position, rng protocol.Range) bool {

@@ -21,9 +21,9 @@ func CalculateAccountBalances(journal *ast.Journal) AccountBalances {
 // account still reflects the implicit posting.
 //
 // Balances are accumulated directly rather than taken from
-// calculatePostingEffectsFromTransactions: that walk snapshots the whole balance
-// map after every posting for inlay hints, so reusing it here copies every
-// account once per posting. Completion calls this once per keystroke.
+// calculatePostingEffectsFromTransactions: that walk allocates a snapshot per
+// posting for inlay hints, none of which is needed here. Completion calls this
+// once per keystroke.
 func CalculateAccountBalancesFromTransactions(transactions []ast.Transaction) AccountBalances {
 	balances := make(AccountBalances)
 	for transactionIndex := range transactions {
