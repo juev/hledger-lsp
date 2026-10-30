@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -4188,4 +4189,49 @@ func TestParser_StatusMarkerInDescriptionCRLF(t *testing.T) {
 	assert.Equal(t, ast.StatusCleared, tx.Status)
 	assert.Equal(t, "*STAR", tx.Description)
 	assert.Len(t, tx.Postings, 2)
+}
+
+func TestParseWithContext_CheckpointsShareContextUntilItChanges(t *testing.T) {
+	input := "commodity 1.000,00 EUR\n" +
+		"P 2024-01-01 AAPL 1 USD\n" +
+		"P 2024-01-02 AAPL 2 USD\n" +
+		"P 2024-01-03 AAPL 3 USD\n" +
+		"commodity 1,000.00 ₽\n" +
+		"P 2024-01-04 AAPL 4 USD\n"
+
+	result, errs := ParseWithContext(input, Context{}, nil)
+	require.Empty(t, errs)
+	require.Len(t, result.Checkpoints, 6)
+
+	marks := func(i int) uintptr {
+		return reflect.ValueOf(result.Checkpoints[i].Context.commodityDecimalMarks).Pointer()
+	}
+	assert.Equal(t, marks(0), marks(1))
+	assert.Equal(t, marks(1), marks(3))
+	assert.NotEqual(t, marks(3), marks(4), "a directive that changes the context needs its own snapshot")
+	assert.Equal(t, marks(4), marks(5))
+
+	assert.NotContains(t, result.Checkpoints[3].Context.commodityDecimalMarks, "₽")
+	assert.Contains(t, result.Checkpoints[4].Context.commodityDecimalMarks, "₽")
+	assert.Greater(t, result.Checkpoints[5].Offset, result.Checkpoints[4].Offset)
+}
+
+func TestContext_Equal(t *testing.T) {
+	parse := func(input string) Context {
+		t.Helper()
+		result, errs := ParseWithContext(input, Context{}, nil)
+		require.Empty(t, errs)
+		require.NotEmpty(t, result.Checkpoints)
+		return result.Checkpoints[len(result.Checkpoints)-1].Context
+	}
+
+	base := parse("commodity 1.000,00 EUR\n")
+	assert.True(t, base.Equal(parse("commodity 1.000,00 EUR\n")))
+	assert.True(t, Context{}.Equal(Context{}))
+	assert.False(t, base.Equal(parse("commodity 1,000.00 EUR\n")))
+	assert.False(t, base.Equal(parse("commodity 1.000,00 ₽\n")))
+	assert.False(t, Context{}.Equal(parse("Y 2024\n")))
+	assert.False(t, Context{}.Equal(parse("decimal-mark ,\n")))
+	assert.False(t, Context{}.Equal(parse("apply account счета\n")))
+	assert.False(t, Context{}.Equal(parse("alias старый = новый\n")))
 }
