@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 func TestParser_SimpleTransaction(t *testing.T) {
@@ -4099,4 +4100,60 @@ func TestParser_ParseAmount_NoDuplicateDiagnostic(t *testing.T) {
 	_, errs := Parse(input)
 	require.Len(t, errs, 1, "expected exactly one error for missing number after commodity, got: %v", errs)
 	assert.Contains(t, errs[0].Message, "expected number")
+}
+
+// The expected values were checked against hledger 1.52 `print -O json`.
+func TestParser_StatusMarkerInDescription(t *testing.T) {
+	tests := []struct {
+		name       string
+		header     string
+		wantStatus ast.Status
+		wantCode   string
+		wantDesc   string
+		wantPayee  string
+		wantNote   string
+	}{
+		{name: "double cleared", header: "2024-01-01 * *STAR", wantStatus: ast.StatusCleared, wantDesc: "*STAR"},
+		{name: "double pending", header: "2024-01-01 ! !STAR", wantStatus: ast.StatusPending, wantDesc: "!STAR"},
+		{name: "no space after status", header: "2024-01-01 *STAR", wantStatus: ast.StatusCleared, wantDesc: "STAR"},
+		{name: "plain status", header: "2024-01-01 * STAR", wantStatus: ast.StatusCleared, wantDesc: "STAR"},
+		{name: "marker inside description", header: "2024-01-01 * STAR *X", wantStatus: ast.StatusCleared, wantDesc: "STAR *X"},
+		{name: "cleared then pending marker", header: "2024-01-01 * !STAR", wantStatus: ast.StatusCleared, wantDesc: "!STAR"},
+		{name: "pending then cleared marker", header: "2024-01-01 ! *STAR", wantStatus: ast.StatusPending, wantDesc: "*STAR"},
+		{name: "second marker stands alone", header: "2024-01-01 * * STAR", wantStatus: ast.StatusCleared, wantDesc: "* STAR"},
+		{name: "description is only a marker", header: "2024-01-01 * *", wantStatus: ast.StatusCleared, wantDesc: "*"},
+		{name: "secondary date", header: "2024-01-01=2024-01-02 * *STAR", wantStatus: ast.StatusCleared, wantDesc: "*STAR"},
+		{name: "after code", header: "2024-01-01 (c) *STAR", wantCode: "c", wantDesc: "*STAR"},
+		{name: "payee and note", header: "2024-01-01 * *a | *b", wantStatus: ast.StatusCleared, wantDesc: "*a | *b", wantPayee: "*a", wantNote: "*b"},
+		{name: "note without status", header: "2024-01-01 a | !b", wantDesc: "a | !b", wantPayee: "a", wantNote: "!b"},
+		{name: "cyrillic", header: "2024-01-01 * *Кафе", wantStatus: ast.StatusCleared, wantDesc: "*Кафе"},
+		{name: "cjk", header: "2024-01-01 ! !喫茶店", wantStatus: ast.StatusPending, wantDesc: "!喫茶店"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.header + "\n    a  1 USD\n    b\n")
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+
+			tx := journal.Transactions[0]
+			assert.Equal(t, tt.wantStatus, tx.Status)
+			assert.Equal(t, tt.wantCode, tx.Code)
+			assert.Equal(t, tt.wantDesc, tx.Description)
+			assert.Equal(t, tt.wantPayee, tx.Payee)
+			assert.Equal(t, tt.wantNote, tx.Note)
+			assert.Len(t, tx.Postings, 2)
+		})
+	}
+}
+
+func TestParser_StatusMarkerInDescriptionCRLF(t *testing.T) {
+	journal, errs := Parse(textutil.NormalizeLineEndings("2024-01-01 * *STAR\r\n    a  1 USD\r\n    b\r\n"))
+	require.Empty(t, errs)
+	require.Len(t, journal.Transactions, 1)
+
+	tx := journal.Transactions[0]
+	assert.Equal(t, ast.StatusCleared, tx.Status)
+	assert.Equal(t, "*STAR", tx.Description)
+	assert.Len(t, tx.Postings, 2)
 }

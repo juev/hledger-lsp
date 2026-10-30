@@ -670,3 +670,21 @@ func TestCheckJournalBalance_DefaultCommodityAppliesToBareAssertions(t *testing.
 
 	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
 }
+
+func TestCheckJournalBalance_StatusMarkerDescriptionKeepsPostings(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "main.journal", content: `2024-01-01 * *STAR
+    a  -64 USD
+    b
+
+2024-01-02 check
+    a  0 USD = -64 USD
+    b  0 USD
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+
+	tx := resolved.Primary.Transactions[0]
+	assert.Equal(t, ast.StatusCleared, tx.Status)
+	assert.Equal(t, "*STAR", tx.Description)
+	assert.Len(t, tx.Postings, 2)
+}
