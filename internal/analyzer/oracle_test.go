@@ -220,6 +220,9 @@ commodity RUB
     equity
 `,
 	}
+	for _, tc := range assignmentOrderCases {
+		cases[tc.name] = tc.input
+	}
 
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
