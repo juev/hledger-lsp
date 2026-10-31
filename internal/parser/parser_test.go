@@ -1276,6 +1276,38 @@ func TestParser_TagsInPostingComment(t *testing.T) {
 	assert.Equal(t, "123", p.Tags[1].Value)
 }
 
+// The expected names were checked against hledger 1.52.4 `tags`.
+func TestParser_TagNamesMatchHledger(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		want    []string
+	}{
+		{name: "cyrillic", comment: "Путешествие-в-Россию:", want: []string{"Путешествие-в-Россию"}},
+		{name: "cjk", comment: "俄罗斯:", want: []string{"俄罗斯"}},
+		{name: "thai with combining marks", comment: "รัสเซีย:", want: []string{"รัสเซีย"}},
+		{name: "emoji", comment: "🇷🇺:", want: []string{"🇷🇺"}},
+		{name: "accent", comment: "Ü-1:3", want: []string{"Ü-1"}},
+		{name: "punctuation", comment: "a.b:1, c/d:2, a+b:3", want: []string{"a.b", "c/d", "a+b"}},
+		{name: "empty name", comment: ":1", want: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse("2024-01-15 test ; " + tt.comment + "\n    a  1 USD\n    b\n")
+			require.Empty(t, errs)
+			require.Len(t, journal.Transactions, 1)
+			require.Len(t, journal.Transactions[0].Comments, 1)
+
+			var names []string
+			for _, tag := range journal.Transactions[0].Comments[0].Tags {
+				names = append(names, tag.Name)
+			}
+			assert.Equal(t, tt.want, names)
+		})
+	}
+}
+
 func TestParser_TagPositionsAfterCyrillicText(t *testing.T) {
 	// Comment text after ";" is " Расходы, client:acme"
 	// Comma separates "Расходы" (not a tag) from "client:acme" (valid tag).

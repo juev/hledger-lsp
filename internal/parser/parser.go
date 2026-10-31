@@ -1691,7 +1691,7 @@ func parseTags(text string, basePos Position) []ast.Tag {
 		}
 
 		name := strings.TrimSpace(trimmed[:colonIdx])
-		if name == "" || !isValidTagName(name) {
+		if !IsValidTagName(name) {
 			continue
 		}
 
@@ -1741,17 +1741,10 @@ func ExtractTagValue(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-func isValidTagName(name string) bool {
-	for _, r := range name {
-		isLower := r >= 'a' && r <= 'z'
-		isUpper := r >= 'A' && r <= 'Z'
-		isDigit := r >= '0' && r <= '9'
-		isSpecial := r == '-' || r == '_'
-		if !isLower && !isUpper && !isDigit && !isSpecial {
-			return false
-		}
-	}
-	return true
+// IsValidTagName reports whether name can be a tag name. Per hledger, any
+// non-empty run of non-whitespace characters qualifies, in any script.
+func IsValidTagName(name string) bool {
+	return name != "" && !strings.ContainsFunc(name, unicode.IsSpace)
 }
 
 func (p *Parser) advance() {

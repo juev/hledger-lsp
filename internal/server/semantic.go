@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
@@ -641,7 +640,7 @@ func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Toke
 		}
 
 		name := strings.TrimSpace(trimmed[:colonIdx])
-		if name == "" || !isValidTagName(name) {
+		if !parser.IsValidTagName(name) {
 			continue
 		}
 
@@ -724,19 +723,6 @@ func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Toke
 	}
 
 	return tokens
-}
-
-func isValidTagName(name string) bool {
-	if len(name) == 0 {
-		return false
-	}
-	for _, r := range name {
-		// Allow letters (any script: Latin, Cyrillic, CJK, etc.), digits, underscores, and hyphens
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' {
-			return false
-		}
-	}
-	return true
 }
 
 func mapTokenType(t parser.TokenType) (uint32, bool) {

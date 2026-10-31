@@ -766,6 +766,42 @@ func TestSemanticTokens_CyrillicTagPositions(t *testing.T) {
 				{tokenType: TokenTypeTagValue, col: 6, length: 8},
 			},
 		},
+		{
+			name:    "cjk tag name",
+			content: "; 俄罗斯:v",
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 4},
+				{tokenType: TokenTypeTagValue, col: 6, length: 1},
+			},
+		},
+		{
+			name:    "thai tag name with combining marks",
+			content: "; รัสเซีย:v",
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 8},
+				{tokenType: TokenTypeTagValue, col: 10, length: 1},
+			},
+		},
+		{
+			name:    "emoji tag name uses UTF-16 units",
+			content: "; 🇷🇺:v",
+			wantPositions: []struct {
+				tokenType uint32
+				col       uint32
+				length    uint32
+			}{
+				{tokenType: TokenTypeTag, col: 2, length: 5},
+				{tokenType: TokenTypeTagValue, col: 7, length: 1},
+			},
+		},
 	}
 
 	for _, tt := range tests {
