@@ -14,6 +14,8 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/include"
+	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 func TestCompletion_Accounts(t *testing.T) {
@@ -425,6 +427,50 @@ func TestCompletion_TagNames(t *testing.T) {
 	assert.Contains(t, labels, "project")
 	assert.Contains(t, labels, "status")
 	assert.Contains(t, labels, "category")
+}
+
+func TestCompletion_TagNames_NonLatin(t *testing.T) {
+	tests := []struct {
+		name  string
+		tag   string
+		query string
+	}{
+		{name: "cyrillic", tag: "Путешествие-в-Россию", query: "П"},
+		{name: "cjk", tag: "俄罗斯", query: "俄"},
+		{name: "thai", tag: "รัสเซีย", query: "ร"},
+		{name: "emoji", tag: "🇷🇺", query: "🇷"},
+	}
+
+	for _, eol := range []struct{ name, value string }{{"LF", "\n"}, {"CRLF", "\r\n"}} {
+		for _, tt := range tests {
+			t.Run(eol.name+"/"+tt.name, func(t *testing.T) {
+				srv := NewServer()
+				lastLine := "2026-10-11 Bolshoi Theatre ; " + tt.query
+				content := strings.ReplaceAll("2026-10-10 Restaurant ; "+tt.tag+":\n"+
+					"    Assets:Money  -300 USD\n"+
+					"    Expenses:Restaurants\n"+
+					"\n"+
+					lastLine, "\n", eol.value)
+
+				srv.StoreDocument(uri.URI("file:///test.journal"), textutil.NormalizeLineEndings(content))
+
+				params := &protocol.CompletionParams{
+					TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+						TextDocument: protocol.TextDocumentIdentifier{
+							URI: "file:///test.journal",
+						},
+						Position: protocol.Position{Line: 4, Character: uint32(lsputil.UTF16Len(lastLine))},
+					},
+				}
+
+				result, err := srv.completion(context.Background(), params)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+
+				assert.Contains(t, extractLabels(result.Items), tt.tag)
+			})
+		}
+	}
 }
 
 func TestCompletion_TagNames_NoDuplicates(t *testing.T) {
