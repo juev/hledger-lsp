@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/juev/hledger-lsp/internal/fmtcmd"
 	"github.com/juev/hledger-lsp/internal/include"
 )
 
@@ -707,4 +708,10 @@ func TestSettings_LegacyUndeclaredAccountsFalseDisablesTheCheck(t *testing.T) {
 		"diagnostics": map[string]interface{}{"undeclaredAccounts": true},
 	})
 	assert.Equal(t, accountCheckLint, enabled.Diagnostics.AccountCheck)
+}
+
+func TestFormatterDefaultsMatchHledgerFmt(t *testing.T) {
+	if got, want := formatterOptionsFrom(defaultServerSettings().Formatting), fmtcmd.DefaultOptions(); got != want {
+		t.Errorf("server defaults %+v differ from hledger-fmt defaults %+v", got, want)
+	}
 }

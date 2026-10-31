@@ -66,6 +66,7 @@ sudo mv hledger-lsp /usr/local/bin/
 
 ```bash
 go install github.com/juev/hledger-lsp/cmd/hledger-lsp@latest
+go install github.com/juev/hledger-lsp/cmd/hledger-fmt@latest
 ```
 
 ### Verify Installation
@@ -92,6 +93,19 @@ hledger-lsp --version
 - [VS Code](docs/vscode.md)
 - [Neovim](docs/neovim.md)
 - [Emacs](docs/emacs.md)
+
+## 🧹 Formatting from the Command Line
+
+`hledger-fmt` is a standalone binary, published alongside `hledger-lsp`, that applies the same formatter without a running language server:
+
+```bash
+hledger-fmt journal.journal            # print the formatted journal
+hledger-fmt -w 2023.journal 2024.journal  # rewrite files in place
+hledger-fmt -c *.journal               # list unformatted files, exit 1 if any (for CI)
+cat journal.journal | hledger-fmt      # filter standard input
+```
+
+See [`docs/hledger-fmt.md`](docs/hledger-fmt.md) for all flags.
 
 ## ⚙️ Configuration
 

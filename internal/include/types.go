@@ -2,6 +2,7 @@ package include
 
 import (
 	"maps"
+	"slices"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
@@ -254,6 +255,52 @@ func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast
 		return parser.MergeContextExports(exports...)
 	})
 	return result.Journal, errs, true
+}
+
+// FormattingContext is what the formatter needs to rewrite a document: one
+// reading per distinct parse context the tree includes it under, for
+// formatter.FormatDocumentInReadings, which only rewrites a number when every
+// reading keeps its value.
+type FormattingContext struct {
+	Readings []formatter.Reading
+	// ParseErrors joins the errors of every reading, each reported once.
+	ParseErrors []parser.ParseError
+}
+
+// FormattingContext reads content as each occurrence of path, with the context
+// the occurrence inherited (see ParseOccurrence). Occurrences with equal
+// contexts read content alike and share a reading. The bool reports whether
+// path is part of this tree.
+func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingContext, bool) {
+	occurrences := r.OccurrencesForPath(path)
+	if len(occurrences) == 0 {
+		occurrences = r.OccurrencesForCanonical(path)
+	}
+	if len(occurrences) == 0 {
+		return FormattingContext{}, false
+	}
+
+	var ctx FormattingContext
+	var contexts []parser.Context
+	for _, occurrence := range occurrences {
+		if slices.ContainsFunc(contexts, occurrence.InitialContext.Equal) {
+			continue
+		}
+		journal, parseErrs, ok := r.ParseOccurrence(occurrence.ID, content)
+		if !ok {
+			continue
+		}
+		contexts = append(contexts, occurrence.InitialContext)
+		// A large offset collects all directives and merge-forward commodity
+		// declarations for the whole document.
+		ctx.Readings = append(ctx.Readings, formatter.Reading{Journal: journal, Formats: r.FormatsAt(occurrence.ID, 1<<30)})
+		for _, parseErr := range parseErrs {
+			if !slices.Contains(ctx.ParseErrors, parseErr) {
+				ctx.ParseErrors = append(ctx.ParseErrors, parseErr)
+			}
+		}
+	}
+	return ctx, true
 }
 
 // OccurrencesForPath returns all occurrences for an exact source path.
