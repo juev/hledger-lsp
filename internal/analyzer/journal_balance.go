@@ -83,31 +83,40 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 // still fails a dollar assertion.
 func (b accountBalances) otherCommodities(account, except string, inclusive bool, userTolerance decimal.Decimal) []string {
 	var result []string
-	seen := make(map[string]bool)
+	for commodity := range b.heldCommodities(account, inclusive) {
+		quantity := b.amount(account, commodity, inclusive)
+		if commodity == except || quantity.IsZero() {
+			continue
+		}
+
+		tolerance := toleranceForPrecision(decimalPrecision(quantity))
+		if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
+			tolerance = userTolerance
+		}
+		if quantity.Abs().LessThanOrEqual(tolerance) {
+			continue
+		}
+
+		result = append(result, fmt.Sprintf("%s %s", quantity.String(), displayCommodity(commodity)))
+	}
+	sort.Strings(result)
+	return result
+}
+
+// heldCommodities returns the commodities an account (and, for inclusive reads,
+// its subaccounts) has a balance entry in.
+func (b accountBalances) heldCommodities(account string, inclusive bool) map[string]bool {
+	held := make(map[string]bool)
 	prefix := account + ":"
 	for name, byCommodity := range b {
 		if name != account && (!inclusive || !strings.HasPrefix(name, prefix)) {
 			continue
 		}
-		for commodity, quantity := range byCommodity {
-			if commodity == except || quantity.IsZero() || seen[commodity] {
-				continue
-			}
-
-			tolerance := toleranceForPrecision(decimalPrecision(quantity))
-			if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
-				tolerance = userTolerance
-			}
-			if quantity.Abs().LessThanOrEqual(tolerance) {
-				continue
-			}
-
-			seen[commodity] = true
-			result = append(result, fmt.Sprintf("%s %s", quantity.String(), displayCommodity(commodity)))
+		for commodity := range byCommodity {
+			held[commodity] = true
 		}
 	}
-	sort.Strings(result)
-	return result
+	return held
 }
 
 // journalEvaluator carries the mutable state of one journal evaluation.
@@ -129,6 +138,9 @@ type postingEffective struct {
 	precision int32
 }
 
+// postingBalanceEvent is one step of the date-ordered replay: a single posting
+// whose contribution is already known, or, when assignment is set, a whole
+// transaction that needs the running balance to infer its amounts.
 type postingBalanceEvent struct {
 	date         ast.Date
 	tx           *ast.Transaction
@@ -136,14 +148,18 @@ type postingBalanceEvent struct {
 	sourceOrder  int
 	postingIndex int
 	contribution map[string]decimal.Decimal
+	assignment   bool
 }
 
 // CheckJournalBalance evaluates hledger's balance rules and balance assertions
 // over a resolved journal.
 //
-// Transaction balancing and amount inference happen first. Assertions are then
-// checked against postings in primary posting-date order, with parse order as
-// the tie breaker, as hledger does. A posting's date2: does not affect this pass.
+// It follows hledger's two steps. Transactions without balance assignments are
+// balanced up front and split into postings. Those postings and the remaining
+// transactions are then replayed in date order against one running balance, with
+// parse order as the tie breaker: a posting at its primary posting date, and a
+// transaction with an assignment as one unit at its transaction date, whatever
+// dates its other postings carry. A posting's date2: does not affect this pass.
 func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decimal.Decimal, options ...JournalCheckOptions) []SourcedDiagnostic {
 	if resolved == nil {
 		return nil
@@ -188,20 +204,38 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 
 	var diagnostics []SourcedDiagnostic
 	for _, index := range ordered {
-		diagnostics = append(diagnostics, evaluator.evaluate(&sourced[index].Transaction, sourced[index].Path, index)...)
+		tx, path := &sourced[index].Transaction, sourced[index].Path
+		if hasBalanceAssignment(tx) {
+			evaluator.deferAssignments(tx, path, index)
+			continue
+		}
+		diagnostics = append(diagnostics, evaluator.evaluate(tx, path, func(postingIndex int, contribution map[string]decimal.Decimal) {
+			evaluator.recordEvent(tx, path, index, postingIndex, contribution)
+		})...)
 	}
-	diagnostics = append(diagnostics, evaluator.checkAssertions()...)
-	return diagnostics
+	return append(diagnostics, evaluator.replay()...)
 }
 
-func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, sourceOrder int) []SourcedDiagnostic {
+// hasBalanceAssignment reports whether a posting's amount must be computed from
+// the running balance.
+func hasBalanceAssignment(tx *ast.Transaction) bool {
+	for i := range tx.Postings {
+		if tx.Postings[i].Amount == nil && tx.Postings[i].BalanceAssertion != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluate infers a transaction's amounts and checks that it balances, passing
+// each posting's contribution to emit. Written and assigned amounts are emitted
+// in posting order and elided ones last, because assigned amounts must see the
+// postings before them. Assignments read e.balances, so a transaction that has
+// them may only be evaluated from replay.
+func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(postingIndex int, contribution map[string]decimal.Decimal)) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
 	var diagnostics []SourcedDiagnostic
 
-	// The transaction pass infers assertion-only amounts from the running
-	// transaction-date balance. hledger rejects a custom date on the assignment
-	// itself; effects of other backdated postings on assignments are still outside
-	// this pass.
 	groups := postingGroups(tx.Postings)
 
 	// hledger infers at most one amount per balancing group, and parenthesised
@@ -219,13 +253,8 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, sourceOrde
 				precision: decimalPrecision(p.Amount.Quantity),
 			}
 		case p.BalanceAssertion != nil:
-			// hledger infers the amount that makes the assertion hold: the
-			// asserted balance minus what the account already holds.
-			commodity := p.BalanceAssertion.Amount.Commodity.Symbol
-			prior := e.balances.amount(p.Account.GetResolvedName(), commodity, p.BalanceAssertion.IsInclusive)
-			inferred := p.BalanceAssertion.Amount.Quantity.Sub(prior)
 			effective[i] = postingEffective{
-				native:    map[string]decimal.Decimal{commodity: inferred},
+				native:    e.assignedContribution(p),
 				precision: decimalPrecision(p.BalanceAssertion.Amount.Quantity),
 			}
 		default:
@@ -241,8 +270,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, sourceOrde
 			continue
 		}
 
-		e.apply(p.Account.GetResolvedName(), effective[i].native)
-		e.recordEvent(tx, path, sourceOrder, i, effective[i].native)
+		emit(i, effective[i].native)
 	}
 
 	// More than one amount-less posting in a group cannot be inferred, so the
@@ -272,15 +300,55 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, sourceOrde
 	}
 
 	for group, index := range elidedByGroup {
-		elided := tx.Postings[index]
-		contribution := e.elidedContribution(tx, effective, index, groups[group])
-		e.apply(elided.Account.GetResolvedName(), contribution)
-		e.recordEvent(tx, path, sourceOrder, index, contribution)
+		emit(index, e.elidedContribution(tx, effective, index, groups[group]))
 	}
 
 	diagnostics = append(diagnostics, e.balanceDiagnostics(tx, path, effective, elidedByGroup, groups)...)
 
 	return diagnostics
+}
+
+// assignedContribution returns the amount hledger infers for an assertion-only
+// posting: what moves the account to the asserted balance. A strict assignment
+// also replaces the account's other commodities, leaving nothing in them, and an
+// inclusive one offsets what subaccounts hold in them, so the amount can span
+// several commodities.
+func (e *journalEvaluator) assignedContribution(p *ast.Posting) map[string]decimal.Decimal {
+	assertion := p.BalanceAssertion
+	account := p.Account.GetResolvedName()
+	commodity := assertion.Amount.Commodity.Symbol
+
+	prior := e.balances.amount(account, commodity, assertion.IsInclusive)
+	contribution := map[string]decimal.Decimal{commodity: assertion.Amount.Quantity.Sub(prior)}
+
+	for other := range e.balances.heldCommodities(account, assertion.IsInclusive) {
+		if other == commodity {
+			continue
+		}
+		own := e.balances.amount(account, other, false)
+		subaccounts := e.balances.amount(account, other, assertion.IsInclusive).Sub(own)
+
+		target := own.Sub(subaccounts)
+		if assertion.IsStrict {
+			target = subaccounts.Neg()
+		}
+		if change := target.Sub(own); !change.IsZero() {
+			contribution[other] = change
+		}
+	}
+	return contribution
+}
+
+// deferAssignments schedules a transaction with balance assignments for replay
+// at its transaction date.
+func (e *journalEvaluator) deferAssignments(tx *ast.Transaction, path string, sourceOrder int) {
+	e.events = append(e.events, postingBalanceEvent{
+		date:        tx.Date,
+		tx:          tx,
+		path:        path,
+		sourceOrder: sourceOrder,
+		assignment:  true,
+	})
 }
 
 func (e *journalEvaluator) recordEvent(tx *ast.Transaction, path string, sourceOrder, postingIndex int, contribution map[string]decimal.Decimal) {
@@ -297,7 +365,10 @@ func (e *journalEvaluator) recordEvent(tx *ast.Transaction, path string, sourceO
 	})
 }
 
-func (e *journalEvaluator) checkAssertions() []SourcedDiagnostic {
+// replay walks the events in date order with one running balance, evaluating
+// transactions with assignments on the way and checking every assertion against
+// the balance as it stands after its posting.
+func (e *journalEvaluator) replay() []SourcedDiagnostic {
 	sort.SliceStable(e.events, func(i, j int) bool {
 		a, b := e.events[i], e.events[j]
 		if byDate := compareDates(a.date, b.date); byDate != 0 {
@@ -309,16 +380,22 @@ func (e *journalEvaluator) checkAssertions() []SourcedDiagnostic {
 		return a.postingIndex < b.postingIndex
 	})
 
-	e.balances = accountBalances{}
-	var diagnostics []SourcedDiagnostic
+	var balanceDiagnostics, assertionDiagnostics []SourcedDiagnostic
 	for _, event := range e.events {
-		posting := &event.tx.Postings[event.postingIndex]
-		e.apply(posting.Account.GetResolvedName(), event.contribution)
-		if posting.BalanceAssertion != nil {
-			diagnostics = append(diagnostics, e.assertionDiagnostics(event.tx, event.postingIndex, event.path)...)
+		step := func(postingIndex int, contribution map[string]decimal.Decimal) {
+			posting := &event.tx.Postings[postingIndex]
+			e.apply(posting.Account.GetResolvedName(), contribution)
+			if posting.BalanceAssertion != nil {
+				assertionDiagnostics = append(assertionDiagnostics, e.assertionDiagnostics(event.tx, postingIndex, event.path)...)
+			}
 		}
+		if event.assignment {
+			balanceDiagnostics = append(balanceDiagnostics, e.evaluate(event.tx, event.path, step)...)
+			continue
+		}
+		step(event.postingIndex, event.contribution)
 	}
-	return diagnostics
+	return append(balanceDiagnostics, assertionDiagnostics...)
 }
 
 // primaryPostingDate returns a posting's date: or bracketed-date override. A
@@ -408,13 +485,9 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			if hasElided && idx == elidedIdx {
 				continue
 			}
-			p := tx.Postings[idx]
-			if p.Amount == nil {
-				// Assertion-only postings are balanced by construction; their
-				// inferred amount is what keeps the group in balance.
-				p.Amount = synthesizedAmount(effective[idx])
-			}
-			postings = append(postings, p)
+			// Assertion-only postings are balanced by construction; their
+			// inferred amount is what keeps the group in balance.
+			postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx])
 		}
 
 		if hasElided {
@@ -467,11 +540,7 @@ func (e *journalEvaluator) elidedContribution(tx *ast.Transaction, effective []p
 		if idx == elidedIdx {
 			continue
 		}
-		p := tx.Postings[idx]
-		if p.Amount == nil {
-			p.Amount = synthesizedAmount(effective[idx])
-		}
-		postings = append(postings, p)
+		postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx])
 	}
 	for commodity, sum := range sumByCommodity(postings) {
 		contribution[commodity] = sum.Neg()
@@ -590,24 +659,24 @@ func groupContains(group []int, idx int) bool {
 	return false
 }
 
-// synthesizedAmount turns an inferred mixed contribution into an amount for the
-// transaction-level balance check.
-func synthesizedAmount(effective postingEffective) *ast.Amount {
+// appendEffectivePosting appends a posting for the transaction-level balance
+// check. An inferred amount can be mixed, so it becomes one posting per commodity.
+func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effective postingEffective) []ast.Posting {
+	if posting.Amount != nil {
+		return append(postings, posting)
+	}
+
 	commodities := make([]string, 0, len(effective.native))
 	for commodity := range effective.native {
 		commodities = append(commodities, commodity)
 	}
 	sort.Strings(commodities)
 
-	commodity := ""
-	if len(commodities) > 0 {
-		commodity = commodities[0]
+	for _, commodity := range commodities {
+		posting.Amount = &ast.Amount{Quantity: effective.native[commodity], Commodity: ast.Commodity{Symbol: commodity}}
+		postings = append(postings, posting)
 	}
-	quantity := decimal.Zero
-	for _, name := range commodities {
-		quantity = quantity.Add(effective.native[name])
-	}
-	return &ast.Amount{Quantity: quantity, Commodity: ast.Commodity{Symbol: commodity}}
+	return postings
 }
 
 func postingRange(p *ast.Posting) ast.Range {

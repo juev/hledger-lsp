@@ -688,3 +688,470 @@ func TestCheckJournalBalance_StatusMarkerDescriptionKeepsPostings(t *testing.T) 
 	assert.Equal(t, "*STAR", tx.Description)
 	assert.Len(t, tx.Postings, 2)
 }
+
+// assignmentOrderCases cover balance assignments crossed by custom posting dates.
+// wantMessages lists one fragment per expected diagnostic; none means hledger
+// accepts the journal. TestOracle_AssertionVerdictsMatchHledger replays them
+// against the hledger binary.
+var assignmentOrderCases = []struct {
+	name         string
+	input        string
+	wantMessages []string
+}{
+	{
+		name: "later dated posting crosses an assignment",
+		input: `2024-12-31 * charge
+    liabilities:card  -10 USD  ; date:2025-01-02
+    expenses:x
+
+2025-01-01 * opening
+    liabilities:card  =0 USD
+    equity:o
+
+2025-01-31 * check
+    liabilities:card  -10 USD = -20 USD
+    expenses:x
+`,
+	},
+	{
+		name: "earlier dated posting crosses an assignment",
+		input: `2025-01-01 opening
+    liabilities:card  =0 USD
+    equity:o
+
+2025-01-05 charge
+    liabilities:card  -10 USD  ; date:2024-12-30
+    expenses:x
+
+2025-01-31 check
+    liabilities:card  -5 USD = -5 USD
+    expenses:x
+`,
+	},
+	{
+		name: "bracketed date crosses an assignment",
+		input: `2024-12-31 charge
+    card  -10 USD  ; [2025-01-02]
+    expenses:x
+
+2025-01-01 opening
+    card  =0 USD
+    equity:o
+
+2025-01-31 check
+    card  0 USD = -10 USD
+    expenses:x  0 USD
+`,
+	},
+	{
+		name: "cyrillic and CJK accounts",
+		input: `2024-12-31 покупка
+    долг:カード  -10 USD  ; date:2025-01-02
+    расходы
+
+2025-01-01 открытие
+    долг:カード  =0 USD
+    капитал
+
+2025-01-31 проверка
+    долг:カード  -10 USD = -20 USD
+    расходы
+`,
+	},
+	{
+		name: "genuine failure after a crossing posting",
+		input: `2024-12-31 charge
+    card  -10 USD  ; date:2025-01-02
+    expenses:x
+
+2025-01-01 opening
+    card  =0 USD
+    equity:o
+
+2025-01-31 check
+    card  -10 USD = -25 USD
+    expenses:x
+`,
+		wantMessages: []string{"asserted -25 USD, calculated -20 USD (difference 5)"},
+	},
+	{
+		name: "date2 does not move a posting across an assignment",
+		input: `2024-12-31 charge
+    card  -10 USD  ; date2:2025-01-02
+    expenses:x
+
+2025-01-01 opening
+    card  =0 USD
+    equity:o
+
+2025-01-31 check
+    card  -10 USD = -10 USD
+    expenses:x
+`,
+	},
+	{
+		name: "same date ties use parse order",
+		input: `2025-01-05 assign
+    a  =1 USD
+    e
+
+2025-01-01 dated
+    a  10 USD  ; date:2025-01-05
+    e
+
+2025-01-31 check
+    a  0 USD = 11 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "transaction partly applied when an assignment runs",
+		input: `2025-01-01 split
+    a  10 USD
+    b  -10 USD  ; date:2025-01-10
+
+2025-01-05 assign a
+    a  =1 USD
+    c
+
+2025-01-06 assign b
+    b  =2 USD
+    c
+
+2025-01-31 check
+    a  0 USD = 1 USD
+    b  0 USD = -8 USD
+    c  0 USD
+`,
+	},
+	{
+		name: "elided posting of a plain transaction keeps its own date",
+		input: `2025-01-10 plain
+    b  5 USD
+    a  ; date:2025-01-20
+
+2025-01-15 assign
+    a  =0 USD
+    e
+
+2025-01-31 check
+    a  0 USD = -5 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "written posting of an assignment transaction ignores its date",
+		input: `2025-01-01 seed
+    a  100 USD
+    e
+
+2025-01-10 assign
+    b  =5 USD
+    a  1 USD  ; date:2025-01-20
+    e
+
+2025-01-15 check
+    a  0 USD = 101 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "elided posting of an assignment transaction ignores its date",
+		input: `2025-01-10 assign
+    b  =5 USD
+    a  ; date:2025-01-20
+
+2025-01-15 check
+    a  0 USD = -5 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "elided amount feeds a later assignment",
+		input: `2024-12-31 charge
+    a  -10 USD  ; date:2025-01-02
+    e
+
+2025-01-01 assign
+    a  =5 USD
+    b
+
+2025-01-02 assign elided account
+    b  =-3 USD
+    c
+
+2025-01-03 check
+    c  0 USD = -2 USD
+    a  0 USD = -5 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "assignments alone balance at the replayed balance",
+		input: `2025-01-01 seed
+    a  10 USD  ; date:2025-01-05
+    e
+
+2025-01-02 pair
+    a  =5 USD
+    b  =-5 USD
+
+2025-01-31 check
+    a  0 USD = 15 USD
+    b  0 USD
+`,
+	},
+	{
+		name: "assignments alone stay unbalanced at the replayed balance",
+		input: `2025-01-01 seed
+    a  10 USD  ; date:2025-01-05
+    e
+
+2025-01-02 pair
+    a  =5 USD
+    b  =5 USD
+`,
+		wantMessages: []string{"USD off by 10"},
+	},
+	{
+		name: "two assignments in different commodities",
+		input: `2025-01-01 seed
+    a  1 USD
+    a  1 EUR
+    e
+
+2025-01-02 assign
+    a  =5 USD
+    a  =6 EUR
+    e
+
+2025-01-03 check
+    e  0 USD = -5 USD
+    e  0 EUR = -6 EUR
+    a  0 USD
+`,
+	},
+	{
+		name: "assignments on an account and its subaccount",
+		input: `2024-12-31 charge
+    a:b  3 USD  ; date:2025-01-02
+    e
+
+2025-01-01 assign
+    a  =1 USD
+    a:b  =2 USD
+    e
+
+2025-01-31 check
+    a  0 USD = 1 USD
+    a:b  0 USD = 5 USD
+    a  0 USD =* 6 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "inclusive assignment reads subaccounts",
+		input: `2025-01-01 seed
+    a  1 USD
+    a:b  2 USD  ; date:2025-01-03
+    e
+
+2025-01-02 assign
+    a  =*10 USD
+    e
+
+2025-01-04 check
+    a  0 USD = 10 USD
+    a:b  0 USD = 2 USD
+    a  0 USD =* 12 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "strict assignment clears other commodities",
+		input: `2025-01-01 seed
+    a  3 EUR
+    a  7 USD
+    e
+
+2025-01-02 assign
+    a  ==5 USD
+    e
+
+2025-01-03 check
+    a  0 USD == 5 USD
+    e  0 USD = 15 USD
+`,
+		wantMessages: []string{"asserted 15 USD, calculated -5 USD (difference -20)"},
+	},
+	{
+		name: "strict assignment moves other commodities to its balancing posting",
+		input: `2025-01-01 seed
+    a  3 EUR
+    e
+
+2025-01-02 assign
+    a  ==5 USD
+    e
+
+2025-01-03 check
+    e  0 EUR = 0 EUR
+    a  0 USD
+`,
+	},
+	{
+		name: "strict assignment unbalances without a balancing posting",
+		input: `2025-01-01 seed
+    a  3 EUR
+    e
+
+2025-01-02 assign
+    a  ==0 USD
+`,
+		wantMessages: []string{"EUR off by -3"},
+	},
+	{
+		name: "inclusive strict assignment clears subaccount commodities",
+		input: `2025-01-01 seed
+    a  1 USD
+    a  4 EUR
+    a:b  2 USD
+    a:b  3 EUR
+    e
+
+2025-01-02 assign
+    a  ==*10 USD
+    e
+
+2025-01-03 check
+    a  0 USD =* 10 USD
+    a  0 EUR =* 0 EUR
+    a  0 EUR = -3 EUR
+    e  0 USD
+`,
+	},
+	{
+		name: "strict inclusive assertion nets subaccounts per commodity",
+		input: `2025-01-01 seed
+    a  -3 EUR
+    a:b  3 EUR
+    a  10 USD = 10 USD
+    e
+
+2025-01-02 check
+    a  0 USD ==* 10 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "inclusive assignment offsets subaccounts in other commodities",
+		input: `2025-01-01 seed
+    a  4 EUR
+    a:b  3 EUR
+    a:b  2 USD
+    e
+
+2025-01-02 assign
+    a  =*10 USD
+    e
+
+2025-01-03 check
+    a  0 EUR = 1 EUR
+    a  0 USD = 8 USD
+    e  0 USD
+`,
+	},
+	{
+		name: "one assignment per balancing group",
+		input: `2025-01-01 seed
+    a  2 USD
+    b  -2 USD
+
+2025-01-02 assign
+    a  =5 USD
+    b
+    [v]  =7 USD
+    [w]
+
+2025-01-03 check
+    b  0 USD = -5 USD
+    [w]  0 USD = -7 USD
+    a  0 USD
+`,
+	},
+}
+
+func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {
+	for _, tc := range assignmentOrderCases {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: tc.input})
+
+			diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+
+			require.Len(t, diagnostics, len(tc.wantMessages), "got %v", diagnostics)
+			for i, fragment := range tc.wantMessages {
+				assert.Contains(t, diagnostics[i].Message, fragment)
+			}
+		})
+	}
+}
+
+func TestCheckJournalBalance_FailureAfterCrossingReportsReplayedValues(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-12-31 charge
+    card  -10 USD  ; date:2025-01-02
+    expenses:x
+
+2025-01-01 opening
+    card  =0 USD
+    equity:o
+
+2025-01-31 check
+    card  -10 USD = -25 USD
+    expenses:x
+`})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Equal(t, 10, diagnostics[0].Range.Start.Line)
+	assert.Equal(t, "-25", diagnostics[0].Data["expected"])
+	assert.Equal(t, "-20", diagnostics[0].Data["actual"])
+}
+
+func TestCheckJournalBalance_AssignmentsReachAcrossIncludeFiles(t *testing.T) {
+	resolved := resolvedFromSources(t,
+		journalSource{path: "/main.journal", content: `2025-01-01 opening
+    card  =0 USD
+    equity:o
+`},
+		journalSource{path: "/2024.journal", content: `2024-12-31 charge
+    card  -10 USD  ; date:2025-01-02
+    expenses:x
+
+2025-01-31 check
+    card  0 USD = -11 USD
+    expenses:x  0 USD
+`})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.Zero)
+
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "/2024.journal", diagnostics[0].Path)
+	assert.Contains(t, diagnostics[0].Message, "calculated -10 USD")
+}
+
+// hledger refuses a date: on an assignment posting outright. The server has no
+// diagnostic for that yet, so the posting simply stays at the transaction date.
+func TestCheckJournalBalance_DatedAssignmentStaysAtTransactionDate(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2025-01-10 assign
+    a  =5 USD  ; date:2025-01-20
+    e
+
+2025-01-15 check
+    a  0 USD = 5 USD
+    e  0 USD
+`})
+
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
