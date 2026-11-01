@@ -167,6 +167,7 @@ func (s *loadState) loadOccurrence(path, canonical, content string, context pars
 
 	occurrence.Journal = parseResult.Journal
 	occurrence.Checkpoints = parseResult.Checkpoints
+	occurrence.Exports = parseResult.Exports
 	for _, local := range parseResult.Items {
 		item := Item{OccurrenceID: id, Index: local.Index}
 		switch local.Kind {

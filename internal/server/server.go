@@ -981,13 +981,29 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 		return nil, nil
 	}
 
-	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
+	journal := s.journalForFormatting(params.TextDocument.URI, doc)
 	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()
 	opts := formatterOptionsFrom(settings.Formatting)
 
 	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
+}
+
+// journalForFormatting parses content with the include context of the document's
+// first occurrence, the same occurrence commodityFormatsForDocument reads. The
+// formatter rewrites numbers from their parsed value in the style of those
+// formats, so the two must agree: read without the context, `15,000` is 15 and
+// comes back out as `15.000` when an include declares `.` as the decimal mark.
+func (s *Server) journalForFormatting(docURI uri.URI, content string) *ast.Journal {
+	if resolved := s.getWorkspaceResolved(docURI); resolved != nil {
+		occID := firstOccurrenceIDForPath(resolved, uriToPath(docURI))
+		if journal, ok := resolved.ParseOccurrence(occID, content); ok {
+			return journal
+		}
+	}
+	journal, _ := s.cachedJournal(docURI, content)
+	return journal
 }
 
 // commodityFormatsForDocument returns the commodity formats for the document
