@@ -1062,6 +1062,56 @@ var assignmentOrderCases = []struct {
 `,
 	},
 	{
+		name: "posting dated before its transaction reaches the assignment",
+		input: `2024-01-16 t
+    c  = -24 EUR
+    c  -20 EUR  ; date:2024-01-05
+    e
+
+2024-01-17 check
+    c  0 EUR = -24 EUR
+    e  0 EUR
+`,
+	},
+	{
+		name: "posting dated after its transaction misses the assignment",
+		input: `2024-01-16 t
+    c  -20 EUR  ; date:2024-01-25
+    c  = -24 EUR
+    e
+
+2024-01-31 check
+    c  0 EUR = -44 EUR
+    e  0 EUR
+`,
+	},
+	{
+		name: "postings of an assignment transaction run in date order",
+		input: `2024-01-16 t
+    c  -1 EUR  ; date:2024-01-25
+    c  -2 EUR  ; date:2024-01-20
+    c  = -24 EUR
+    c  -3 EUR  ; date:2024-01-05
+    e
+
+2024-01-31 check
+    c  0 EUR = -27 EUR
+    e  0 EUR
+`,
+	},
+	{
+		name: "dated subaccount posting reaches an inclusive assignment",
+		input: `2024-01-16 t
+    долг  =* -24 ₽
+    долг:カード  -20 ₽  ; date:2024-01-05
+    e
+
+2024-01-17 check
+    долг  0 ₽ = -4 ₽
+    e  0 ₽
+`,
+	},
+	{
 		name: "one assignment per balancing group",
 		input: `2025-01-01 seed
     a  2 USD

@@ -229,9 +229,11 @@ func hasBalanceAssignment(tx *ast.Transaction) bool {
 
 // evaluate infers a transaction's amounts and checks that it balances, passing
 // each posting's contribution to emit. Written and assigned amounts are emitted
-// in posting order and elided ones last, because assigned amounts must see the
-// postings before them. Assignments read e.balances, so a transaction that has
-// them may only be evaluated from replay.
+// in date order, parse order within a date, and elided ones last, because
+// assigned amounts must see the postings before them: a posting dated before its
+// transaction reaches an assignment written above it, and one dated after does
+// not reach an assignment written below it. Assignments read e.balances, so a
+// transaction that has them may only be evaluated from replay.
 func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(postingIndex int, contribution map[string]decimal.Decimal)) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
 	var diagnostics []SourcedDiagnostic
@@ -244,7 +246,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(
 	elidedByGroup := make(map[int]int) // group index -> posting index
 	inferredPerGroup := make(map[int]int)
 
-	for i := range tx.Postings {
+	for _, i := range postingsInDateOrder(tx) {
 		p := &tx.Postings[i]
 		switch {
 		case p.Amount != nil:
@@ -396,6 +398,30 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 		step(event.postingIndex, event.contribution)
 	}
 	return append(balanceDiagnostics, assertionDiagnostics...)
+}
+
+// postingsInDateOrder returns the indices of a transaction's postings ordered by
+// date, keeping parse order within a date.
+func postingsInDateOrder(tx *ast.Transaction) []int {
+	order := make([]int, len(tx.Postings))
+	dates := make([]ast.Date, len(tx.Postings))
+	for i := range tx.Postings {
+		order[i] = i
+		dates[i] = registerDate(tx, &tx.Postings[i])
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return compareDates(dates[order[i]], dates[order[j]]) < 0
+	})
+	return order
+}
+
+// registerDate returns the date a posting is listed at. hledger refuses date: on
+// an assignment posting, so that one has no date of its own to honour.
+func registerDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
+	if posting.Amount == nil && posting.BalanceAssertion != nil {
+		return tx.Date
+	}
+	return primaryPostingDate(tx, posting)
 }
 
 // primaryPostingDate returns a posting's date: or bracketed-date override. A
