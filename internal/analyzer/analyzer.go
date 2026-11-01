@@ -113,7 +113,9 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 		tx := &journal.Transactions[i]
 		balanceResult := CheckBalance(tx, a.balanceTolerance())
 
-		if !balanceResult.Balanced {
+		// A balance assignment takes its amount from the running balance, which
+		// one buffer cannot see. CheckJournalBalance has the verdict on those.
+		if !balanceResult.Balanced && !hasBalanceAssignment(tx) {
 			diag := a.createBalanceDiagnostic(tx, balanceResult)
 			result.Diagnostics = append(result.Diagnostics, diag)
 		}
@@ -195,7 +197,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		balanceResult := CheckBalance(&tx, a.balanceTolerance())
 
 		var txDiags []Diagnostic
-		if !balanceResult.Balanced {
+		if !balanceResult.Balanced && !hasBalanceAssignment(&tx) {
 			txDiags = append(txDiags, a.createBalanceDiagnostic(&tx, balanceResult))
 		}
 		if mode := a.accountCheckMode(); shouldCheckAccounts(mode, sortedDeclared) {
