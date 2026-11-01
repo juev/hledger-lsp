@@ -280,6 +280,15 @@ decimal-mark .    ; Period is decimal
 decimal-mark ,    ; Comma is decimal
 ```
 
+**Rules verified against hledger 1.52** (`internal/testutil/hledger.go` holds the case matrix; run it with `nix shell nixpkgs#hledger -c env HLEDGER_ORACLE=1 go test ./... -run Oracle`):
+
+- Only a number with one separator and no space group is ambiguous. `1.234,50`, `1,234,567` and `1 500,50` state their own reading, whatever is declared.
+- An ambiguous number takes the first declared mark from: the `decimal-mark` directive, the commodity's own style, the `D` directive's style. `D` is the fallback for every commodity, not only the one it names. With nothing declared, the lone separator is the decimal mark.
+- Under a declared mark, a lone separator of the other kind is a digit group: with `commodity 1000.00 X`, `15,000 X` is 15000.
+- Directives apply from their position onward, and commodity styles cross `include` in both directions.
+- `commodity` and `D` numbers are read by the same rules and must end up with a decimal mark: `commodity 1000 X` is an error, `commodity 1000. X` is not, and `commodity 1000,00 X` is an error when `.` is already in force. `commodity 1,000 X` declares a comma decimal mark.
+- `commodity X` with no format resets the style.
+
 ### Digit Group Marks
 
 The character NOT used as decimal mark can separate digit groups:

@@ -69,7 +69,7 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 			continue
 		}
 
-		formats := localCommodityFormatsAt(journal, posting.Range.Start.Offset)
+		formats := s.commodityFormatsAt(params.TextDocument.URI, journal, posting.Range.Start.Offset)
 		amountText := formatInferredAmount(transaction, effect.InferredAmounts, formats)
 		edit, ok := buildInferredAmountEdit(lines, posting, amountText, computeAlignment(), settings.Formatting)
 		if !ok {
@@ -121,6 +121,7 @@ func formatInferredAmount(
 		}
 		amount.Commodity.Position = sibling.Commodity.Position
 		amount.Commodity.Quoted = sibling.Commodity.Quoted
+		amount.DecimalMark = sibling.DecimalMark
 		if siblingPlaces := -sibling.Quantity.Exponent(); siblingPlaces > places {
 			places = siblingPlaces
 		}

@@ -21,7 +21,7 @@ func (s *Server) RangeFormat(ctx context.Context, params *protocol.DocumentRange
 		return nil, nil
 	}
 
-	journal := s.journalForFormatting(params.TextDocument.URI, doc)
+	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
 	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
 
 	settings := s.getSettings()

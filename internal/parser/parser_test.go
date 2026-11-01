@@ -3154,24 +3154,32 @@ func TestParser_SpaceBetweenSignAndNumber(t *testing.T) {
 	})
 }
 
-func Test_inferDecimalMark(t *testing.T) {
+func Test_numberDecimalMark(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
+		inForce  string
 		expected string
 	}{
-		{"european: dot group comma decimal", "1.000,00", ","},
-		{"us: comma group dot decimal", "1,000.00", "."},
-		{"comma only: ambiguous", "1000,50", ""},
-		{"dot only: ambiguous", "1000.50", ""},
-		{"no separators", "1000", ""},
-		{"multiple dots no comma: grouping only", "1.000.000", ""},
-		{"multiple commas no dot: grouping only", "1,000,000", ""},
+		{"european: dot group comma decimal", "1.000,00", "", ","},
+		{"us: comma group dot decimal", "1,000.00", "", "."},
+		{"both separators outrank the mark in force", "1.000,00", ".", ","},
+		{"lone comma is the decimal mark", "1000,50", "", ","},
+		{"lone dot is the decimal mark", "1000.50", "", "."},
+		{"trailing dot", "1000.", "", "."},
+		{"trailing comma", "1000,", "", ","},
+		{"lone separator matching the mark in force", "1000.50", ".", "."},
+		{"lone separator against the mark in force is a group", "1000,50", ".", ""},
+		{"space group makes a lone separator a decimal mark", "1 000,00", ".", ","},
+		{"no separators", "1000", "", ""},
+		{"space groups only", "1 000", "", ""},
+		{"multiple dots no comma: grouping only", "1.000.000", "", ""},
+		{"multiple commas no dot: grouping only", "1,000,000", "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := inferDecimalMark(tt.input)
+			result := numberDecimalMark(tt.input, tt.inForce)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -3251,33 +3259,89 @@ func TestParser_DDirectiveNoSeparators(t *testing.T) {
 	input := "D $1000\n\n2024-01-15 test\n    expenses  $1.500\n    assets"
 
 	journal, errs := Parse(input)
-	require.Empty(t, errs)
+	require.Len(t, errs, 1, "hledger rejects a D directive without a decimal mark")
+	assert.Equal(t, 1, errs[0].Pos.Line)
+	assert.Contains(t, errs[0].Message, "decimal mark")
 	require.NotEmpty(t, journal.Transactions)
 
 	p := journal.Transactions[0].Postings[0]
 	require.NotNil(t, p.Amount)
 	assert.Equal(t, "1.5", p.Amount.Quantity.String(),
-		"D $1000 has no separators, should not infer decimal mark, fallback to heuristic")
+		"no style was declared, so a lone dot is the decimal mark")
 }
 
-func Test_inferDecimalMarkFromFormat(t *testing.T) {
+func TestParser_CommodityFormatNeedsDecimalMark(t *testing.T) {
 	tests := []struct {
-		name     string
-		format   string
-		expected string
+		name  string
+		input string
+		line  int
 	}{
-		{"european format with commodity", "1.000,00 RUB", ","},
-		{"us format with commodity", "1,000.00 USD", "."},
-		{"currency symbol prefix", "$1,000.00", "."},
-		{"no separators", "1000 RUB", ""},
-		{"ambiguous single comma", "1000,00 EUR", ""},
-		{"ambiguous single dot", "1000.00 EUR", ""},
+		{"no separator", "commodity 1000 EUR\n", 1},
+		{"space groups only", "commodity 1 000 EUR\n", 1},
+		{"digit groups only", "commodity 1,000,000 EUR\n", 1},
+		{"symbol first", "commodity $1000\n", 1},
+		{"no symbol", "commodity 1000\n", 1},
+		{"format subdirective", "commodity EUR\n  format 1000 EUR\n", 1},
+		{"lone separator against an earlier style", "commodity 1000.00 EUR\ncommodity 1000,00 EUR\n", 2},
+		{"lone separator against decimal-mark", "decimal-mark ,\ncommodity 1000.00 EUR\n", 2},
+		{"lone separator against a D style", "D 1.000,00 RUB\ncommodity 1000.00 CNY\n", 2},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := inferDecimalMarkFromFormat(tt.format)
-			assert.Equal(t, tt.expected, result)
+			_, errs := Parse(tt.input)
+			require.Len(t, errs, 1)
+			assert.Equal(t, tt.line, errs[0].Pos.Line)
+			assert.Contains(t, errs[0].Message, "decimal mark")
+		})
+	}
+}
+
+func TestParser_DeclaredMarkOnlySettlesAmbiguousNumbers(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"lone comma is a group under dot", "commodity 1000.000 X\n2024-01-01 x\n    a  15,000 X\n    b\n", "15000"},
+		{"lone dot is a group under comma", "commodity 1000,00 X\n2024-01-01 x\n    a  1.500 X\n    b\n", "1500"},
+		{"both separators outrank the style", "commodity 1,000.00 X\n2024-01-01 x\n    a  1.234,50 X\n    b\n", "1234.5"},
+		{"repeated separator is a group", "commodity 1,000.00 X\n2024-01-01 x\n    a  1.234.567 X\n    b\n", "1234567"},
+		{"space group outranks the style", "commodity 1,000.00 X\n2024-01-01 x\n    a  1 500,50 X\n    b\n", "1500.5"},
+		{"D styles every undeclared commodity", "D 1000,00 Y\n2024-01-01 x\n    a  1.500 X\n    b\n", "1500"},
+		{"bare commodity resets the style", "commodity 1000.00 X\ncommodity X\n2024-01-01 x\n    a  15,000 X\n    b\n", "15"},
+		{"cyrillic commodity", "commodity 1000.00 РУБ\n2024-01-01 x\n    a  15,000 РУБ\n    b\n", "15000"},
+		{"cjk commodity", "commodity 1000.00 元\n2024-01-01 x\n    a  15,000 元\n    b\n", "15000"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			journal, errs := Parse(tt.input)
+			require.Empty(t, errs)
+			assert.Equal(t, tt.expected, journal.Transactions[0].Postings[0].Amount.Quantity.String())
+		})
+	}
+}
+
+func Test_numberInFormat(t *testing.T) {
+	tests := []struct {
+		name     string
+		format   string
+		symbol   string
+		expected string
+	}{
+		{"european format with commodity", "1.000,00 RUB", "RUB", "1.000,00"},
+		{"us format with commodity", "1,000.00 USD", "USD", "1,000.00"},
+		{"currency symbol prefix", "$1,000.00", "$", "1,000.00"},
+		{"symbol containing a digit", "1000.00 X2", "X2", "1000.00"},
+		{"space grouped", "1 000,00 EUR", "EUR", "1 000,00"},
+		{"trailing decimal mark", "1000. EUR", "EUR", "1000."},
+		{"no number", "EUR", "EUR", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, numberInFormat(tt.format, tt.symbol))
 		})
 	}
 }
@@ -3288,8 +3352,8 @@ func TestParser_PerCommodityDecimalMark_MixedFormats(t *testing.T) {
 D 1.000,00 RUB
 commodity 1.000,00 USD
 commodity 1.000,00 EUR
-commodity 1000.00 CNY
-commodity 1000.00 AAPL
+commodity 1,000.00 CNY
+commodity 1,000.00 AAPL
 
 2024-02-18 test
     cache account                           -10.000
@@ -3310,17 +3374,17 @@ commodity 1000.00 AAPL
 	assert.Equal(t, "-10000", p0.Amount.Quantity.String(),
 		"bare -10.000 should use D directive decimal mark: dot is group sep → 10000")
 
-	// 9,900.00 "AAPL" → AAPL has no unambiguous format → heuristic: comma before dot → dot is decimal → 9900
+	// 9,900.00 "AAPL" → both separators, so the number states its own decimal mark
 	p1 := tx.Postings[1]
 	require.NotNil(t, p1.Amount)
 	assert.Equal(t, "9900", p1.Amount.Quantity.String(),
-		"9,900.00 AAPL should use heuristic (no unambiguous commodity format): comma group, dot decimal → 9900")
+		"9,900.00 AAPL: comma group, dot decimal → 9900")
 
-	// 100.00 CNY → CNY has no unambiguous format → heuristic: single dot → 100
+	// 100.00 CNY → CNY declares a dot decimal mark
 	p2 := tx.Postings[2]
 	require.NotNil(t, p2.Amount)
 	assert.Equal(t, "100", p2.Amount.Quantity.String(),
-		"100.00 CNY should use heuristic: single dot → decimal → 100")
+		"100.00 CNY: dot decimal from the commodity directive → 100")
 }
 
 func TestParser_BareAmountUsesD_CommodityUsesOwn(t *testing.T) {
@@ -3403,8 +3467,8 @@ func TestParser_UnknownCommodityFallsToHeuristic(t *testing.T) {
 
 	p := journal.Transactions[0].Postings[0]
 	require.NotNil(t, p.Amount)
-	assert.Equal(t, "1.5", p.Amount.Quantity.String(),
-		"GBP has no format → heuristic: single dot → decimal → 1.5")
+	assert.Equal(t, "1500", p.Amount.Quantity.String(),
+		"GBP has no format, so the D style applies: comma decimal, dot group → 1500")
 }
 
 func TestParser_ForwardRefCommodityNotAvailable(t *testing.T) {
@@ -3933,7 +3997,7 @@ func TestParseWithContext_KeepsDefaultCommodityStyleSeparateFromDeclaredCommodit
 	postings := result.Journal.Transactions[0].Postings
 	assert.Equal(t, "1500", postings[0].Amount.Quantity.String())
 	assert.Equal(t, "1.5", postings[1].Amount.Quantity.String())
-	assert.Equal(t, "1.5", postings[2].Amount.Quantity.String())
+	assert.Equal(t, "1500", postings[2].Amount.Quantity.String(), "an undeclared commodity falls back to the D style")
 }
 
 func TestParseWithContext_AppliesPrefixAndNewestBasicAliasToAccounts(t *testing.T) {
@@ -3973,7 +4037,7 @@ func TestParseWithContext_IntegerCommodityFormatPreservesInheritedStyle(t *testi
 
 	result, errs := ParseWithContext("commodity 1000 EUR\n2024-01-01 inherited style\n    assets  1.000 EUR\n", initial, nil)
 
-	require.Empty(t, errs)
+	require.Len(t, errs, 1, "hledger rejects a commodity format without a decimal mark")
 	assert.Equal(t, "1000", result.Journal.Transactions[0].Postings[0].Amount.Quantity.String())
 }
 

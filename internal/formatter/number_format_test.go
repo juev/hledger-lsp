@@ -245,7 +245,7 @@ func TestFormatNumber(t *testing.T) {
 				DecimalPlaces: 0,
 				HasDecimal:    false,
 			},
-			expected: "1 001",
+			expected: "1 000.5",
 		},
 		{
 			name: "HasDecimal zero places preserves natural precision",
@@ -265,7 +265,27 @@ func TestFormatNumber(t *testing.T) {
 				ThousandsSep: ".",
 				HasDecimal:   true,
 			},
-			expected: "1.000",
+			expected: "1.000,",
+		},
+		{
+			name: "two digit groups need no decimal mark",
+			qty:  decimal.RequireFromString("1000000"),
+			format: NumberFormat{
+				DecimalMark:  ',',
+				ThousandsSep: ".",
+				HasDecimal:   true,
+			},
+			expected: "1.000.000",
+		},
+		{
+			name: "space group is not ambiguous",
+			qty:  decimal.RequireFromString("1000"),
+			format: NumberFormat{
+				DecimalMark:  ',',
+				ThousandsSep: " ",
+				HasDecimal:   true,
+			},
+			expected: "1 000",
 		},
 		{
 			name: "HasDecimal zero places with 3 decimals",

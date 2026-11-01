@@ -170,7 +170,7 @@ func (s *Server) formatPreviousPostingLine(doc string, uri uri.URI, line int) *p
 		return nil
 	}
 
-	journal := s.journalForFormatting(uri, doc)
+	journal, _ := s.cachedJournal(uri, doc)
 	commodityFormats := s.commodityFormatsForDocument(uri)
 
 	settings := s.getSettings()

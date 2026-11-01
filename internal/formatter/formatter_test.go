@@ -1451,7 +1451,7 @@ func TestFormatDocument_WithInlineCommodityFormat(t *testing.T) {
 	input := `commodity 1 000,00 RUB
 
 2024-01-15 test
-    expenses:food  846661.89 RUB
+    expenses:food  846661,89 RUB
     assets:cash`
 
 	journal, errs := parser.Parse(input)
@@ -1911,8 +1911,8 @@ commodity USD
 	edits := FormatDocument(journal, input)
 	result := applyEdits(input, edits)
 
-	assert.Contains(t, result, "50.00 USD",
-		"commodity-specific format applies for USD")
+	assert.Contains(t, result, "50,00 USD",
+		"USD keeps its two decimal places, but decimal-mark decides the mark: hledger reads 50.00 as 5000 here")
 	assert.Contains(t, result, "1234,50 EUR",
 		"decimal-mark fallback preserves raw quantity for EUR")
 }

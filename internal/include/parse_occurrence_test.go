@@ -26,14 +26,15 @@ func TestParseOccurrence_AppliesInheritedAndIncludedContext(t *testing.T) {
 	occurrences := resolved.OccurrencesForPath(child)
 	require.Len(t, occurrences, 1)
 
-	journal, ok := resolved.ParseOccurrence(occurrences[0].ID, "include eur.journal\n2024-01-01 x\n    a  1,500 USD\n    b  1.500 EUR\n    c\n")
+	journal, parseErrs, ok := resolved.ParseOccurrence(occurrences[0].ID, "include eur.journal\n2024-01-01 x\n    a  1,500 USD\n    b  1.500 EUR\n    c\n")
 	require.True(t, ok)
+	require.Empty(t, parseErrs)
 	postings := journal.Transactions[0].Postings
 	assert.Equal(t, "1500", postings[0].Amount.Quantity.String(), "inherited from the parent")
 	assert.Equal(t, "1500", postings[1].Amount.Quantity.String(), "exported by the file's own include")
 }
 
 func TestParseOccurrence_UnknownOccurrence(t *testing.T) {
-	_, ok := NewResolvedJournal(nil).ParseOccurrence(99, "")
+	_, _, ok := NewResolvedJournal(nil).ParseOccurrence(99, "")
 	assert.False(t, ok)
 }

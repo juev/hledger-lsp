@@ -347,22 +347,10 @@ func configuredCommodityFormat(symbol string, configured map[string]formatter.Co
 	return format, ok
 }
 
-// decimalPlaces returns the number of decimal places in an amount,
-// preferring RawQuantity string parsing over Decimal.Exponent().
+// decimalPlaces returns the number of decimal places in an amount. The parsed
+// quantity keeps its written digits, and unlike the raw text it knows which
+// separator was the decimal mark: `15,000` can have none.
 func decimalPlaces(amt *ast.Amount) int {
-	if amt.RawQuantity != "" {
-		if idx := strings.LastIndexByte(amt.RawQuantity, '.'); idx >= 0 {
-			return len(amt.RawQuantity) - idx - 1
-		}
-		if idx := strings.LastIndexByte(amt.RawQuantity, ','); idx >= 0 {
-			// comma as decimal mark (e.g., "25,70")
-			after := amt.RawQuantity[idx+1:]
-			if len(after) <= 3 {
-				return len(after)
-			}
-		}
-		return 0
-	}
 	exp := amt.Quantity.Exponent()
 	if exp < 0 {
 		return int(-exp)

@@ -232,12 +232,12 @@ func (r *ResolvedJournal) Occurrence(id OccurrenceID) *JournalOccurrence {
 // the tree was resolved has no occurrence yet and contributes nothing.
 //
 // The bool reports whether the occurrence exists.
-func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast.Journal, bool) {
+func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast.Journal, []parser.ParseError, bool) {
 	occurrence := r.Occurrence(id)
 	if occurrence == nil {
-		return nil, false
+		return nil, nil, false
 	}
-	result, _ := parser.ParseWithContext(content, occurrence.InitialContext, func(site parser.IncludeSite) parser.ContextExports {
+	result, errs := parser.ParseWithContext(content, occurrence.InitialContext, func(site parser.IncludeSite) parser.ContextExports {
 		var exports []parser.ContextExports
 		for index := range r.Occurrences {
 			child := &r.Occurrences[index]
@@ -247,7 +247,7 @@ func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast
 		}
 		return parser.MergeContextExports(exports...)
 	})
-	return result.Journal, true
+	return result.Journal, errs, true
 }
 
 // OccurrencesForPath returns all occurrences for an exact source path.

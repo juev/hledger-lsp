@@ -126,6 +126,10 @@ type Amount struct {
 	Commodity           Commodity
 	SignBeforeCommodity bool
 	Range               Range
+	// DecimalMark is the mark in force where the amount is written, "." or ",",
+	// or "" when nothing is declared. A number rewritten at this position has to
+	// use it, whatever style the commodity declares elsewhere.
+	DecimalMark string
 }
 
 type Commodity struct {
