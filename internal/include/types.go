@@ -256,7 +256,9 @@ func (r *ResolvedJournal) occurrencesForIDs(ids []OccurrenceID) []JournalOccurre
 type SourcedTransaction struct {
 	Path         string
 	OccurrenceID OccurrenceID
-	Transaction  ast.Transaction
+	// Index is the transaction's position in its source journal.
+	Index       int
+	Transaction ast.Transaction
 }
 
 // TransactionsWithSource returns every transaction of the resolved journal in
@@ -279,6 +281,7 @@ func (r *ResolvedJournal) TransactionsWithSource() []SourcedTransaction {
 			result = append(result, SourcedTransaction{
 				Path:         occurrence.Path,
 				OccurrenceID: occurrence.ID,
+				Index:        item.Index,
 				Transaction:  occurrence.Journal.Transactions[item.Index],
 			})
 		}
@@ -288,7 +291,7 @@ func (r *ResolvedJournal) TransactionsWithSource() []SourcedTransaction {
 	var result []SourcedTransaction
 	if r.Primary != nil {
 		for i := range r.Primary.Transactions {
-			result = append(result, SourcedTransaction{Transaction: r.Primary.Transactions[i]})
+			result = append(result, SourcedTransaction{Index: i, Transaction: r.Primary.Transactions[i]})
 		}
 	}
 	for _, path := range r.FileOrder {
@@ -297,7 +300,7 @@ func (r *ResolvedJournal) TransactionsWithSource() []SourcedTransaction {
 			continue
 		}
 		for i := range journal.Transactions {
-			result = append(result, SourcedTransaction{Path: path, Transaction: journal.Transactions[i]})
+			result = append(result, SourcedTransaction{Path: path, Index: i, Transaction: journal.Transactions[i]})
 		}
 	}
 	return result

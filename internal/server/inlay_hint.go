@@ -33,12 +33,6 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
 	effects := s.cachedPostingEffects(params.TextDocument.URI, content)
-	// Replaying the balances walks the whole include tree, so it runs only when
-	// the result will be read.
-	var runningBalances map[postingKey]analyzer.AccountBalances
-	if settings.InlayHints.RunningBalances {
-		runningBalances = chronologicalBalances(journal)
-	}
 	var resolved *include.ResolvedJournal
 	var occurrenceID include.OccurrenceID
 	if s.workspace != nil {
@@ -47,13 +41,19 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		if unique && tree != nil {
 			occurrences = tree.OccurrencesForCanonical(uriToPath(params.TextDocument.URI))
 		}
-		if len(occurrences) != 1 {
-			runningBalances = nil
-		} else {
+		if len(occurrences) == 1 {
 			resolved, occurrenceID = tree, occurrences[0].ID
-			if settings.InlayHints.RunningBalances {
-				runningBalances = resolvedChronologicalBalances(resolved, occurrenceID)
-			}
+		}
+	}
+	// Replaying the balances walks the whole include tree, so it runs only when
+	// the result will be read.
+	var runningBalances map[analyzer.PostingRef]map[string]decimal.Decimal
+	if settings.InlayHints.RunningBalances {
+		switch {
+		case resolved != nil:
+			runningBalances = analyzer.RunningBalances(resolved.TransactionsWithSource(), occurrenceID)
+		case s.workspace == nil:
+			runningBalances = analyzer.RunningBalances(journalTransactions(journal), 0)
 		}
 	}
 	mapper := lsputil.NewPositionMapper(content)
@@ -91,108 +91,25 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 				PaddingLeft: boolPtr(true),
 			})
 		}
-		if settings.InlayHints.RunningBalances && !transactionHasPostingDateOverride(transaction) {
-			account := posting.Account.GetResolvedName()
-			if amounts := runningBalances[postingKey{effect.TransactionIndex, effect.PostingIndex}][account]; len(amounts) > 0 {
-				hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-					Position:    mapper.ByteToLSP(posting.Range.End.Offset),
-					Label:       protocol.String("balance: " + formatAmounts(amounts, formats)),
-					Kind:        protocol.InlayHintKindType,
-					PaddingLeft: boolPtr(true),
-				})
-			}
+		if amounts := runningBalances[analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}]; len(amounts) > 0 {
+			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
+				Position:    mapper.ByteToLSP(posting.Range.End.Offset),
+				Label:       protocol.String("balance: " + formatAmounts(amounts, formats)),
+				Kind:        protocol.InlayHintKindType,
+				PaddingLeft: boolPtr(true),
+			})
 		}
 	}
 	return hints, nil
 }
 
-// resolvedChronologicalBalances replays the whole tree in date order and returns
-// the balances for the postings of one occurrence. Keys are indices within that
-// occurrence, so postings of any other occurrence must stay out of the result.
-func resolvedChronologicalBalances(resolved *include.ResolvedJournal, id include.OccurrenceID) map[postingKey]analyzer.AccountBalances {
-	type ref struct {
-		id          include.OccurrenceID
-		index       int
-		transaction ast.Transaction
+// journalTransactions presents a lone journal the way a resolved one would.
+func journalTransactions(journal *ast.Journal) []include.SourcedTransaction {
+	sourced := make([]include.SourcedTransaction, len(journal.Transactions))
+	for i := range journal.Transactions {
+		sourced[i] = include.SourcedTransaction{Index: i, Transaction: journal.Transactions[i]}
 	}
-	refs := make([]ref, 0)
-	for _, item := range resolved.Items {
-		if item.Kind != include.ResolvedItemTransaction {
-			continue
-		}
-		occurrence := resolved.Occurrence(item.OccurrenceID)
-		if occurrence == nil || occurrence.Journal == nil || item.Index < 0 || item.Index >= len(occurrence.Journal.Transactions) {
-			continue
-		}
-		refs = append(refs, ref{item.OccurrenceID, item.Index, occurrence.Journal.Transactions[item.Index]})
-	}
-	sort.SliceStable(refs, func(i, j int) bool {
-		left, right := refs[i].transaction.Date, refs[j].transaction.Date
-		if left.Year != right.Year {
-			return left.Year < right.Year
-		}
-		if left.Month != right.Month {
-			return left.Month < right.Month
-		}
-		return left.Day < right.Day
-	})
-	transactions := make([]ast.Transaction, len(refs))
-	for i := range refs {
-		transactions[i] = refs[i].transaction
-	}
-	effects := analyzer.CalculatePostingEffects(&ast.Journal{Transactions: transactions})
-	balances := make(map[postingKey]analyzer.AccountBalances)
-	for _, effect := range effects {
-		reference := refs[effect.TransactionIndex]
-		if reference.id == id {
-			balances[postingKey{reference.index, effect.PostingIndex}] = effect.BalanceAfter
-		}
-	}
-	return balances
-}
-
-func transactionHasPostingDateOverride(transaction *ast.Transaction) bool {
-	for i := range transaction.Postings {
-		for _, tag := range transaction.Postings[i].Tags {
-			if tag.Name == "date" || tag.Name == "date2" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-type postingKey struct {
-	transactionIndex int
-	postingIndex     int
-}
-
-func chronologicalBalances(journal *ast.Journal) map[postingKey]analyzer.AccountBalances {
-	indices := make([]int, len(journal.Transactions))
-	for i := range indices {
-		indices[i] = i
-	}
-	sort.SliceStable(indices, func(i, j int) bool {
-		left := journal.Transactions[indices[i]].Date
-		right := journal.Transactions[indices[j]].Date
-		if left.Year != right.Year {
-			return left.Year < right.Year
-		}
-		if left.Month != right.Month {
-			return left.Month < right.Month
-		}
-		return left.Day < right.Day
-	})
-	transactions := make([]ast.Transaction, len(indices))
-	for i, index := range indices {
-		transactions[i] = journal.Transactions[index]
-	}
-	effects := analyzer.CalculatePostingEffects(&ast.Journal{Transactions: transactions})
-	balances := make(map[postingKey]analyzer.AccountBalances, len(effects))
-	for _, effect := range effects {
-		balances[postingKey{indices[effect.TransactionIndex], effect.PostingIndex}] = effect.BalanceAfter
-	}
-	return balances
+	return sourced
 }
 
 func appendHintInRange(hints []protocol.InlayHint, requestRange protocol.Range, hint protocol.InlayHint) []protocol.InlayHint {

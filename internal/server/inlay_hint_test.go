@@ -73,13 +73,16 @@ func TestInlayHint_CostAndChronologicalRunningBalance(t *testing.T) {
 	assert.Contains(t, labels, protocol.String("balance: -15 $"))
 }
 
-func TestInlayHint_PostingDateOverrideSuppressesOnlyRunningBalance(t *testing.T) {
+func TestInlayHint_RunningBalanceOfDatedPostingUsesItsOwnDate(t *testing.T) {
 	srv := NewServer()
 	settings := srv.getSettings()
 	settings.InlayHints.RunningBalances = true
 	srv.setSettings(settings)
 	docURI := uri.URI("file:///test.journal")
-	content := "2024-01-01 test\n    expenses:food  $10  ; date:2024-01-02\n    assets:cash\n"
+	settings.InlayHints.InferredAmounts = false
+	srv.setSettings(settings)
+	content := "2024-01-01 test\n    assets:card  -10 USD  ; date:2024-01-05\n    expenses:food\n\n" +
+		"2024-01-02 other\n    assets:card  -1 USD\n    expenses:food\n"
 	srv.StoreDocument(docURI, content)
 
 	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
@@ -87,10 +90,12 @@ func TestInlayHint_PostingDateOverrideSuppressesOnlyRunningBalance(t *testing.T)
 		Range:        protocol.Range{End: protocol.Position{Line: 10}},
 	})
 	require.NoError(t, err)
+	labels := make(map[uint32]protocol.InlayHintLabel)
 	for _, hint := range hints {
-		assert.NotContains(t, hint.Label, "balance:")
+		labels[hint.Position.Line] = hint.Label
 	}
-	assert.Len(t, hints, 1)
+	assert.Equal(t, protocol.String("balance: -11 USD"), labels[1])
+	assert.Equal(t, protocol.String("balance: -1 USD"), labels[5])
 }
 
 func TestInlayHint_FeatureAndRangeGates(t *testing.T) {
