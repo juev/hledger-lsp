@@ -128,6 +128,9 @@ type journalEvaluator struct {
 	// partialContext qualifies assertion verdicts that were computed from one
 	// file's transactions only.
 	partialContext bool
+	// observe, when set, receives each posting's contribution as the replay
+	// applies it.
+	observe func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal)
 }
 
 // postingEffective is the amount a posting contributes to the journal once
@@ -186,6 +189,17 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 		}
 	}
 
+	evaluator := &journalEvaluator{
+		balances:        accountBalances{},
+		tolerance:       userTolerance,
+		trackAssertions: trackAssertions,
+		partialContext:  opts.PartialContext,
+	}
+	return evaluator.run(sourced)
+}
+
+// run balances the transactions up front and replays them in date order.
+func (e *journalEvaluator) run(sourced []include.SourcedTransaction) []SourcedDiagnostic {
 	ordered := make([]int, len(sourced))
 	for i := range sourced {
 		ordered[i] = i
@@ -194,26 +208,18 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 		return compareDates(sourced[ordered[i]].Transaction.Date, sourced[ordered[j]].Transaction.Date) < 0
 	})
 
-	evaluator := &journalEvaluator{
-		balances:        accountBalances{},
-		tolerance:       userTolerance,
-		trackAssertions: trackAssertions,
-	}
-
-	evaluator.partialContext = opts.PartialContext
-
 	var diagnostics []SourcedDiagnostic
 	for _, index := range ordered {
 		tx, path := &sourced[index].Transaction, sourced[index].Path
 		if hasBalanceAssignment(tx) {
-			evaluator.deferAssignments(tx, path, index)
+			e.deferAssignments(tx, path, index)
 			continue
 		}
-		diagnostics = append(diagnostics, evaluator.evaluate(tx, path, func(postingIndex int, contribution map[string]decimal.Decimal) {
-			evaluator.recordEvent(tx, path, index, postingIndex, contribution)
+		diagnostics = append(diagnostics, e.evaluate(tx, path, func(postingIndex int, contribution map[string]decimal.Decimal) {
+			e.recordEvent(tx, path, index, postingIndex, contribution)
 		})...)
 	}
-	return append(diagnostics, evaluator.replay()...)
+	return append(diagnostics, e.replay()...)
 }
 
 // hasBalanceAssignment reports whether a posting's amount must be computed from
@@ -387,6 +393,9 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 		step := func(postingIndex int, contribution map[string]decimal.Decimal) {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
+			if e.observe != nil {
+				e.observe(event.sourceOrder, postingIndex, contribution)
+			}
 			if posting.BalanceAssertion != nil {
 				assertionDiagnostics = append(assertionDiagnostics, e.assertionDiagnostics(event.tx, postingIndex, event.path)...)
 			}

@@ -28,29 +28,6 @@ func TestCalculatePostingEffects_InferenceCostAndSnapshots(t *testing.T) {
 	assert.Equal(t, decimal.NewFromInt(-20), effects[0].CostContribution["$"])
 	assert.Equal(t, decimal.NewFromInt(30), effects[2].CostContribution["$"])
 	assert.Equal(t, decimal.NewFromInt(-30), effects[3].InferredAmounts["$"])
-	assert.Equal(t, decimal.NewFromInt(7), effects[4].BalanceAfter["memo:shares"]["AAPL"])
-}
-
-func TestCalculatePostingEffects_BalanceAfterHoldsOnlyThePostingsAccount(t *testing.T) {
-	journal, errs := parser.Parse(`2024-01-15 first
-    активы:наличные  10 ₽
-    資産:現金  -10 ₽
-
-2024-01-16 second
-    активы:наличные  5 ₽
-    資産:現金  -5 ₽
-`)
-	require.Empty(t, errs)
-
-	effects := CalculatePostingEffects(journal)
-	require.Len(t, effects, 4)
-
-	require.Len(t, effects[3].BalanceAfter, 1)
-	assert.Equal(t, decimal.NewFromInt(-15), effects[3].BalanceAfter["資産:現金"]["₽"])
-
-	// Results must not share mutable maps with one another.
-	effects[0].BalanceAfter["активы:наличные"]["₽"] = decimal.Zero
-	assert.Equal(t, decimal.NewFromInt(15), effects[2].BalanceAfter["активы:наличные"]["₽"])
 }
 
 func TestCalculatePostingEffects_MultipleElidedAndGroups(t *testing.T) {

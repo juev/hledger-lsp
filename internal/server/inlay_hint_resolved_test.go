@@ -139,3 +139,24 @@ func TestInlayHint_DefaultSettingsDoNotReplayWholeTree(t *testing.T) {
 	assert.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(budget),
 		"running balances are off, so the tree's balances must not be computed")
 }
+
+func TestInlayHint_RunningBalanceFollowsBalanceAssignment(t *testing.T) {
+	for name, a := range map[string]string{
+		"lf":   "2024-02-01 корректировка\n    активы:現金  = 70 USD\n    расходы:разное\n",
+		"crlf": "2024-02-01 корректировка\r\n    активы:現金  = 70 USD\r\n    расходы:разное\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, dir := newInlayWorkspace(t, map[string]string{
+				"all.journal": "include b.journal\ninclude a.journal\n",
+				"a.journal":   a,
+				"b.journal":   "2024-01-01 seed\n    активы:現金  100 USD\n    капитал\n",
+			})
+			enableOnlyRunningBalances(srv)
+
+			labels := inlayLabels(t, srv, uri.File(filepath.Join(dir, "a.journal")), strings.ReplaceAll(a, "\r\n", "\n"))
+			assert.Equal(t, []protocol.InlayHintLabel{
+				protocol.String("balance: 70 USD"), protocol.String("balance: 30 USD"),
+			}, labels)
+		})
+	}
+}

@@ -8,50 +8,34 @@ import (
 
 // PostingEffect contains the facts derived while applying one posting. All map
 // fields are owned by this result and may be safely changed by its caller.
-//
-// BalanceAfter holds only the posting's own account. Snapshotting every account
-// would cost O(postings × accounts) memory, all of it live until the walk ends:
-// over a few thousand transactions and a few hundred accounts that is a gigabyte
-// per call.
 type PostingEffect struct {
 	TransactionIndex int
 	PostingIndex     int
 	InferredAmounts  map[string]decimal.Decimal
 	CostContribution map[string]decimal.Decimal
-	BalanceAfter     AccountBalances
 }
 
-// CalculatePostingEffects derives posting facts in source order. Explicit
-// posting amounts update account balances in their native commodity; inferred
-// amounts balance only real or balanced-virtual posting groups.
+// CalculatePostingEffects derives posting facts in source order. Inferred amounts
+// balance only real or balanced-virtual posting groups.
 func CalculatePostingEffects(journal *ast.Journal) []PostingEffect {
-	effects, _ := calculatePostingEffectsFromTransactions(journal.Transactions)
-	return effects
-}
-
-func calculatePostingEffectsFromTransactions(transactions []ast.Transaction) ([]PostingEffect, AccountBalances) {
-	balances := make(AccountBalances)
 	effects := make([]PostingEffect, 0)
 
-	for transactionIndex := range transactions {
-		transaction := &transactions[transactionIndex]
+	for transactionIndex := range journal.Transactions {
+		transaction := &journal.Transactions[transactionIndex]
 		inferred := inferredAmountsByPosting(transaction.Postings)
 
 		for postingIndex := range transaction.Postings {
 			posting := &transaction.Postings[postingIndex]
-			addPostingBalance(balances, posting, inferred[postingIndex])
-
 			effects = append(effects, PostingEffect{
 				TransactionIndex: transactionIndex,
 				PostingIndex:     postingIndex,
 				InferredAmounts:  cloneAmounts(inferred[postingIndex]),
 				CostContribution: costContribution(posting),
-				BalanceAfter:     accountBalanceSnapshot(balances, posting.Account.GetResolvedName()),
 			})
 		}
 	}
 
-	return effects, balances
+	return effects
 }
 
 func inferredAmountsByPosting(postings []ast.Posting) map[int]map[string]decimal.Decimal {
@@ -113,8 +97,4 @@ func cloneAmounts(amounts map[string]decimal.Decimal) map[string]decimal.Decimal
 		cloned[commodity] = quantity
 	}
 	return cloned
-}
-
-func accountBalanceSnapshot(balances AccountBalances, account string) AccountBalances {
-	return AccountBalances{account: cloneAmounts(balances[account])}
 }

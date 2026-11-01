@@ -36,8 +36,10 @@ watched journal-file changes; saving is not required.
 | `hledger.inlayHints.runningBalances` | `false` | Show the account balance after each posting |
 | `hledger.inlayHints.costExpansion` | `false` | Show the signed balancing contribution of `@` and `@@` costs |
 
-Running balances are omitted when include ownership or occurrence is ambiguous,
-or a transaction contains a posting-level `date:` or `date2:` tag.
+Running balances follow hledger's register: balance assignments are resolved,
+and a posting with its own `date:` applies at that date, so its hint shows the
+balance as of then. They are omitted when include ownership or occurrence is
+ambiguous.
 
 ## Completion
 
