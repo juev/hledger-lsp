@@ -109,6 +109,9 @@ type Lexer struct {
 	// tableSep is the separator of the if table being lexed, or 0 outside one.
 	// Like hledger, every line after a table header is a table row until a blank line.
 	tableSep rune
+	// firstLineShift is the number of columns a skipped byte order mark takes
+	// on line 1.
+	firstLineShift int
 }
 
 func NewLexer(input string) *Lexer {
@@ -117,6 +120,16 @@ func NewLexer(input string) *Lexer {
 
 func splitLines(input string) []string {
 	return strings.Split(input, "\n")
+}
+
+// FirstColumn returns the column where text starts on line, which is one
+// further on line 1 of an input that begins with a byte order mark. It is valid
+// once the first line has been scanned.
+func (l *Lexer) FirstColumn(line int) int {
+	if line == 1 {
+		return 1 + l.firstLineShift
+	}
+	return 1
 }
 
 func (l *Lexer) Next() Token {
@@ -135,6 +148,15 @@ func (l *Lexer) Next() Token {
 			scanLine, scanOffset = line[len(textutil.BOM):], lineOffset+len(textutil.BOM)
 		}
 		lineTokens := l.scanLine(scanLine, lineNum, scanOffset)
+		if scanOffset != lineOffset {
+			// The mark is one character to a client, so line-1 columns start one
+			// further on; offsets already count its bytes.
+			l.firstLineShift = 1
+			for i := range lineTokens {
+				lineTokens[i].Pos.Column += l.firstLineShift
+				lineTokens[i].End.Column += l.firstLineShift
+			}
+		}
 		l.lineIdx++
 		l.offset += len(rawLine) + 1 // +1 for '\n'; rawLine includes \r for CRLF files
 

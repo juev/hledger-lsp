@@ -529,8 +529,15 @@ func RemapRange(startOffset, endOffset int, sourceMap []SourceMapping, lineOffse
 
 // buildLineOffsets returns a table where entry i is the byte offset of the
 // start of line i (0-indexed). Used for offset-to-line/column conversion.
+//
+// A byte order mark is one character to a client but three bytes here. Line 1
+// is recorded as starting two bytes before its text, so a column computed from
+// these offsets counts the mark once, as the other line-1 columns do.
 func buildLineOffsets(content string) []int {
 	offsets := []int{0}
+	if strings.HasPrefix(content, textutil.BOM) {
+		offsets[0] = len(textutil.BOM) - 1
+	}
 	for i := 0; i < len(content); i++ {
 		if content[i] == '\n' {
 			offsets = append(offsets, i+1)

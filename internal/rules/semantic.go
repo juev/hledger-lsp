@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 // SemTokenType represents semantic token type indices for rules files.
@@ -45,7 +46,15 @@ func SemanticTokens(content string) []RulesSemanticToken {
 		if int(line) < len(lines) {
 			lineText = strings.TrimRight(lines[line], "\r")
 		}
-		col := uint32(lsputil.ByteOffsetToUTF16(lineText, byteCol))
+		// Line-1 columns count a byte order mark as one character. The byte
+		// column is measured on the text after it, and the mark is added back.
+		markUnits := 0
+		if line == 0 && strings.HasPrefix(lineText, textutil.BOM) {
+			lineText = lineText[len(textutil.BOM):]
+			byteCol -= lexer.firstLineShift
+			markUnits = lexer.firstLineShift
+		}
+		col := uint32(lsputil.ByteOffsetToUTF16(lineText, byteCol) + markUnits)
 		length := uint32(lsputil.UTF16Len(tok.Value))
 
 		switch tok.Type {
