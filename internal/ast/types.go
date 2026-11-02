@@ -290,9 +290,12 @@ func (AliasDirective) directive()        {}
 func (d AliasDirective) GetRange() Range { return d.Range }
 
 type Comment struct {
-	Text  string
-	Tags  []Tag
-	Range Range
+	Text string
+	Tags []Tag
+	// Marker is the character that opened the comment: ';', or '#' on an indented
+	// line. hledger reads only ';' lines as comments of the posting above them.
+	Marker byte
+	Range  Range
 }
 
 type Tag struct {

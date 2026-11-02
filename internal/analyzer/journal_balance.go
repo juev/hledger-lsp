@@ -725,7 +725,7 @@ func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comme
 	first := postingRange(posting).Start.Line
 	var lines []ast.Comment
 	for _, line := range tx.Comments {
-		if line.Range.Start.Line > first && line.Range.Start.Line < next {
+		if line.Marker == ';' && line.Range.Start.Line > first && line.Range.Start.Line < next {
 			lines = append(lines, line)
 		}
 	}

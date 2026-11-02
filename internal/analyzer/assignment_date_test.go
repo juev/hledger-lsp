@@ -293,3 +293,51 @@ func TestOracle_DateTagVerdictsMatchHledger(t *testing.T) {
 		})
 	}
 }
+
+// hashCommentCases are journals with an indented # or * line under a posting.
+// hledger reads only ; lines below a posting as its comment: a # or * line is a
+// posting of its own there, so a date written in it dates nothing and every one of
+// these journals loads.
+var hashCommentCases = []struct {
+	name  string
+	input string
+}{
+	{"bracketed date on a # line", "2024-01-01 open\n    c  100 A\n    b\n\n2024-01-10 t1\n    c  10 A\n    # paid [2024-01-20]\n    b  -10 A\n\n2024-01-15 t2\n    c  0 A = 110 A\n    b  0 A\n"},
+	{"date tag on a # line", "2024-01-01 open\n    c  100 A\n    b\n\n2024-01-10 t1\n    c  10 A\n    # paid date:2024-01-20\n    b  -10 A\n\n2024-01-15 t2\n    c  0 A = 110 A\n    b  0 A\n"},
+	{"bracketed date on a * line", "2024-01-01 open\n    c  100 A\n    b\n\n2024-01-10 t1\n    c  10 A\n    * paid [2024-01-20]\n    b  -10 A\n\n2024-01-15 t2\n    c  0 A = 110 A\n    b  0 A\n"},
+	{"date tag on a * line", "2024-01-01 open\n    c  100 A\n    b\n\n2024-01-10 t1\n    c  10 A\n    * paid date:2024-01-20\n    b  -10 A\n\n2024-01-15 t2\n    c  0 A = 110 A\n    b  0 A\n"},
+	{"bracketed date on a # line under an assignment", "2024-01-01 t\n    c  = 50 A\n    # paid [2024-01-20]\n    b  -50 A\n"},
+	{"date tag on a # line under an assignment", "2024-01-01 t\n    c  = 50 A\n    # paid date:2024-01-20\n    b  -50 A\n"},
+	{"date tag on a # line in Cyrillic and CJK", "2024-01-01 касса\n    現金  = 50 A\n    # оплата date:2024-01-20 日本\n    капитал  -50 A\n"},
+}
+
+func TestAnalyzer_HashCommentLinesBelowAPostingDateNothing(t *testing.T) {
+	for _, tc := range hashCommentCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tc.input)
+			require.Empty(t, errs)
+			for _, d := range New().Analyze(journal).Diagnostics {
+				assert.NotEqual(t, SeverityError, d.Severity, "%s: %s", d.Code, d.Message)
+			}
+
+			resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: tc.input})
+			assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+		})
+	}
+}
+
+func TestOracle_HashCommentLinesBelowAPostingMatchHledger(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for _, tc := range hashCommentCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.True(t, hledgerAccepts(t, hledgerPath, tc.input), "hledger loads:\n%s", tc.input)
+		})
+	}
+}
