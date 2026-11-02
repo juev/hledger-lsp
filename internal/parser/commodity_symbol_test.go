@@ -179,7 +179,13 @@ func TestParser_CommoditySymbol_DirectivesAgreeWithPostings(t *testing.T) {
 				assert.Equal(t, symbol, dir.Commodity.Symbol, line)
 			}
 
-			for _, line := range []string{"D 1,000.00 " + symbol, "D 1,000.00" + symbol, "D " + symbol + "1,000.00"} {
+			lines := []string{"D 1,000.00 " + symbol, "D " + symbol + "1,000.00"}
+			if symbol != "," {
+				// hledger 1.52.4 reads `D 1,000.00,` as a number that repeats
+				// its trailing separator and rejects it.
+				lines = append(lines, "D 1,000.00"+symbol)
+			}
+			for _, line := range lines {
 				_, errs := Parse(line + "\n2024-01-01 x\n    a  5\n    b\n")
 				require.Empty(t, errs, line)
 			}

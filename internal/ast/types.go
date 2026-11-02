@@ -133,6 +133,11 @@ type Amount struct {
 	// or "" when nothing is declared. A number rewritten at this position has to
 	// use it, whatever style the commodity declares elsewhere.
 	DecimalMark string
+	// SymbolDecimalMark is, for an amount that inherited its symbol from the
+	// D directive, the mark in force at this position for amounts written with
+	// that symbol. It can differ from DecimalMark, so text that names the symbol
+	// has to use it to read back as the same value.
+	SymbolDecimalMark string
 }
 
 type Commodity struct {

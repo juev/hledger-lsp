@@ -169,12 +169,24 @@ func (s *Server) amountHoverAcrossOccurrences(docURI uri.URI, doc string, positi
 // the value: 1.5 under a comma mark reads `1,5`. The ordinary hover keeps the
 // text as written, which is why it cannot tell the readings apart.
 func styledAmountForHover(amount *ast.Amount, formats map[string]formatter.CommodityFormat, defaultSymbol string) string {
-	display := *amount
-	display.Commodity.Inferred = false
+	display := withSymbolNamed(amount)
 	if display.Commodity.Symbol == "" {
 		display.Commodity.Symbol = defaultSymbol
 	}
 	return formatter.FormatAmount(&display, formats)
+}
+
+// withSymbolNamed copies an amount for text that names its commodity symbol even
+// when the journal writes it bare. Such text is read with the mark of amounts
+// written with that symbol, so an amount that inherited its symbol from the D
+// directive takes that mark to read back as the same value.
+func withSymbolNamed(amount *ast.Amount) ast.Amount {
+	display := *amount
+	if display.Commodity.Inferred && display.SymbolDecimalMark != "" {
+		display.DecimalMark = display.SymbolDecimalMark
+	}
+	display.Commodity.Inferred = false
+	return display
 }
 
 // hoverAmountKey identifies what an amount and its cost are worth.
@@ -503,8 +515,7 @@ func buildAmountHoverWith(amount *ast.Amount, cost *ast.Cost, render func(*ast.A
 func formatAmountForHover(amount *ast.Amount, commodityFormats map[string]formatter.CommodityFormat, defaultSymbol string) string {
 	// Hover names the commodity the amount belongs to even when the journal
 	// writes it bare, so an inherited default commodity is never hidden.
-	displayAmount := *amount
-	displayAmount.Commodity.Inferred = false
+	displayAmount := withSymbolNamed(amount)
 
 	if displayAmount.Commodity.Symbol == "" {
 		if defaultSymbol == "" {

@@ -20,6 +20,16 @@ jobs:
         with:
           go-version: "1.27"
 
+      # Runtimes for the WASI smoke test that the goreleaser post hook runs
+      # against the built module.
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: "50.0.1"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+
       - name: Install minisign
         run: sudo apt-get update && sudo apt-get install -y minisign
 
