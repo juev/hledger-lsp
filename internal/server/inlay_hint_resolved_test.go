@@ -17,7 +17,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/workspace"
 )
 
-func newInlayWorkspace(t *testing.T, files map[string]string) (*Server, string) {
+func newInlayWorkspace(t testing.TB, files map[string]string) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range files {
