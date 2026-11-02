@@ -72,6 +72,13 @@ type postingGroupResult struct {
 // price when a cost-free group is left with exactly two residual commodities of
 // opposite sign (e.g. "10 AAPL" and "$-110" in one transaction).
 func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) postingGroupResult {
+	return checkPostingGroupMixed(postings, nil, userTolerance)
+}
+
+// checkPostingGroupMixed is checkPostingGroup for a group in which some
+// postings were split from one multi-commodity amount. multi is index-aligned
+// with postings and marks those pieces; nil means there are none.
+func checkPostingGroupMixed(postings []ast.Posting, multi []bool, userTolerance decimal.Decimal) postingGroupResult {
 	inferredCount, inferredIdx := countInferredPostings(postings)
 	if inferredCount > 1 {
 		return postingGroupResult{multipleInferred: true, inferredIdx: -1}
@@ -98,7 +105,7 @@ func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) po
 		}
 	}
 
-	if isTwoCommodityConversion(postings, signed) {
+	if isTwoCommodityConversion(postings, multi, signed) {
 		return postingGroupResult{inferredIdx: -1}
 	}
 
@@ -113,8 +120,18 @@ func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) po
 //	"10 AAPL" + "$-110"                 → accepted
 //	"10 AAPL" + "5 EUR"                 → rejected (same sign)
 //	"10 AAPL @ $100" + "$-900" + "-5 EUR" + "4 EUR" → rejected (explicit cost)
-func isTwoCommodityConversion(postings []ast.Posting, signed map[string]decimal.Decimal) bool {
+//
+// hledger prices only the postings whose amount is a single commodity, and only
+// in the commodity of the first posting amount. A posting that holds several
+// commodities (a strict or inclusive balance assignment clearing the other
+// commodities of an account) stays unpriced, so when it holds that first
+// commodity the conversion no longer closes the sum and the transaction is
+// rejected. Verified against hledger 1.52.4.
+func isTwoCommodityConversion(postings []ast.Posting, multi []bool, signed map[string]decimal.Decimal) bool {
 	if len(signed) != 2 || hasExplicitCost(postings) {
+		return false
+	}
+	if holdsPricedCommodityInMixedPosting(postings, multi, signed) {
 		return false
 	}
 	positive, negative := 0, 0
@@ -127,6 +144,31 @@ func isTwoCommodityConversion(postings []ast.Posting, signed map[string]decimal.
 		}
 	}
 	return positive == 1 && negative == 1
+}
+
+// holdsPricedCommodityInMixedPosting reports whether a multi-commodity posting
+// holds a non-zero amount of the commodity hledger would price: the commodity of
+// the first posting amount.
+func holdsPricedCommodityInMixedPosting(postings []ast.Posting, multi []bool, signed map[string]decimal.Decimal) bool {
+	priced := ""
+	for i := range postings {
+		if postings[i].Amount == nil {
+			continue
+		}
+		if _, residual := signed[postings[i].Amount.Commodity.Symbol]; residual {
+			priced = postings[i].Amount.Commodity.Symbol
+			break
+		}
+	}
+	for i := range postings {
+		if i >= len(multi) || !multi[i] || postings[i].Amount == nil {
+			continue
+		}
+		if postings[i].Amount.Commodity.Symbol == priced && !postings[i].Amount.Quantity.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 // hasExplicitCost reports whether any posting in the group carries an explicit
