@@ -448,11 +448,26 @@ Tags appear in comments (transaction or posting level).
 
 | Rule | Example |
 |------|---------|
-| Tag name | Letters, numbers, hyphens |
-| No spaces in name | `project-x:` not `project x:` |
+| Tag name is the last word before the colon | `paid on date:2024-01-19` is the tag `date` |
+| Any non-space characters form the name, in any script | `проект:`, `a.b:`, `[x]y:` |
+| A comma glued to the word belongs to the name | `x,date:2024-01-19` is the tag `x,date`, not a date |
+| A colon with no word before it names nothing | `; :x, y:1` has only the tag `y` |
 | Value is optional | `reviewed:` |
-| Value ends at comma or line end | `tag:value,` |
+| Value ends at comma or line end, spaces around it are trimmed | `tag: two words , next:1` |
+| A colon inside a value starts no tag | `foo:bar baz:qux` is `foo` = `bar baz:qux` |
 | Multiple tags | `tag1:val1, tag2:val2` |
+| Each comment line is read on its own | a name or value never spans lines |
+
+These rules were checked against hledger 1.52.4. They apply to every
+comment: the transaction line, the posting line, comment lines below them and
+directive comments such as `account`. A `date:` or `date2:` tag written after
+prose dates the posting like any other, and hledger refuses its invalid value.
+
+A posting comment (on the posting line or a `;` line below a posting, in a
+transaction, a periodic transaction or an auto posting rule) differs in one
+detail: after a colon that names nothing, hledger skips the spaces and
+one comma before the next name. So `; :,date:2024-01-19` dates a posting, while
+on a transaction the same text is the tag `,date`.
 
 ### Examples
 
