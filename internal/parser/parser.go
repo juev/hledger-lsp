@@ -1325,16 +1325,21 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	}
 
 	if number != "" {
-		mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol))
-		if mark == "" {
-			p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
-		} else if dir.Commodity.Symbol != "" || p.defaultCommodityDecimalMark == "" {
-			p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
-		} else {
-			// A symbol-less style written after a D directive does not take
-			// effect as written: hledger gives the D directive's commodity the
-			// D directive's mark instead, and that style crosses an include.
+		switch {
+		case endsInInvalidSeparator(number):
+			p.errorAt(formatPos, formatEnd, "invalid number: %s", number)
+		case dir.Commodity.Symbol == "" && hasInlineFormat && p.defaultCommodityDecimalMark != "":
+			// hledger reads a number without a symbol as an amount of the D
+			// directive's commodity in the D directive's style, so the style
+			// declared here is D's mark on D's commodity, whatever mark the
+			// number is written with. It crosses an include like any style.
 			p.commodityDecimalMarks[p.defaultCommoditySymbol] = p.defaultCommodityDecimalMark
+		default:
+			if mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol)); mark == "" {
+				p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
+			} else {
+				p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
+			}
 		}
 	} else if dir.Commodity.Symbol != "" {
 		// A declaration without a format resets the style. The empty mark, rather
@@ -1739,6 +1744,24 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 
 	var numberStr string
 	numberPos, numberEnd := startPos, startPos
+	// The lexer reads a number such as 1000.00. or 1000.00.00 as a date, but to
+	// hledger it is still the D directive's number, valid or not. Of a dashed
+	// date such as 2024-01-15 hledger reads 2024 and ignores the rest of the
+	// line. A date with slashes is left alone.
+	atNumber := func() bool {
+		return p.current.Type == TokenNumber ||
+			(p.current.Type == TokenDate && !strings.Contains(p.current.Value, "/"))
+	}
+	restIgnored := false
+	readNumber := func() {
+		numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if p.current.Type == TokenDate {
+			if number, _, dashed := strings.Cut(numberStr, "-"); dashed {
+				numberStr, restIgnored = number, true
+			}
+		}
+		p.advance()
+	}
 
 	switch p.current.Type {
 	case TokenCommodity, TokenQuotedCommodity:
@@ -1746,10 +1769,9 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		dir.Symbol = symbol
 		p.advance()
 
-		if p.current.Type == TokenNumber {
-			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if atNumber() {
+			readNumber()
 			dir.Format = symbol + numberStr
-			p.advance()
 		}
 	case TokenText:
 		// Word commodity before the number: `D RUB 1.000,00`, which hledger
@@ -1757,17 +1779,18 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		symbol := p.current.Value
 		p.advance()
 
-		if p.current.Type == TokenNumber {
-			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if atNumber() {
+			readNumber()
 			dir.Symbol = symbol
 			dir.Format = symbol + " " + numberStr
-			p.advance()
 		}
-	case TokenNumber:
-		numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
-		p.advance()
+	case TokenNumber, TokenDate:
+		if !atNumber() {
+			break
+		}
+		readNumber()
 
-		if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
+		if !restIgnored && (isCommodityToken(p.current.Type) || p.current.Type == TokenText) {
 			dir.Symbol = p.current.Value
 			dir.Format = numberStr + " " + p.current.Value
 			p.advance()
@@ -1777,17 +1800,26 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 	// The default commodity applies to every amount written without a symbol
 	// from here on — including amounts in files included later, because
 	// hledger's directive state flows into an include — so record it even when
-	// the decimal mark is already known. A D directive with a number but no
-	// symbol clears it again; a line hledger would reject (`D RUB`, a bare `D`)
-	// leaves the state alone instead of silently dropping the commodity.
+	// the decimal mark is already known. A line hledger would reject (`D RUB`, a
+	// bare `D`) leaves the state alone instead of silently dropping the
+	// commodity.
+	//
+	// A D number without a symbol, written while another D is in force, is read
+	// as an amount of that D's commodity in that D's style, so it changes
+	// neither the commodity nor the mark, and needs no decimal mark of its own.
 	if numberStr != "" {
-		p.defaultCommoditySymbol = dir.Symbol
-		p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
+		if endsInInvalidSeparator(numberStr) {
+			p.errorAt(numberPos, numberEnd, "invalid number: %s", numberStr)
+		}
+		if dir.Symbol != "" || p.defaultCommodityDecimalMark == "" {
+			p.defaultCommoditySymbol = dir.Symbol
+			p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
 
-		if mark := numberDecimalMark(numberStr, p.resolveDecimalMark(dir.Symbol)); mark == "" {
-			p.errorAt(numberPos, numberEnd, missingDecimalMarkMessage)
-		} else {
-			p.defaultCommodityDecimalMark = mark
+			if mark := numberDecimalMark(numberStr, p.resolveDecimalMark(dir.Symbol)); mark == "" {
+				p.errorAt(numberPos, numberEnd, missingDecimalMarkMessage)
+			} else {
+				p.defaultCommodityDecimalMark = mark
+			}
 		}
 	}
 
@@ -2413,9 +2445,19 @@ func (p *Parser) resolveDecimalMark(commodity string) string {
 	return p.defaultCommodityDecimalMark
 }
 
-// numberInFormat returns the number written in a commodity format string.
+// numberInFormat returns the number written in a commodity format string. The
+// symbol is cut from the end it is written at first, so that a symbol that is a
+// separator itself (`1,000.00 ,`) leaves the number's own separators alone.
 func numberInFormat(format, symbol string) string {
-	format = strings.Replace(format, symbol, "", 1)
+	trimmed := strings.TrimSpace(format)
+	switch {
+	case symbol != "" && strings.HasSuffix(trimmed, symbol):
+		format = strings.TrimSuffix(trimmed, symbol)
+	case symbol != "" && strings.HasPrefix(trimmed, symbol):
+		format = strings.TrimPrefix(trimmed, symbol)
+	default:
+		format = strings.Replace(format, symbol, "", 1)
+	}
 	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' }
 	start := strings.IndexFunc(format, isNumberRune)
 	end := strings.LastIndexFunc(format, isNumberRune)
@@ -2491,6 +2533,21 @@ func numberDecimalMark(number, inForce string) string {
 		return ""
 	}
 	return mark
+}
+
+// endsInInvalidSeparator reports whether a number ends in a separator that
+// hledger rejects as an invalid use of separator: one the number already uses
+// before (1.000., 1,000.00.), or one after a decimal mark that a space digit
+// group and the other separator already settle (1 000.00,).
+func endsInInvalidSeparator(number string) bool {
+	last := len(number) - 1
+	if last <= 0 || (number[last] != '.' && number[last] != ',') {
+		return false
+	}
+	before := number[:last]
+	mark := number[last : last+1]
+	return strings.Contains(before, mark) ||
+		(strings.Contains(before, " ") && strings.Contains(before, otherDecimalMark(mark)))
 }
 
 func otherDecimalMark(mark string) string {

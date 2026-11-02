@@ -3339,6 +3339,9 @@ func Test_numberInFormat(t *testing.T) {
 		{"space grouped", "1 000,00 EUR", "EUR", "1 000,00"},
 		{"trailing decimal mark", "1000. EUR", "EUR", "1000."},
 		{"no number", "EUR", "EUR", ""},
+		{"comma symbol after", "1,000.00 ,", ",", "1,000.00"},
+		{"comma symbol before", ", 1.000,00", ",", "1.000,00"},
+		{"sign before a prefix symbol", "-$1,000.00", "$", "1,000.00"},
 	}
 
 	for _, tt := range tests {

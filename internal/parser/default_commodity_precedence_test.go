@@ -1,10 +1,13 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/juev/hledger-lsp/internal/ast"
 )
 
 // TestParser_DefaultCommodityAndCommodityStyleDisagree pins how hledger 1.52.4
@@ -65,6 +68,173 @@ func TestParser_DefaultCommodityAndCommodityStyleDisagree(t *testing.T) {
 			require.Empty(t, errs)
 			assert.Equal(t, tt.qty, qty)
 			assert.Equal(t, tt.commodity, commodity)
+		})
+	}
+}
+
+// TestParser_SymbolLessNumberUnderDefaultCommodity pins how hledger 1.52.4 reads
+// a D or commodity number written without a symbol while a D directive is in
+// force: it is an amount of the D directive's commodity in the D directive's
+// style. It neither changes the mark in force nor needs a decimal mark of its
+// own, and a symbol-less D keeps the D commodity. The expected readings come
+// from hledger.
+func TestParser_SymbolLessNumberUnderDefaultCommodity(t *testing.T) {
+	tests := []struct {
+		directives, amount string
+		qty, commodity     string
+	}{
+		{"D 1000.00\nD 1000,\n", "15,000", "15000", ""},
+		{"D 1000.00\nD 1000,\n", "1,5", "15", ""},
+		{"D 1000.00\nD 1000,\n", "1.500", "1.5", ""},
+		{"D 1000.\nD 1000,\n", "15,000", "15000", ""},
+		{"D 1,000.00\nD 1000,\n", "15,000", "15000", ""},
+		{"D 1000,00\nD 1000.\n", "15,000", "15", ""},
+		{"D 1000,00\nD 1000.\n", "1.500", "1500", ""},
+		{"D 1000. X\nD 1000,\n", "15,000", "15000", "X"},
+		{"D 1000. X\nD 1000,\n", "1,5", "15", "X"},
+		{"D 1.000,00 RUB\nD 1.000,00\n", "1.000,00", "1000", "RUB"},
+		{"D 1.000,00 RUB\nD 1.000,00\n", "15,000", "15", "RUB"},
+		{"D 1000.00\nD 1000\n", "15,000", "15000", ""},
+		{"D 1000.00\nD 1000,00\n", "15,000", "15000", ""},
+		{"D 1000.00 X\ncommodity 1000\n", "15,000", "15000", "X"},
+		{"D 1000.00 X\ncommodity 1000,00\n", "15,000", "15000", "X"},
+		{"D 1000.00 X\ncommodity 1000,00\n", "15,000 X", "15000", "X"},
+		{"D 1000.00 X\ncommodity 1,000.\n", "15,000", "15000", "X"},
+		{"D 1000,\ncommodity 1,000.00\nD 1000.00\n", "15,000", "15", ""},
+		{"D 1000,\ncommodity 1,000.00\nD 1000.00\n", "1.500", "1500", ""},
+		{"D 1000. X\nD 1000, X\n", "15,000", "15", "X"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.directives+tt.amount, func(t *testing.T) {
+			qty, commodity, errs := firstAmount(t, tt.directives+"\n2024-01-01 x\n    a  "+tt.amount+"\n    b\n")
+			require.Empty(t, errs)
+			assert.Equal(t, tt.qty, qty)
+			assert.Equal(t, tt.commodity, commodity)
+		})
+	}
+}
+
+// A symbol-less D keeps the side the D in force writes its symbol on, so a
+// bare amount is still laid out the way that D writes it.
+func TestParser_SymbolLessDefaultCommodityKeepsCommoditySide(t *testing.T) {
+	journal, errs := Parse("D X 1000.00\nD 1000,\n\n2024-01-01 x\n    a  15\n    b\n")
+	require.Empty(t, errs)
+	commodity := journal.Transactions[0].Postings[0].Amount.Commodity
+	assert.Equal(t, "X", commodity.Symbol)
+	assert.Equal(t, ast.CommodityLeft, commodity.Position)
+}
+
+// TestParser_DirectiveNumberEndsInInvalidSeparator pins the D and
+// commodity numbers hledger 1.52.4 rejects with "invalid use of separator": a
+// separator at the end that the number already uses before it, or one after a
+// number whose decimal mark is already settled by a space digit group and the
+// other separator. A D directive in force does not make them valid, and neither
+// does a number the lexer reads as a date.
+func TestParser_DirectiveNumberEndsInInvalidSeparator(t *testing.T) {
+	rejected := []string{
+		"D 1.000. X\n",
+		"D 1,000, X\n",
+		"D 1.000.000. X\n",
+		"D 1,000.00. X\n",
+		"D 1.000,00, X\n",
+		"D 1,000.00,\n",
+		"commodity 1.000. X\n",
+		"commodity 1,000, X\n",
+		"D 1000.00\nD 1.000.\n",
+		"D 1000.00 X\ncommodity 1.000.\n",
+		"D 1000.00 X\ncommodity 1,000.00.\n",
+		"D 1000.00 X\nD 1,000.00,\n",
+		"D 1000.00.\n",
+		"D 1000.00. X\n",
+		"D 1000.00 X\nD 1000.00.\n",
+		"D 1 000.00, X\n",
+		"D 1 000,00. X\n",
+		"D 1 000,000. X\n",
+		"D 1 000.000, X\n",
+		"commodity 1 000.00, X\n",
+		"D 1000.00 X\nD 1 000.000,\n",
+	}
+	for _, directives := range rejected {
+		t.Run(directives, func(t *testing.T) {
+			_, errs := Parse(directives + "\n2024-01-01 x\n    a  15,000\n    b\n")
+			require.Len(t, errs, 1)
+			assert.Equal(t, strings.Count(directives, "\n"), errs[0].Pos.Line, "the error points at the last directive")
+			assert.Contains(t, errs[0].Message, "invalid number")
+		})
+	}
+
+	accepted := []struct{ directives, qty string }{
+		{"D 1,000. X\n", "15000"},
+		{"D 1.000, X\n", "15"},
+		{"commodity 1,000. X\n", "15000"},
+		{"D 1,5. X\n", "15000"},
+		{"D 1 000. X\n", "15000"},
+		{"D 1 000 000, X\n", "15"},
+		{"D 1.000.000, X\n", "15"},
+		{"D 1,000,000. X\n", "15000"},
+	}
+	for _, tt := range accepted {
+		t.Run(tt.directives, func(t *testing.T) {
+			qty, _, errs := firstAmount(t, tt.directives+"\n2024-01-01 x\n    a  15,000 X\n    b\n")
+			require.Empty(t, errs)
+			assert.Equal(t, tt.qty, qty)
+		})
+	}
+}
+
+// A D number the lexer reads as a date is still a number to hledger 1.52.4:
+// `D 1000.00.00 X` has no decimal mark and is an error, while under a D already
+// in force the symbol-less `D 1000.00.00` is read in that D's style.
+func TestParser_DefaultCommodityNumberThatLooksLikeADate(t *testing.T) {
+	_, errs := Parse("D 1000.00.00 X\n\n2024-01-01 x\n    a  1,5\n    b\n")
+	require.Len(t, errs, 1)
+	assert.Equal(t, missingDecimalMarkMessage, errs[0].Message)
+
+	_, errs = Parse("D 2024-01-01\n\n2024-01-01 x\n    a  1,5\n    b\n")
+	require.Len(t, errs, 1)
+	assert.Equal(t, missingDecimalMarkMessage, errs[0].Message)
+
+	qty, commodity, errs := firstAmount(t, "D 1000.00 X\nD 1000.00.00\n\n2024-01-01 x\n    a  1,5\n    b\n")
+	require.Empty(t, errs)
+	assert.Equal(t, "15", qty)
+	assert.Equal(t, "X", commodity)
+
+	// hledger reads only 2024 of `2024-01-15,` and ignores the rest of the line,
+	// so under a D in force the line changes nothing.
+	qty, commodity, errs = firstAmount(t, "D 1000.00 X\nD 2024-01-15,\n\n2024-01-01 x\n    a  1,5\n    b\n")
+	require.Empty(t, errs)
+	assert.Equal(t, "15", qty)
+	assert.Equal(t, "X", commodity)
+}
+
+// A commodity directive with neither a symbol nor a number on its line is an
+// error in hledger 1.52.4 ("unexpected newline"); a D directive in force must
+// not make its format subdirective read as D's style without a diagnostic.
+func TestParser_SymbolLessCommodityWithFormatSubdirectiveUnderDefaultCommodity(t *testing.T) {
+	_, errs := Parse("D 1000.00 X\ncommodity\n    format 1000,00\n\n2024-01-01 x\n    a  1,5\n    b\n")
+	assert.NotEmpty(t, errs)
+}
+
+// A format subdirective for a symbol that is a separator itself keeps the
+// number's own separators: hledger 1.52.4 reads `format 1,000.00 ,` as mark `.`
+// and `format 1.000,00 ,` as mark `,`.
+func TestParser_FormatSubdirectiveOfSeparatorSymbol(t *testing.T) {
+	tests := []struct {
+		format, amount, qty string
+	}{
+		{"1,000.00 ,", "15,000 ,", "15000"},
+		{"1,000.00 ,", "1.500 ,", "1.5"},
+		{"1,000.00 ,", "1,5 ,", "15"},
+		{"1.000,00 ,", "15,000 ,", "15"},
+		{"1.000,00 ,", "1.500 ,", "1500"},
+		{"1.000,00 ,", "1,5 ,", "1.5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.format+" "+tt.amount, func(t *testing.T) {
+			qty, commodity, errs := firstAmount(t, "commodity ,\n    format "+tt.format+"\n\n2024-01-01 x\n    a  "+tt.amount+"\n    b\n")
+			require.Empty(t, errs)
+			assert.Equal(t, tt.qty, qty)
+			assert.Equal(t, ",", commodity)
 		})
 	}
 }
