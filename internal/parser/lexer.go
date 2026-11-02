@@ -26,6 +26,7 @@ type Lexer struct {
 	insideBraces   int
 	prevType       TokenType
 	prev2Type      TokenType
+	prev3Type      TokenType
 	// firstLineShift is the number of columns a skipped byte order mark takes on
 	// line 1. Columns count runes of the original text, and the client counts the
 	// mark as a character, so tokens on line 1 start after it.
@@ -58,7 +59,7 @@ func NewLexer(input string) *Lexer {
 
 func (l *Lexer) Next() Token {
 	tok := l.scan()
-	l.prev2Type, l.prevType = l.prevType, tok.Type
+	l.prev3Type, l.prev2Type, l.prevType = l.prev2Type, l.prevType, tok.Type
 	return tok
 }
 
@@ -571,17 +572,33 @@ func (l *Lexer) punctuatedSymbolStarts(r rune, glued bool) bool {
 	if !isSymbolRune(r) || unicode.Is(unicode.Zs, r) || !l.commodityExpected(r, glued) {
 		return false
 	}
+	punctuated := false
+	parens, brackets := 0, 0
 	for pos := l.pos; pos < len(l.input); {
 		r, size := utf8.DecodeRuneInString(l.input[pos:])
 		if !isSymbolRune(r) {
 			break
 		}
-		if !unicode.IsLetter(r) {
-			return true
+		switch r {
+		case '(':
+			parens++
+		case ')':
+			parens--
+		case '[':
+			brackets++
+		case ']':
+			brackets--
 		}
+		punctuated = punctuated || !unicode.IsLetter(r)
 		pos += size
 	}
-	return false
+	// After a number an unclosed "(" or "[" starts a lot annotation or a note
+	// that is cut short; the lot and note rules report that, with a message
+	// that names it.
+	if l.prevType == TokenNumber && (parens > 0 || brackets > 0) {
+		return false
+	}
+	return punctuated
 }
 
 // commodityExpected reports whether a commodity symbol may begin at the current
@@ -604,11 +621,16 @@ func (l *Lexer) commodityExpected(r rune, glued bool) bool {
 		return postingSlot && (!glued || (r != ')' && r != ']'))
 	case TokenRParen, TokenRBracket:
 		return postingSlot && l.prev2Type == TokenAccount
-	case TokenAt, TokenAtAt, TokenEquals, TokenDoubleEquals, TokenEqualsStar, TokenDoubleEqualsStar:
+	case TokenAt, TokenAtAt, TokenEquals, TokenDoubleEquals, TokenEqualsStar, TokenDoubleEqualsStar, TokenLBrace, TokenDoubleLBrace:
 		return postingSlot
 	case TokenSign:
 		return !isCommodityToken(l.prev2Type)
 	case TokenNumber:
+		// A prefix symbol already names the amount's commodity, so what follows
+		// its number is an annotation, not a second symbol.
+		if l.hasPrefixCommodity() {
+			return false
+		}
 		// "[2024-01-01]" and "(note)" end in a closer that belongs to an open
 		// annotation, not to a symbol.
 		return !l.closesOpenGroup(r)
@@ -620,6 +642,18 @@ func (l *Lexer) commodityExpected(r rune, glued bool) bool {
 		// The commodity just read is the one a P directive prices when the date
 		// or time came before it, and the price follows.
 		return priceSlot && (l.prev2Type == TokenDate || l.prev2Type == TokenTime)
+	}
+	return false
+}
+
+// hasPrefixCommodity reports whether the number just scanned follows a symbol
+// written before it, with or without a sign between them.
+func (l *Lexer) hasPrefixCommodity() bool {
+	switch {
+	case isCommodityToken(l.prev2Type):
+		return true
+	case l.prev2Type == TokenSign:
+		return isCommodityToken(l.prev3Type)
 	}
 	return false
 }

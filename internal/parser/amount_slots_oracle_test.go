@@ -213,3 +213,28 @@ func TestOracle_PricedCommodityMatchesHledger(t *testing.T) {
 		})
 	}
 }
+
+// TestOracle_CommoditySymbolInLotPriceMatchesHledger compares which lot prices
+// hledger accepts. It reads the lot and discards it, so the posting amount is
+// all it reports.
+func TestOracle_CommoditySymbolInLotPriceMatchesHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	lots := []string{
+		"{$,5}", "{{$,5}}", "{#5}", "{!5}", "{{#5}}", "{{!5}}", "{=$,5}", "{= $,5}", "{=!5}", "{=#5}",
+		"{{=$,5}}", "{$ ,5}", "{5 $,}", "{5 !}", "{5 EUR!}", "{,5}", "{, 5}", "{-$,5}", "{-,5}", "{%5}",
+		"{(5}", "{x(y) 5}", "{5 x(y)}", "{{ !5 }}", "{ !5 }", "{ 5 руб, }", "{元,5}", "{$,5} @ $,5",
+		"{2024-01-01, $,5}", "{$,5, 2024-01-01}", `{"lbl", !5}`,
+	}
+	for _, prefix := range []string{"10 EUR ", "EUR10 "} {
+		for _, lot := range lots {
+			t.Run(prefix+lot, func(t *testing.T) {
+				input := "2024-01-01 x\n    a  " + prefix + lot + "\n    b\n"
+				want := hledgerSlotRead(t, hledgerPath, "posting", input)
+
+				_, errs := Parse(input)
+				assert.Equal(t, want.Accepted, len(errs) == 0, "journal:\n%s", input)
+			})
+		}
+	}
+}

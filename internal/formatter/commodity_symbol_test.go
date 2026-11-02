@@ -52,3 +52,30 @@ func TestFormatter_CommoditySymbolWithPunctuationAlignsWithOtherAmounts(t *testi
 		assert.Equal(t, symbols[i], posting.Amount.Commodity.Symbol)
 	}
 }
+
+func TestFormatter_CommoditySymbolWithPunctuationInLotPriceKeepsReading(t *testing.T) {
+	for _, amount := range []string{"10 EUR {$,5}", "10 EUR {{#5}}", "EUR10 {EUR!5}", "10 EUR {!5}", "10 EUR {=$,5}", "10 EUR {$ ,5}", "10 EUR {5 руб,}", "10 EUR @ $,5"} {
+		t.Run(amount, func(t *testing.T) {
+			input := "2024-01-01 x\n    a  " + amount + "\n    b\n"
+			before, errs := parser.Parse(input)
+			require.Empty(t, errs)
+
+			once := formatForOracle(t, input)
+			after, errs := parser.Parse(once)
+			require.Empty(t, errs, "formatted journal:\n%s", once)
+
+			want, got := before.Transactions[0].Postings[0], after.Transactions[0].Postings[0]
+			if want.LotPrice != nil {
+				require.NotNil(t, got.LotPrice, once)
+				assert.True(t, want.LotPrice.Cost.Quantity.Equal(got.LotPrice.Cost.Quantity), "formatted journal:\n%s", once)
+				assert.Equal(t, want.LotPrice.Cost.Commodity.Symbol, got.LotPrice.Cost.Commodity.Symbol, once)
+			}
+			if want.Cost != nil {
+				require.NotNil(t, got.Cost, once)
+				assert.True(t, want.Cost.Amount.Quantity.Equal(got.Cost.Amount.Quantity), once)
+				assert.Equal(t, want.Cost.Amount.Commodity.Symbol, got.Cost.Amount.Commodity.Symbol, once)
+			}
+			assert.Equal(t, once, formatForOracle(t, once))
+		})
+	}
+}

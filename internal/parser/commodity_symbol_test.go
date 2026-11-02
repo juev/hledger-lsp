@@ -128,6 +128,11 @@ func TestParser_CommoditySymbol_EveryPrintableASCIICharacter(t *testing.T) {
 			if amount == "5," {
 				continue
 			}
+			// After a number an unclosed "(" or "[" is read as the start of a note or
+			// a lot date, as the lot rules report it; hledger takes it as a symbol.
+			if strings.HasPrefix(amount, "5") && (strings.HasSuffix(amount, "(") || strings.HasSuffix(amount, "[")) {
+				continue
+			}
 			t.Run(amount, func(t *testing.T) {
 				qty, commodity, errs := firstAmount(t, "2024-01-01 x\n    a  "+amount+"\n    b\n")
 				require.Empty(t, errs)
@@ -267,6 +272,54 @@ func TestParser_CommoditySymbol_TabsAroundSigns(t *testing.T) {
 				require.Empty(t, errs)
 				assert.Equal(t, tt.qty, qty)
 				assert.Equal(t, tt.commodity, commodity)
+			})
+		}
+	}
+}
+
+// A lot price is an amount, so its symbol follows the same rule as the symbol of
+// a posting amount (hledger reads the annotation and drops it).
+func TestParser_CommoditySymbol_InLotPrice(t *testing.T) {
+	tests := []struct {
+		lot, qty, commodity string
+	}{
+		{"{$,5}", "5", "$,"},
+		{"{{$,5}}", "5", "$,"},
+		{"{#5}", "5", "#"},
+		{"{!5}", "5", "!"},
+		{"{{#5}}", "5", "#"},
+		{"{{!5}}", "5", "!"},
+		{"{=$,5}", "5", "$,"},
+		{"{= $,5}", "5", "$,"},
+		{"{=!5}", "5", "!"},
+		{"{{=$,5}}", "5", "$,"},
+		{"{$ ,5}", "0.5", "$"},
+		{"{5 $,}", "5", "$,"},
+		{"{5 !}", "5", "!"},
+		{"{5 EUR!}", "5", "EUR!"},
+		{"{,5}", "5", ","},
+		{"{, 5}", "5", ","},
+		{"{-$,5}", "-5", "$,"},
+		{"{-,5}", "-5", ","},
+		{"{%5}", "5", "%"},
+		{"{(5}", "5", "("},
+		{"{x(y) 5}", "5", "x(y)"},
+		{"{5 x(y)}", "5", "x(y)"},
+		{"{{ !5 }}", "5", "!"},
+		{"{ 5 руб, }", "5", "руб,"},
+		{"{元,5}", "5", "元,"},
+	}
+	for _, prefix := range []string{"10 EUR ", "EUR10 "} {
+		for _, tt := range tests {
+			t.Run(prefix+tt.lot, func(t *testing.T) {
+				journal, errs := Parse("2024-01-01 x\n    a  " + prefix + tt.lot + "\n    b\n")
+				require.Empty(t, errs)
+				posting := journal.Transactions[0].Postings[0]
+				assert.Equal(t, "EUR", posting.Amount.Commodity.Symbol)
+				require.NotNil(t, posting.LotPrice)
+				require.NotNil(t, posting.LotPrice.Cost)
+				assert.Equal(t, tt.qty, posting.LotPrice.Cost.Quantity.String())
+				assert.Equal(t, tt.commodity, posting.LotPrice.Cost.Commodity.Symbol)
 			})
 		}
 	}
