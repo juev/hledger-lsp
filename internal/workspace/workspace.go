@@ -599,7 +599,7 @@ func (w *Workspace) applyDirtyLocked() {
 		}
 
 		if edit.removed {
-			for _, rootPath := range w.fileTree[path] {
+			for _, rootPath := range w.owningRootsLocked(path) {
 				if overlays[rootPath] == nil {
 					overlays[rootPath] = make(map[string]include.OverlayEntry)
 				}
@@ -630,7 +630,7 @@ func (w *Workspace) applyDirtyLocked() {
 		w.index.SetFileIndex(path, fileIndex)
 		w.updateIncludeEdgesLocked(path, oldIncludes, fileIndex.Includes)
 
-		for _, rootPath := range w.fileTree[path] {
+		for _, rootPath := range w.owningRootsLocked(path) {
 			if overlays[rootPath] == nil {
 				overlays[rootPath] = make(map[string]include.OverlayEntry)
 			}
@@ -751,6 +751,35 @@ func (w *Workspace) updateIncludeEdgesLocked(path string, oldIncludes, newInclud
 	for _, inc := range newIncludes {
 		w.reverseGraph[inc] = addString(w.reverseGraph[inc], path)
 	}
+}
+
+// owningRootsLocked returns the roots whose trees contain path. A file that
+// failed to load (deleted, unreadable) has lost its owners, yet the trees that
+// include it still need a rebuild when it comes back, so the roots are then
+// found through the files that include it. Caller must hold the lock.
+func (w *Workspace) owningRootsLocked(path string) []string {
+	if roots := w.fileTree[path]; len(roots) > 0 {
+		return roots
+	}
+	var roots []string
+	seen := map[string]bool{path: true}
+	queue := []string{path}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, parent := range w.reverseGraph[current] {
+			if seen[parent] {
+				continue
+			}
+			seen[parent] = true
+			if w.trees[parent] != nil {
+				roots = append(roots, parent)
+			}
+			queue = append(queue, parent)
+		}
+	}
+	sort.Strings(roots)
+	return roots
 }
 
 func (w *Workspace) isWorkspaceFileLocked(path string) bool {

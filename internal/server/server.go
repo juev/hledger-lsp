@@ -460,7 +460,9 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 			if data, err := os.ReadFile(path); err == nil {
 				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 				s.loader.InvalidateFile(path)
-			} else if os.IsNotExist(err) {
+			} else {
+				// A file that cannot be read, whether gone or inaccessible, is not
+				// in the tree any more, and its buffer must stop counting.
 				s.workspace.MarkFileRemoved(path)
 				s.loader.InvalidateFile(path)
 			}
