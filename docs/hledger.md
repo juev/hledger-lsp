@@ -463,8 +463,9 @@ comment: the transaction line, the posting line, comment lines below them and
 directive comments such as `account`. A `date:` or `date2:` tag written after
 prose dates the posting like any other, and hledger refuses its invalid value.
 
-A posting comment (on the posting line or a `;` line below a posting) differs
-in one detail: after a colon that names nothing, hledger skips the spaces and
+A posting comment (on the posting line or a `;` line below a posting, in a
+transaction, a periodic transaction or an auto posting rule) differs in one
+detail: after a colon that names nothing, hledger skips the spaces and
 one comma before the next name. So `; :,date:2024-01-19` dates a posting, while
 on a transaction the same text is the tag `,date`.
 

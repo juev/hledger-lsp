@@ -145,7 +145,8 @@ type Parser struct {
 	// to all of its postings.
 	postingComments []ast.Comment
 	// commentBelowPosting is set while the parser reads the lines below a
-	// posting of a transaction, where hledger reads a ; line as a posting comment.
+	// posting of a transaction, a periodic transaction or an auto posting rule,
+	// where hledger reads a ; line as a posting comment.
 	commentBelowPosting bool
 	// prevEnd is where the token before the current one ends, prevPos where it starts.
 	prevEnd Position
@@ -449,14 +450,19 @@ func (p *Parser) parsePeriodicTransaction() *ast.PeriodicTransaction {
 
 	// Parse postings
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
+		p.commentBelowPosting = len(ptx.Postings) > 0
 		posting := p.parsePosting()
 		if posting != nil {
 			ptx.Postings = append(ptx.Postings, *posting)
 		}
+		ptx.Comments = append(ptx.Comments, p.postingComments...)
+		p.postingComments = nil
 		if p.current.Type == TokenNewline {
 			p.advance()
 		}
 	}
+	p.commentBelowPosting = false
 
 	ptx.Range.End = toASTPosition(p.current.Pos)
 	return ptx
@@ -505,14 +511,19 @@ func (p *Parser) parseAutoPostingRule() *ast.AutoPostingRule {
 	p.inAutoPostingRule = true
 	defer func() { p.inAutoPostingRule = false }()
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
+		p.commentBelowPosting = len(rule.Postings) > 0
 		posting := p.parsePosting()
 		if posting != nil {
 			rule.Postings = append(rule.Postings, *posting)
 		}
+		rule.Comments = append(rule.Comments, p.postingComments...)
+		p.postingComments = nil
 		if p.current.Type == TokenNewline {
 			p.advance()
 		}
 	}
+	p.commentBelowPosting = false
 
 	rule.Range.End = toASTPosition(p.current.Pos)
 	return rule

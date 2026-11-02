@@ -67,7 +67,7 @@ func TestExtractCurrentTagName_AfterProse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractCurrentTagName(tt.line, lsputil.UTF16Len(tt.line)))
+			assert.Equal(t, tt.want, extractCurrentTagName(tt.line, lsputil.UTF16Len(tt.line), false))
 		})
 	}
 }
@@ -305,6 +305,166 @@ func TestSemanticTokens_PostingCommentSkipsACommaAfterAnEmptyName(t *testing.T) 
 			// An empty line ends the transaction, so the last comment is no
 			// posting's comment.
 			for i, want := range map[int]string{0: ",x:1", 1: ",x:1", 2: "x:1", 3: "x:1", 6: ",x:1"} {
+				line := lines[i]
+				assert.Equal(t, []uint32{uint32(lsputil.UTF16Len(line) - len(want))}, tagStarts[uint32(i)], "line %d", i)
+			}
+		})
+	}
+}
+
+// postingCompletionCases end with the cursor in a tag name written after a colon
+// that names nothing and a comma. hledger skips that comma in a posting comment
+// (the posting line or a ; line below a posting of a transaction, a periodic
+// transaction or an auto posting rule), so the name being written is word;
+// elsewhere the comma belongs to the name.
+var postingCompletionCases = []struct {
+	name    string
+	content string
+	word    string
+}{
+	{"posting line", "2024-01-16 t\n    expenses:food  $50  ; оплата :,кл", "кл"},
+	{"comment line below a posting", "2024-01-16 t\n    expenses:food  $50\n    ; 🍕 :　,кл", "кл"},
+	{"second comment line below a posting", "2024-01-16 t\n    expenses:food  $50\n    ; note\n    ; :,кл", "кл"},
+	{"comment line below a periodic posting", "~ monthly  ; заметка\n    expenses:food  $50\n    ; :,кл", "кл"},
+	{"comment line below an auto rule posting", "= food\n    expenses:tips  *0.1\n    ; 日本 :,кл", "кл"},
+	{"transaction header", "2024-01-16 t  ; :,кл", ",кл"},
+	{"comment line before the first posting", "2024-01-16 t\n    ; :,кл", ",кл"},
+	{"periodic header", "~ monthly  ; :,кл", ",кл"},
+	{"comment line after an empty line", "2024-01-16 t\n    expenses:food  $50\n\n    ; :,кл", ",кл"},
+	{"comment line under a commodity directive", "commodity X\n    format 1.00 X\n    ; :,кл", ",кл"},
+}
+
+func TestCompletion_TagNameInPostingComment_QueryAndRange(t *testing.T) {
+	for _, tc := range postingCompletionCases {
+		for _, le := range lineEndings {
+			t.Run(tc.name+"/"+le.name, func(t *testing.T) {
+				content := strings.ReplaceAll(tc.content, "\n", le.newline)
+				lines := strings.Split(tc.content, "\n")
+				last := lines[len(lines)-1]
+				end := uint32(lsputil.UTF16Len(last))
+				pos := protocol.Position{Line: uint32(len(lines) - 1), Character: end}
+
+				assert.Equal(t, ContextTagName, determineCompletionContext(content, pos))
+				assert.Equal(t, tc.word, extractQueryText(content, pos, ContextTagName))
+				r := calculateTextEditRange(content, pos, ContextTagName)
+				require.NotNil(t, r)
+				assert.Equal(t, uint32(lsputil.UTF16Len(last)-lsputil.UTF16Len(tc.word)), r.Start.Character)
+				assert.Equal(t, end, r.End.Character)
+			})
+		}
+	}
+}
+
+func TestCompletion_TagValueInPostingComment_QueryAndRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		tag     string
+	}{
+		{"comment line below a posting", "2024-01-16 t\n    expenses:food  $50\n    ; заметка :,клиент:Ив", "клиент"},
+		{"comment line below a periodic posting", "~ monthly\n    expenses:food  $50\n    ; :,клиент:Ив", "клиент"},
+		{"transaction header", "2024-01-16 t  ; заметка :,клиент:Ив", ",клиент"},
+	}
+	for _, tt := range tests {
+		for _, le := range lineEndings {
+			t.Run(tt.name+"/"+le.name, func(t *testing.T) {
+				content := strings.ReplaceAll(tt.content, "\n", le.newline)
+				lines := strings.Split(tt.content, "\n")
+				last := lines[len(lines)-1]
+				end := uint32(lsputil.UTF16Len(last))
+				pos := protocol.Position{Line: uint32(len(lines) - 1), Character: end}
+
+				assert.Equal(t, ContextTagValue, determineCompletionContext(content, pos))
+				posting := isPostingComment(strings.Split(content, "\n"), int(pos.Line))
+				assert.Equal(t, tt.tag, extractCurrentTagName(last, int(end), posting))
+				assert.Equal(t, "Ив", extractQueryText(content, pos, ContextTagValue))
+				r := calculateTextEditRange(content, pos, ContextTagValue)
+				require.NotNil(t, r)
+				assert.Equal(t, utf16Col(t, last, "Ив"), r.Start.Character)
+				assert.Equal(t, end, r.End.Character)
+			})
+		}
+	}
+}
+
+func TestCompletion_TagsInPostingCommentAfterAnEmptyName(t *testing.T) {
+	for _, le := range lineEndings {
+		t.Run(le.name, func(t *testing.T) {
+			lines := []string{
+				"2024-01-15 test",
+				"    expenses:food  $50  ; клиент:Иван Петров",
+				"    assets:cash",
+				"",
+				"2024-01-16 another",
+				"    expenses:food  $50",
+				"    ; оплата :,кли",
+				"    ; 🍕 :,клиент:",
+				"    assets:cash",
+			}
+			ts := newTestServer()
+			docURI := uri.URI("file:///posting-tags-completion.journal")
+			require.NoError(t, ts.openDocument(docURI, strings.Join(lines, le.newline)))
+
+			complete := func(line int) *protocol.CompletionList {
+				result, err := ts.Server.completion(context.Background(), &protocol.CompletionParams{
+					TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+						TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+						Position:     protocol.Position{Line: uint32(line), Character: uint32(lsputil.UTF16Len(lines[line]))},
+					},
+				})
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				return result
+			}
+			itemNamed := func(list *protocol.CompletionList, label string) *protocol.CompletionItem {
+				for i := range list.Items {
+					if list.Items[i].Label == label {
+						return &list.Items[i]
+					}
+				}
+				t.Fatalf("%q not offered, got %v", label, extractLabels(list.Items))
+				return nil
+			}
+
+			name := itemNamed(complete(6), "клиент")
+			require.NotNil(t, name.TextEdit)
+			assert.Equal(t, utf16Col(t, lines[6], "кли"), completionTextEdit(*name).Range.Start.Character,
+				"the edit replaces only the name, not the comma hledger skips")
+
+			value := itemNamed(complete(7), "Иван Петров")
+			require.NotNil(t, value.TextEdit)
+			assert.Equal(t, uint32(lsputil.UTF16Len(lines[7])), completionTextEdit(*value).Range.Start.Character)
+		})
+	}
+}
+
+func TestSemanticTokens_PeriodicAndAutoRulePostingComments(t *testing.T) {
+	for _, le := range lineEndings {
+		t.Run(le.name, func(t *testing.T) {
+			lines := []string{
+				"~ monthly  ; :,x:1",
+				"    ; :,x:1",
+				"    expenses:food  $50  ; :,x:1",
+				"    ; заметка :,x:1",
+				"    assets:cash",
+				"",
+				"= food  ; :,x:1",
+				"    ; :,x:1",
+				"    expenses:tips  *0.1  ; :,x:1",
+				"    ; 🍕 :,x:1",
+				"    assets:cash  *-0.1",
+			}
+			ts := newTestServer()
+			docURI := uri.URI("file:///semantic-periodic-tags.journal")
+			require.NoError(t, ts.openDocument(docURI, strings.Join(lines, le.newline)))
+
+			tagStarts := map[uint32][]uint32{}
+			for _, tok := range semanticTokensForDocument(t, ts.Server, docURI) {
+				if tok.tokenType == TokenTypeTag {
+					tagStarts[tok.line] = append(tagStarts[tok.line], tok.col)
+				}
+			}
+			for i, want := range map[int]string{0: ",x:1", 1: ",x:1", 2: "x:1", 3: "x:1", 6: ",x:1", 7: ",x:1", 8: "x:1", 9: "x:1"} {
 				line := lines[i]
 				assert.Equal(t, []uint32{uint32(lsputil.UTF16Len(line) - len(want))}, tagStarts[uint32(i)], "line %d", i)
 			}

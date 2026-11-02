@@ -200,6 +200,8 @@ var commentContextCases = []struct {
 	{"date tag after an empty name and a comma", ":,date:2024-01-19", [][2]string{{",date", "2024-01-19"}}, [][2]string{{"date", "2024-01-19"}}},
 	{"word after an empty name", ": y,x:1", [][2]string{{"y,x", "1"}}, [][2]string{{"y,x", "1"}}},
 	{"comma after an empty value", "foo:,,bar:1", [][2]string{{"foo", ""}, {",bar", "1"}}, [][2]string{{"foo", ""}, {",bar", "1"}}},
+	{"Cyrillic prose before an empty name and a comma", "заметка :,тег:значение с пробелами", [][2]string{{",тег", "значение с пробелами"}}, [][2]string{{"тег", "значение с пробелами"}}},
+	{"emoji prose before an empty name, a wide space and a comma", "🍕 :\u3000,ключ:日本", [][2]string{{",ключ", "日本"}}, [][2]string{{"ключ", "日本"}}},
 }
 
 func TestScanCommentTags_PostingCommentSkipsACommaAfterAnEmptyName(t *testing.T) {
@@ -253,6 +255,107 @@ func TestOracle_PostingCommentTagsMatchHledger(t *testing.T) {
 			txTags, postingTags := hledgerTags(t, hledgerPath, commentContextJournal(tc.comment))
 			assert.Equal(t, append(append([][2]string{}, tc.transaction...), tc.transaction...), txTags)
 			assert.Equal(t, append(append([][2]string{}, tc.posting...), tc.posting...), postingTags)
+		})
+	}
+}
+
+// periodicJournal and autoRuleJournal put the comment on the header, on a
+// comment line before the first posting, on a posting line and on a ; line below
+// that posting of a periodic transaction and of an auto posting rule. hledger
+// reads the last two as posting comments there too.
+func periodicJournal(comment string) string {
+	return "~ monthly from 2024-01 to 2024-02  ; " + comment + "\n    ; " + comment + "\n    c  4 GBP  ; " + comment + "\n    ; " + comment + "\n    b\n"
+}
+
+func autoRuleJournal(comment string) string {
+	return "= c  ; " + comment + "\n    ; " + comment + "\n    d  *2  ; " + comment + "\n    ; " + comment + "\n    e  *-2\n\n2024-01-01 t\n    c  4 GBP\n    b\n"
+}
+
+func tagPairsOf(tags []ast.Tag) [][2]string {
+	var out [][2]string
+	for _, tag := range tags {
+		out = append(out, [2]string{tag.Name, tag.Value})
+	}
+	return out
+}
+
+func TestParser_PeriodicAndAutoRuleCommentsBelowAPostingArePostingComments(t *testing.T) {
+	for _, tc := range commentContextCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := Parse(periodicJournal(tc.comment))
+			require.Empty(t, errs)
+			require.Len(t, journal.PeriodicTransactions, 1)
+			ptx := journal.PeriodicTransactions[0]
+			require.Len(t, ptx.Comments, 3, "periodic transaction comments")
+			assert.Equal(t, tc.transaction, tagPairsOf(ptx.Comments[0].Tags), "periodic header")
+			assert.Equal(t, tc.transaction, tagPairsOf(ptx.Comments[1].Tags), "periodic comment line before the postings")
+			assert.Equal(t, tc.posting, tagPairsOf(ptx.Postings[0].Tags), "periodic posting line")
+			assert.Equal(t, tc.posting, tagPairsOf(ptx.Comments[2].Tags), "periodic comment line below the posting")
+
+			journal, errs = Parse(autoRuleJournal(tc.comment))
+			require.Empty(t, errs)
+			require.Len(t, journal.AutoPostingRules, 1)
+			rule := journal.AutoPostingRules[0]
+			require.Len(t, rule.Comments, 3, "auto rule comments")
+			assert.Equal(t, tc.transaction, tagPairsOf(rule.Comments[0].Tags), "auto rule header")
+			assert.Equal(t, tc.transaction, tagPairsOf(rule.Comments[1].Tags), "auto rule comment line before the postings")
+			assert.Equal(t, tc.posting, tagPairsOf(rule.Postings[0].Tags), "auto rule posting line")
+			assert.Equal(t, tc.posting, tagPairsOf(rule.Comments[2].Tags), "auto rule comment line below the posting")
+		})
+	}
+}
+
+// hledgerGenerated returns the tags hledger gives the first transaction it prints
+// and its posting to account, leaving out the tags hledger adds itself (names
+// starting with "_").
+func hledgerGenerated(t *testing.T, hledgerPath, input, account string, args ...string) (txTags, postingTags [][2]string) {
+	t.Helper()
+	cmd := exec.Command(hledgerPath, append([]string{"-f", "-", "print", "-O", "json"}, args...)...)
+	cmd.Stdin = strings.NewReader(input)
+	output, err := cmd.Output()
+	require.NoError(t, err, "hledger refused:\n%s", input)
+
+	var transactions []struct {
+		Tags     [][2]string `json:"ttags"`
+		Postings []struct {
+			Account string      `json:"paccount"`
+			Tags    [][2]string `json:"ptags"`
+		} `json:"tpostings"`
+	}
+	require.NoError(t, json.Unmarshal(output, &transactions))
+	require.NotEmpty(t, transactions)
+	own := func(tags [][2]string) [][2]string {
+		var out [][2]string
+		for _, tag := range tags {
+			if !strings.HasPrefix(tag[0], "_") {
+				out = append(out, tag)
+			}
+		}
+		return out
+	}
+	for _, posting := range transactions[0].Postings {
+		if posting.Account == account {
+			return own(transactions[0].Tags), own(posting.Tags)
+		}
+	}
+	t.Fatalf("no generated posting in:\n%s", output)
+	return nil, nil
+}
+
+func TestOracle_PeriodicAndAutoRuleCommentTagsMatchHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	for _, tc := range commentContextCases {
+		t.Run(tc.name, func(t *testing.T) {
+			twice := func(tags [][2]string) [][2]string {
+				return append(append([][2]string{}, tags...), tags...)
+			}
+			txTags, postingTags := hledgerGenerated(t, hledgerPath, periodicJournal(tc.comment), "c", "--forecast=2024-01..2024-02")
+			assert.Equal(t, twice(tc.transaction), txTags, "periodic transaction")
+			assert.Equal(t, twice(tc.posting), postingTags, "periodic posting")
+
+			_, postingTags = hledgerGenerated(t, hledgerPath, autoRuleJournal(tc.comment), "d", "--auto")
+			assert.Equal(t, twice(tc.posting), postingTags, "auto posting")
 		})
 	}
 }

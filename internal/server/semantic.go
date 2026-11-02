@@ -366,10 +366,11 @@ func tokenizeForSemantics(content string) []semanticToken {
 	isTransactionHeader := false
 	inCommentBlock := false
 	pendingNegative := false
-	// inTransaction is set from a transaction's date line to the next line that
-	// starts at the first column or is empty, as the parser ends a transaction
-	// there; belowPosting once a posting of it has been read,
-	// so that a ; comment on or below a posting line is read as a posting comment.
+	// inTransaction is set from the first line of a transaction, a periodic
+	// transaction or an auto posting rule to the next line that starts at the
+	// first column or is empty, as the parser ends the block there; belowPosting
+	// once a posting of it has been read, so that a ; comment on or below a
+	// posting line is read as a posting comment.
 	inTransaction := false
 	belowPosting := false
 
@@ -445,7 +446,7 @@ func tokenizeForSemantics(content string) []semanticToken {
 			inSubdirective = false
 			pendingNegative = false
 			if tok.Type != parser.TokenIndent {
-				inTransaction = tok.Type == parser.TokenDate
+				inTransaction = tok.Type == parser.TokenDate || tok.Type == parser.TokenTilde || tok.Type == parser.TokenAutoRule
 				belowPosting = false
 			}
 			if tok.Type == parser.TokenDirective {

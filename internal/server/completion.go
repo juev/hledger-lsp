@@ -330,7 +330,7 @@ func determineCompletionContext(content string, pos protocol.Position) Completio
 
 	line := lines[pos.Line]
 
-	if tagCtx := determineTagContext(line, pos); tagCtx != ContextUnknown {
+	if tagCtx := determineTagContext(line, pos, isPostingComment(lines, int(pos.Line))); tagCtx != ContextUnknown {
 		return tagCtx
 	}
 
@@ -644,14 +644,14 @@ func parseCommentCursor(line string, bytePos int) (commentCursorInfo, bool) {
 	}, true
 }
 
-func determineTagContext(line string, pos protocol.Position) CompletionContextType {
+func determineTagContext(line string, pos protocol.Position, posting bool) CompletionContextType {
 	bytePos := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
 	info, ok := parseCommentCursor(line, bytePos)
 	if !ok {
 		return ContextUnknown
 	}
 
-	if readTagCursor(info.beforeCursor).inValue {
+	if readTagCursor(info.beforeCursor, posting).inValue {
 		return ContextTagValue
 	}
 	return ContextTagName
@@ -666,12 +666,17 @@ type tagCursor struct {
 	start   int
 }
 
-// readTagCursor scans the comment text before the cursor with a colon appended.
-// When that colon ends a tag name, the cursor is in the name; when it lands in
-// the value of an earlier tag that no comma has closed, the cursor is in that
-// value; otherwise a new name starts at the cursor.
-func readTagCursor(beforeCursor string) tagCursor {
-	tags := parser.ScanCommentTags(beforeCursor + ":")
+// readTagCursor scans the comment text before the cursor with a colon appended,
+// as a posting comment when posting is set. When that colon ends a tag name, the
+// cursor is in the name; when it lands in the value of an earlier tag that no
+// comma has closed, the cursor is in that value; otherwise a new name starts at
+// the cursor.
+func readTagCursor(beforeCursor string, posting bool) tagCursor {
+	scan := parser.ScanCommentTags
+	if posting {
+		scan = parser.ScanPostingCommentTags
+	}
+	tags := scan(beforeCursor + ":")
 	if len(tags) == 0 {
 		return tagCursor{start: len(beforeCursor)}
 	}
@@ -685,6 +690,46 @@ func readTagCursor(beforeCursor string) tagCursor {
 	default:
 		return tagCursor{start: len(beforeCursor)}
 	}
+}
+
+// isPostingComment reports whether hledger reads the comment on line n as a
+// posting comment: the line is a posting, or a ; line below a posting, of a
+// transaction, a periodic transaction or an auto posting rule. Like the parser,
+// it takes an empty line or a line at the first column as the end of the block.
+func isPostingComment(lines []string, n int) bool {
+	if n < 0 || n >= len(lines) {
+		return false
+	}
+	// indented returns the line without its indent, and whether it had one.
+	indented := func(line string) (string, bool) {
+		line = strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimLeft(line, " \t")
+		return trimmed, trimmed != line
+	}
+	isPosting := func(trimmed string) bool {
+		return trimmed != "" && !strings.ContainsRune(";#*", rune(trimmed[0]))
+	}
+
+	trimmed, ok := indented(lines[n])
+	if !ok || trimmed == "" {
+		return false
+	}
+	below := isPosting(trimmed)
+	if !below && trimmed[0] != ';' {
+		return false
+	}
+	for i := n - 1; i >= 0; i-- {
+		line := strings.TrimSuffix(lines[i], "\r")
+		if line == "" {
+			return false
+		}
+		trimmed, ok := indented(line)
+		if !ok {
+			return below && (line[0] >= '0' && line[0] <= '9' || line[0] == '~' || line[0] == '=')
+		}
+		below = below || isPosting(trimmed)
+	}
+	return false
 }
 
 func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int, settings completionSettings) []protocol.CompletionItem {
@@ -759,7 +804,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 		lines := strings.Split(content, "\n")
 		if int(pos.Line) < len(lines) {
 			line := lines[pos.Line]
-			tagName := extractCurrentTagName(line, int(pos.Character))
+			tagName := extractCurrentTagName(line, int(pos.Character), isPostingComment(lines, int(pos.Line)))
 			if values, ok := result.TagValues[tagName]; ok {
 				for _, value := range values {
 					items = append(items, protocol.CompletionItem{
@@ -931,14 +976,14 @@ func getAccountsForPrefix(accounts *analyzer.AccountIndex, prefix string) []stri
 	return accounts.All
 }
 
-func extractCurrentTagName(line string, pos int) string {
+func extractCurrentTagName(line string, pos int, posting bool) string {
 	bytePos := lsputil.UTF16OffsetToByteOffset(line, pos)
 	info, ok := parseCommentCursor(line, bytePos)
 	if !ok {
 		return ""
 	}
 
-	return readTagCursor(info.beforeCursor).name
+	return readTagCursor(info.beforeCursor, posting).name
 }
 
 // generateDateCompletionItems creates date suggestions with today/yesterday/tomorrow at top.
@@ -1190,13 +1235,13 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 		if !ok {
 			return nil
 		}
-		startByte = info.semicolonIdx + 1 + readTagCursor(info.beforeCursor).start
+		startByte = info.semicolonIdx + 1 + readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line))).start
 	case ContextTagValue:
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return nil
 		}
-		cursor := readTagCursor(info.beforeCursor)
+		cursor := readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line)))
 		if !cursor.inValue {
 			return nil
 		}
@@ -1421,14 +1466,14 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		if !ok {
 			return ""
 		}
-		return info.beforeCursor[readTagCursor(info.beforeCursor).start:]
+		return info.beforeCursor[readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line))).start:]
 
 	case ContextTagValue:
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return ""
 		}
-		cursor := readTagCursor(info.beforeCursor)
+		cursor := readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line)))
 		if !cursor.inValue {
 			return ""
 		}
