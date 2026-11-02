@@ -119,9 +119,84 @@ func (b accountBalances) heldCommodities(account string, inclusive bool) map[str
 	return held
 }
 
+// pricedKey identifies an amount that was written with a cost: the commodity it
+// is denominated in and the commodity of its cost.
+type pricedKey struct {
+	commodity     string
+	costCommodity string
+}
+
+// pricedAmount is what an account holds under one pricedKey: the quantity, and
+// what that quantity cost in the cost commodity.
+type pricedAmount struct {
+	quantity decimal.Decimal
+	value    decimal.Decimal
+}
+
+// pricedBalances holds, per account, the part of its balance that keeps its
+// cost. hledger drops the cost of postings in transactions without balance
+// assignments before the running balance sees them, but keeps it for the
+// postings of transactions with assignments. An assignment amount is the asserted
+// balance minus the running balance with those costs intact, so the amount it
+// infers carries them too.
+type pricedBalances map[string]map[pricedKey]pricedAmount
+
+func (b pricedBalances) add(account string, key pricedKey, quantity, value decimal.Decimal) {
+	if account == "" {
+		return
+	}
+	byKey, ok := b[account]
+	if !ok {
+		byKey = make(map[pricedKey]pricedAmount)
+		b[account] = byKey
+	}
+	held := byKey[key]
+	byKey[key] = pricedAmount{quantity: held.quantity.Add(quantity), value: held.value.Add(value)}
+}
+
+// pricedScope selects which accounts an assignment reads priced balances from.
+type pricedScope int
+
+const (
+	scopeOwn pricedScope = iota
+	scopeSubaccounts
+	scopeSubtree
+)
+
+// collect sums the priced balances of the accounts in scope, per key and for one
+// commodity.
+func (b pricedBalances) collect(account, commodity string, scope pricedScope) map[pricedKey]pricedAmount {
+	collected := make(map[pricedKey]pricedAmount)
+	prefix := account + ":"
+	for name, byKey := range b {
+		own := name == account
+		sub := strings.HasPrefix(name, prefix)
+		switch {
+		case scope == scopeOwn && !own, scope == scopeSubaccounts && !sub, scope == scopeSubtree && !own && !sub:
+			continue
+		}
+		for key, held := range byKey {
+			if key.commodity != commodity {
+				continue
+			}
+			sum := collected[key]
+			collected[key] = pricedAmount{quantity: sum.quantity.Add(held.quantity), value: sum.value.Add(held.value)}
+		}
+	}
+	return collected
+}
+
+// pricedPart is the portion of an inferred amount that carries a cost.
+type pricedPart struct {
+	pricedKey
+	quantity decimal.Decimal
+	value    decimal.Decimal
+}
+
 // journalEvaluator carries the mutable state of one journal evaluation.
 type journalEvaluator struct {
 	balances        accountBalances
+	priced          pricedBalances
 	tolerance       decimal.Decimal
 	events          []postingBalanceEvent
 	trackAssertions bool
@@ -139,6 +214,9 @@ type journalEvaluator struct {
 type postingEffective struct {
 	native    map[string]decimal.Decimal
 	precision int32
+	// priced is the part of an assigned amount that carries a cost, already
+	// counted in native.
+	priced []pricedPart
 }
 
 // postingBalanceEvent is one step of the date-ordered replay: a single posting
@@ -191,6 +269,7 @@ func CheckJournalBalance(resolved *include.ResolvedJournal, userTolerance decima
 
 	evaluator := &journalEvaluator{
 		balances:        accountBalances{},
+		priced:          pricedBalances{},
 		tolerance:       userTolerance,
 		trackAssertions: trackAssertions,
 		partialContext:  opts.PartialContext,
@@ -215,7 +294,7 @@ func (e *journalEvaluator) run(sourced []include.SourcedTransaction) []SourcedDi
 			e.deferAssignments(tx, path, index)
 			continue
 		}
-		diagnostics = append(diagnostics, e.evaluate(tx, path, func(postingIndex int, contribution map[string]decimal.Decimal) {
+		diagnostics = append(diagnostics, e.evaluate(tx, path, false, func(postingIndex int, contribution map[string]decimal.Decimal) {
 			e.recordEvent(tx, path, index, postingIndex, contribution)
 		})...)
 	}
@@ -253,8 +332,10 @@ func HasCheckedBalanceAssignment(tx *ast.Transaction) bool {
 // assigned amounts must see the postings before them: a posting dated before its
 // transaction reaches an assignment written above it, and one dated after does
 // not reach an assignment written below it. Assignments read e.balances, so a
-// transaction that has them may only be evaluated from replay.
-func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(postingIndex int, contribution map[string]decimal.Decimal)) []SourcedDiagnostic {
+// transaction that has them may only be evaluated from replay. Replay passes
+// carryCosts for those transactions, whose postings keep their cost in the
+// running balance.
+func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts bool, emit func(postingIndex int, contribution map[string]decimal.Decimal)) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
 	var diagnostics []SourcedDiagnostic
 
@@ -274,10 +355,18 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(
 				native:    map[string]decimal.Decimal{p.Amount.Commodity.Symbol: p.Amount.Quantity},
 				precision: decimalPrecision(p.Amount.Quantity),
 			}
+			if costCommodity, value, ok := balanceSumContribution(*p); ok && carryCosts && p.Cost != nil {
+				e.priced.add(p.Account.GetResolvedName(), pricedKey{p.Amount.Commodity.Symbol, costCommodity}, p.Amount.Quantity, value)
+			}
 		case p.BalanceAssertion != nil:
+			native, priced := e.assignedContribution(p)
 			effective[i] = postingEffective{
-				native:    e.assignedContribution(p),
+				native:    native,
+				priced:    priced,
 				precision: decimalPrecision(p.BalanceAssertion.Amount.Quantity),
+			}
+			for _, part := range priced {
+				e.priced.add(p.Account.GetResolvedName(), part.pricedKey, part.quantity, part.value)
 			}
 		default:
 			if group, ok := groupOf(groups, i); ok {
@@ -334,14 +423,21 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, emit func(
 // posting: what moves the account to the asserted balance. A strict assignment
 // also replaces the account's other commodities, leaving nothing in them, and an
 // inclusive one offsets what subaccounts hold in them, so the amount can span
-// several commodities.
-func (e *journalEvaluator) assignedContribution(p *ast.Posting) map[string]decimal.Decimal {
+// several commodities. The second result is the part of that amount that carries
+// a cost, because the balance it replaces held amounts that kept theirs.
+func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]decimal.Decimal, []pricedPart) {
 	assertion := p.BalanceAssertion
 	account := p.Account.GetResolvedName()
 	commodity := assertion.Amount.Commodity.Symbol
 
 	prior := e.balances.amount(account, commodity, assertion.IsInclusive)
 	contribution := map[string]decimal.Decimal{commodity: assertion.Amount.Quantity.Sub(prior)}
+
+	scope := scopeOwn
+	if assertion.IsInclusive {
+		scope = scopeSubtree
+	}
+	priced := e.pricedParts(account, commodity, scope)
 
 	for other := range e.balances.heldCommodities(account, assertion.IsInclusive) {
 		if other == commodity {
@@ -351,14 +447,38 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) map[string]decim
 		subaccounts := e.balances.amount(account, other, assertion.IsInclusive).Sub(own)
 
 		target := own.Sub(subaccounts)
-		if assertion.IsStrict {
+		otherScope := scopeSubaccounts
+		switch {
+		case assertion.IsStrict:
 			target = subaccounts.Neg()
+			otherScope = scopeOwn
+			if assertion.IsInclusive {
+				otherScope = scopeSubtree
+			}
+		case !assertion.IsInclusive:
+			otherScope = scopeOwn
 		}
 		if change := target.Sub(own); !change.IsZero() {
 			contribution[other] = change
+			priced = append(priced, e.pricedParts(account, other, otherScope)...)
 		}
 	}
-	return contribution
+	return contribution, priced
+}
+
+// pricedParts returns the negation of the priced balances an assignment replaces
+// in one commodity, in a stable order.
+func (e *journalEvaluator) pricedParts(account, commodity string, scope pricedScope) []pricedPart {
+	held := e.priced.collect(account, commodity, scope)
+	parts := make([]pricedPart, 0, len(held))
+	for key, amount := range held {
+		if amount.quantity.IsZero() && amount.value.IsZero() {
+			continue
+		}
+		parts = append(parts, pricedPart{pricedKey: key, quantity: amount.quantity.Neg(), value: amount.value.Neg()})
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].costCommodity < parts[j].costCommodity })
+	return parts
 }
 
 // deferAssignments schedules a transaction with balance assignments for replay
@@ -415,7 +535,7 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 			}
 		}
 		if event.assignment {
-			balanceDiagnostics = append(balanceDiagnostics, e.evaluate(event.tx, event.path, step)...)
+			balanceDiagnostics = append(balanceDiagnostics, e.evaluate(event.tx, event.path, true, step)...)
 			continue
 		}
 		step(event.postingIndex, event.contribution)
@@ -729,7 +849,8 @@ func groupContains(group []int, idx int) bool {
 }
 
 // appendEffectivePosting appends a posting for the transaction-level balance
-// check. An inferred amount can be mixed, so it becomes one posting per commodity.
+// check. An inferred amount can be mixed, so it becomes one posting per commodity,
+// and the part of it that carries a cost becomes a posting with that cost.
 func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effective postingEffective) []ast.Posting {
 	if posting.Amount != nil {
 		return append(postings, posting)
@@ -742,10 +863,42 @@ func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effecti
 	sort.Strings(commodities)
 
 	for _, commodity := range commodities {
-		posting.Amount = &ast.Amount{Quantity: effective.native[commodity], Commodity: ast.Commodity{Symbol: commodity}}
-		postings = append(postings, posting)
+		plain := effective.native[commodity]
+		var parts []pricedPart
+		for _, part := range effective.priced {
+			if part.commodity == commodity {
+				plain = plain.Sub(part.quantity)
+				parts = append(parts, part)
+			}
+		}
+
+		if !plain.IsZero() || len(parts) == 0 {
+			posting.Amount = &ast.Amount{Quantity: plain, Commodity: ast.Commodity{Symbol: commodity}}
+			posting.Cost = nil
+			postings = append(postings, posting)
+		}
+		for _, part := range parts {
+			postings = append(postings, pricedPosting(posting, part))
+		}
 	}
 	return postings
+}
+
+// pricedPosting renders a priced part as a posting whose total cost is the part's
+// value. A part whose quantity is zero or whose value has the opposite sign cannot
+// be written as a total cost, so it contributes its value in the cost commodity.
+func pricedPosting(posting ast.Posting, part pricedPart) ast.Posting {
+	if part.quantity.IsZero() || part.quantity.Sign() != part.value.Sign() {
+		posting.Amount = &ast.Amount{Quantity: part.value, Commodity: ast.Commodity{Symbol: part.costCommodity}}
+		posting.Cost = nil
+		return posting
+	}
+	posting.Amount = &ast.Amount{Quantity: part.quantity, Commodity: ast.Commodity{Symbol: part.commodity}}
+	posting.Cost = &ast.Cost{
+		Amount:  ast.Amount{Quantity: part.value.Abs(), Commodity: ast.Commodity{Symbol: part.costCommodity}},
+		IsTotal: true,
+	}
+	return posting
 }
 
 func postingRange(p *ast.Posting) ast.Range {

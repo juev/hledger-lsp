@@ -1313,3 +1313,24 @@ func TestCheckJournalBalance_DatedAssignmentStaysAtTransactionDate(t *testing.T)
 
 	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
 }
+
+func TestCheckJournalBalance_AssertionSeesCostKeptByAssignment(t *testing.T) {
+	// The elided posting beside `b = 13 EUR` is -13 EUR, -58 USD because the
+	// assignment carries the cost kept by the earlier assignment transaction.
+	// hledger 1.52 accepts the journal.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+
+2024-01-17 check
+    x  0 USD = -58 USD
+    x  0 EUR = -13 EUR
+    y  0 USD
+`})
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}

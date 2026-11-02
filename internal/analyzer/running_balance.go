@@ -34,7 +34,7 @@ type PostingRef struct {
 // A written or inferred zero is a real amount the register lists.
 func RunningBalances(sourced []include.SourcedTransaction, id include.OccurrenceID) map[PostingRef]map[string]decimal.Decimal {
 	var entries []registerEntry
-	evaluator := &journalEvaluator{balances: accountBalances{}, trackAssertions: true}
+	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
 	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal) {
 		tx := &sourced[sourceOrder].Transaction
 		entries = append(entries, registerEntry{registerDate(tx, &tx.Postings[postingIndex]), sourceOrder, postingIndex, contribution})
