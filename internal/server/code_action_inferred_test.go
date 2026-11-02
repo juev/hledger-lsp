@@ -2,6 +2,10 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -136,4 +140,108 @@ func TestCodeAction_InsertInferredAmount_IndependentOfInlayHintSettings(t *testi
 	require.NoError(t, ts.openDocument(docURI, content))
 
 	assert.Len(t, inferredAmountActions(t, ts, 2), 1)
+}
+
+// inferredLayout is a journal whose directives reach the transaction under
+// test in a particular way, together with the amount the code action has to
+// write for it. Every want is what hledger itself reads as balancing the cost.
+type inferredLayout struct {
+	name string
+	// parent holds the directives and includes tx.journal; "" writes them into
+	// the transaction file itself.
+	parent string
+	// directives are written above the transaction in the transaction file.
+	directives string
+	// postings are the transaction postings, the one to be inferred first.
+	postings string
+	want     string
+	quantity string
+}
+
+func inferredLayouts() []inferredLayout {
+	const eurToUsd = "    a  1 EUR @@ %s\n"
+	cost := func(amount string) string { return "    b\n" + fmt.Sprintf(eurToUsd, amount) }
+	return []inferredLayout{
+		{name: "decimal-mark directive in the file, dot commodity format",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: cost("15,00 USD"), want: "-15,00 USD", quantity: "-15"},
+		{name: "decimal-mark directive, thousands in the cost",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: cost("1.500,50 USD"), want: "-1.500,50 USD", quantity: "-1500.5"},
+		{name: "decimal-mark directive in the parent file",
+			parent: "decimal-mark ,\ncommodity 1,000.00 USD\ninclude tx.journal\n", postings: cost("15,00 USD"), want: "-15,00 USD", quantity: "-15"},
+		{name: "decimal-mark dot with comma commodity format",
+			directives: "decimal-mark .\ncommodity 1.000,00 USD\n", postings: cost("15.00 USD"), want: "-15.00 USD", quantity: "-15"},
+		{name: "comma commodity format without directive",
+			directives: "commodity 1.000,00 USD\n", postings: cost("15,00 USD"), want: "-15,00 USD", quantity: "-15"},
+		{name: "D directive with comma format",
+			directives: "D 1.000,00 USD\n", postings: cost("15,00 USD"), want: "-15,00 USD", quantity: "-15"},
+		{name: "no directive, dot",
+			postings: cost("15.50 USD"), want: "-15.50 USD", quantity: "-15.5"},
+		{name: "no directive, comma cost keeps the default mark",
+			postings: cost("15,50 USD"), want: "-15.50 USD", quantity: "-15.5"},
+		{name: "same commodity on another posting under decimal-mark",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: "    b\n    a  10,50 USD\n    c  4,50 USD\n", want: "-15,00 USD", quantity: "-15"},
+		{name: "unit cost under decimal-mark",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: "    b\n    a  10 EUR @ 1,50 USD\n", want: "-15,00 USD", quantity: "-15"},
+		{name: "bare amounts under a D directive with comma mark",
+			directives: "D 1.000,00 USD\n", postings: "    b\n    a  10,50\n    c  4,50\n", want: "-15,00", quantity: "-15"},
+		{name: "Cyrillic account names",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: "    расходы:еда\n    счёт  1 EUR @@ 15,00 USD\n", want: "-15,00 USD", quantity: "-15"},
+		{name: "CJK account names",
+			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: "    支出:食品\n    账户  1 EUR @@ 15,00 USD\n", want: "-15,00 USD", quantity: "-15"},
+	}
+}
+
+// applyInferredAmount opens the layout, asks for the inferred-amount action on
+// the first posting line and returns the transaction file after applying it,
+// together with the root journal that hledger has to read.
+func applyInferredAmount(t *testing.T, layout inferredLayout, crlf bool) (root, applied string) {
+	t.Helper()
+	tx := layout.directives + "2024-01-01 x\n" + layout.postings
+	main := "include tx.journal\n"
+	if layout.parent != "" {
+		main = layout.parent
+	}
+
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": main, "tx.journal": tx})
+	txPath := filepath.Join(dir, "tx.journal")
+
+	text := tx
+	if crlf {
+		text = strings.ReplaceAll(tx, "\n", "\r\n")
+	}
+	ts, docURI := formatServer(t, dir, txPath, text)
+	ts.cliClient = nil
+	ts.clientCapabilities.supportsCodeActionLiterals = true
+
+	line := uint32(strings.Count(layout.directives, "\n") + 1)
+	entries, err := ts.CodeAction(context.Background(), &protocol.CodeActionParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        protocol.Range{Start: protocol.Position{Line: line}, End: protocol.Position{Line: line}},
+	})
+	require.NoError(t, err)
+	var edits []protocol.TextEdit
+	for _, action := range codeActionEntries(entries) {
+		if action.Kind != nil && *action.Kind == insertInferredAmountKind {
+			edits = append(edits, action.Edit.Changes[docURI]...)
+		}
+	}
+	require.Len(t, edits, 1, "one inferred-amount edit")
+
+	doc, ok := ts.GetDocument(docURI)
+	require.True(t, ok)
+	applied = applyTextEdits(doc, edits)
+	require.NoError(t, os.WriteFile(txPath, []byte(applied), 0o644))
+	return filepath.Join(dir, "main.journal"), applied
+}
+
+func TestCodeAction_InsertInferredAmount_UsesDecimalMarkInForce(t *testing.T) {
+	for _, layout := range inferredLayouts() {
+		for _, crlf := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s crlf=%v", layout.name, crlf), func(t *testing.T) {
+				_, applied := applyInferredAmount(t, layout, crlf)
+				assert.Contains(t, applied, "  "+layout.want+"\n")
+			})
+		}
+	}
 }
