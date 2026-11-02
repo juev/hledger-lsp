@@ -656,11 +656,6 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 			s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
 		}
 
-		if err.Kind == include.ErrorParseError && (err.SourcePath == "" || err.SourcePath == path) {
-			// Already reported by the per-buffer analysis of this document.
-			continue
-		}
-
 		target := docURI
 		if err.SourcePath != "" && err.SourcePath != path {
 			target = pathToURI(err.SourcePath)
@@ -669,6 +664,14 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 		diagnostic := loadErrorDiagnostic(err)
 		if mapper := s.mapperFor(target); mapper != nil {
 			diagnostic.Range = astRangeToLSP(mapper, err.Range)
+		}
+
+		// The per-buffer analysis reads this document under every include
+		// context, so it normally reports the document's own syntax errors
+		// already. One it does not report (a context it did not read) still
+		// belongs here: dropping it would hide the error of an occurrence.
+		if err.Kind == include.ErrorParseError && target == docURI && reportsParseError(byURI[docURI], diagnostic) {
+			continue
 		}
 		byURI[target] = append(byURI[target], diagnostic)
 	}
@@ -682,6 +685,19 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 	}
 }
 
+// reportsParseError reports whether diagnostics already hold the syntax error,
+// whether or not the per-buffer analysis qualified its message with the include
+// it applies to.
+func reportsParseError(diagnostics []protocol.Diagnostic, loaded protocol.Diagnostic) bool {
+	message := fmt.Sprint(loaded.Message)
+	for _, d := range diagnostics {
+		if d.Range == loaded.Range && strings.HasPrefix(fmt.Sprint(d.Message), message) {
+			return true
+		}
+	}
+	return false
+}
+
 // analyze returns every per-buffer diagnostic, including the balance codes the
 // journal-level pass also produces. Handlers that only need a buffer's own view
 // (code actions, semantic tokens) use it directly.
@@ -693,7 +709,7 @@ func (s *Server) analyze(docURI uri.URI, path, content string) []protocol.Diagno
 // is false the balance and assertion codes are skipped: they belong to
 // CheckJournalBalance, which sees the whole include tree in date order.
 func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string, includeJournalBalance bool) []protocol.Diagnostic {
-	_, parseErrs := s.cachedJournal(docURI, content)
+	readings := s.occurrenceReadings(docURI, content)
 
 	// Analysis runs on every keystroke, and indexing the document costs a pass
 	// over it, so pay for the mapper only when there is a range to convert.
@@ -705,8 +721,35 @@ func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string,
 		return mapper
 	}
 
-	diagnostics := make([]protocol.Diagnostic, 0, len(parseErrs))
-	for _, err := range parseErrs {
+	primaryExternal := analyzer.ExternalDeclarations{}
+	if s.workspace != nil {
+		primaryExternal.Accounts = s.workspace.GetDeclaredAccountsForFile(path)
+		primaryExternal.Commodities = s.workspace.GetDeclaredCommoditiesForFile(path)
+	}
+
+	perReading := make([][]protocol.Diagnostic, len(readings))
+	for index := range readings {
+		reading := &readings[index]
+		external := primaryExternal
+		if reading.tree != nil && reading.tree != readings[0].tree {
+			external = declarationsOf(reading.tree)
+		}
+
+		var result *analyzer.AnalysisResult
+		if reading.other == nil {
+			result = s.cachedAnalysis(docURI, content, external)
+		} else {
+			result = s.analysisOf(reading.other, external)
+		}
+		perReading[index] = s.readingDiagnostics(reading, result, positionMapper, includeJournalBalance)
+	}
+	return mergeReadingDiagnostics(readings, perReading)
+}
+
+// readingDiagnostics converts the parse errors and analysis of one reading.
+func (s *Server) readingDiagnostics(reading *occurrenceReading, result *analyzer.AnalysisResult, positionMapper func() *lsputil.PositionMapper, includeJournalBalance bool) []protocol.Diagnostic {
+	diagnostics := make([]protocol.Diagnostic, 0, len(reading.parseErrs))
+	for _, err := range reading.parseErrs {
 		code := err.Code
 		if code == "" {
 			code = parser.CodeParseError
@@ -722,14 +765,6 @@ func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string,
 			Code:     protocol.String(code),
 		})
 	}
-
-	external := analyzer.ExternalDeclarations{}
-	if s.workspace != nil {
-		external.Accounts = s.workspace.GetDeclaredAccountsForFile(path)
-		external.Commodities = s.workspace.GetDeclaredCommoditiesForFile(path)
-	}
-
-	result := s.cachedAnalysis(docURI, content, external)
 
 	settings := s.getSettings()
 	for _, diag := range result.Diagnostics {
@@ -753,7 +788,6 @@ func (s *Server) analyzeWithJournalBalance(docURI uri.URI, path, content string,
 		}
 		diagnostics = append(diagnostics, converted)
 	}
-
 	return diagnostics
 }
 

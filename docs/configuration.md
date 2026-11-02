@@ -78,6 +78,14 @@ the commodity they convert into.
 Diagnostics for included files are published against those files, so a syntax error in
 `2024.journal` is reported in that file rather than in the file that includes it.
 
+A file included more than once is checked under every distinct include context it has in
+the workspace, across all include trees. An `apply account` or `alias` before one include, or
+a `decimal-mark` that differs between includes, can make the same line a problem at one
+occurrence and fine at another, as it is for hledger. A diagnostic that every occurrence
+reports is published once, as it is. One that only some occurrences report says which
+includes it holds for, for example `account 'b:assets:cash' has not been declared (hledger
+--strict) (when included from main.journal:10)`. Occurrences with equal contexts count once.
+
 Values the server cannot use (an unknown enum value, a non-positive number) are reported through
 `window/showMessage` and replaced with the documented default.
 
