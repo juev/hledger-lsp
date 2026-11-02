@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,37 @@ func TestInlayHint_InferFinalPostingAtEOF(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, hints, 1)
 	assert.Equal(t, protocol.String("= -142"), hints[0].Label)
+}
+
+func TestInlayHint_RunningBalanceOmittedWhereRegisterHidesThePosting(t *testing.T) {
+	for name, eol := range map[string]string{"LF": "\n", "CRLF": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			settings := srv.getSettings()
+			settings.InlayHints.InferredAmounts = false
+			settings.InlayHints.RunningBalances = true
+			srv.setSettings(settings)
+			docURI := uri.URI("file:///test.journal")
+			content := strings.ReplaceAll("2024-01-01 сид\n    касса  100 ₽\n    капитал\n\n"+
+				"2024-01-02 проверка\n    касса  = 100 ₽\n    капитал\n\n"+
+				"2024-01-03 ноль\n    касса  0 ₽\n    капитал\n", "\n", eol)
+			require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+				TextDocument: protocol.TextDocumentItem{URI: docURI, Text: content},
+			}))
+
+			hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+				Range:        protocol.Range{End: protocol.Position{Line: 20}},
+			})
+			require.NoError(t, err)
+			labels := make(map[uint32]protocol.InlayHintLabel)
+			for _, hint := range hints {
+				labels[hint.Position.Line] = hint.Label
+			}
+			assert.Equal(t, protocol.String("balance: 100 ₽"), labels[1])
+			assert.NotContains(t, labels, uint32(5), "assignment that moves nothing")
+			assert.NotContains(t, labels, uint32(6), "elided posting balancing nothing")
+			assert.Equal(t, protocol.String("balance: 100 ₽"), labels[9], "written zero")
+		})
+	}
 }
