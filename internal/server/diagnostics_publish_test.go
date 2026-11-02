@@ -572,3 +572,26 @@ func TestPublishDiagnostics_AssignmentWithPostingDateIsAnError(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishDiagnostics_ImpossibleBracketedPostingDateIsAnError(t *testing.T) {
+	content := "2024-01-01 касса\n    現金  5 USD  ; заметка [2024-13-05]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///bracket-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+			assert.Equal(t, uint32(1), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(26), invalid.Range.Start.Character)
+		})
+	}
+}
