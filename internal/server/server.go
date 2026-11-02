@@ -60,6 +60,8 @@ type Server struct {
 	alignmentCache        sync.Map // map[uri.URI]int
 	tokenCache            *semanticTokensCache
 	parseCache            sync.Map // map[uri.URI]*cachedDoc
+	relatedMu             sync.Mutex
+	related               map[uri.URI]map[uri.URI]bool // open documents sharing an include tree, as of the last publish
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -440,6 +442,9 @@ func (s *Server) clearAlignmentCache() {
 
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
 	s.cancelDiagnostics(params.TextDocument.URI)
+	s.relatedMu.Lock()
+	delete(s.related, params.TextDocument.URI)
+	s.relatedMu.Unlock()
 	// Drop the published diagnostics with the document, so a closed file does not
 	// keep stale problems in the client's panel.
 	if s.client != nil {
@@ -495,6 +500,13 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 // A trailing timer coalesces rapid edits; the previous in-flight computation
 // is cancelled so a stale result never overwrites newer diagnostics.
 func (s *Server) scheduleDiagnostics(docURI uri.URI, text *document.Text, version uint32, revision uint64) {
+	s.scheduleDiagnosticsFor(docURI, text, version, revision, true)
+}
+
+// scheduleDiagnosticsFor is scheduleDiagnostics; alsoRelated also schedules the
+// other open documents of the same include trees once this one is published.
+// Those runs pass false, so republishing never cascades.
+func (s *Server) scheduleDiagnosticsFor(docURI uri.URI, text *document.Text, version uint32, revision uint64, alsoRelated bool) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 
@@ -513,7 +525,59 @@ func (s *Server) scheduleDiagnostics(docURI uri.URI, text *document.Text, versio
 			default:
 			}
 			s.publishDiagnostics(ctx, docURI, text, version, revision)
+			if alsoRelated && ctx.Err() == nil {
+				s.republishRelated(docURI)
+			}
 		}),
+	}
+}
+
+// republishRelated schedules diagnostics for the other open journals that share
+// an include tree with docURI, or shared one at its previous publish. Their
+// diagnostics are read from the tree this document is part of: an edit here can
+// declare an account they use, add or remove an include of them, or move a
+// balance they are checked against.
+func (s *Server) republishRelated(docURI uri.URI) {
+	if s.workspace == nil {
+		return
+	}
+	path := uriToPath(docURI)
+	if path == "" || filetype.IsRules(path) {
+		return
+	}
+
+	current := make(map[uri.URI]bool)
+	for _, tree := range s.workspace.GetIncludeTreesForFile(path) {
+		if tree.Resolved == nil {
+			continue
+		}
+		for index := range tree.Resolved.Occurrences {
+			if other := pathToURI(tree.Resolved.Occurrences[index].Path); other != docURI {
+				current[other] = true
+			}
+		}
+	}
+
+	s.relatedMu.Lock()
+	if s.related == nil {
+		s.related = make(map[uri.URI]map[uri.URI]bool)
+	}
+	targets := make(map[uri.URI]bool, len(current))
+	for other := range current {
+		targets[other] = true
+	}
+	for other := range s.related[docURI] {
+		targets[other] = true
+	}
+	s.related[docURI] = current
+	s.relatedMu.Unlock()
+
+	for other := range targets {
+		text, open := s.documents.rope(other)
+		if !open || filetype.IsRules(string(other)) {
+			continue
+		}
+		s.scheduleDiagnosticsFor(other, text, s.documentVersion(other), s.workspace.ContentRevision(uriToPath(other)), false)
 	}
 }
 
@@ -679,6 +743,12 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 	for target, diagnostics := range byURI {
 		if target == docURI {
 			s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), &version)
+			continue
+		}
+		// An open document publishes its own set, which also holds the
+		// diagnostics of the contexts this run did not read; publishing a part of
+		// it here would replace the whole with whichever file was edited last.
+		if _, open := s.documents.rope(target); open {
 			continue
 		}
 		s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), nil)

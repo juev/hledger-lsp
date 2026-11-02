@@ -362,7 +362,10 @@ func (w *Workspace) GetIncludeTreesForFile(path string) []*IncludeTree {
 	trees := make([]*IncludeTree, 0, len(roots))
 	for _, rootPath := range roots {
 		if tree := w.trees[rootPath]; tree != nil {
-			trees = append(trees, tree)
+			// A snapshot: the workspace replaces a tree's Resolved and LoadErrors in
+			// place when a file changes, and callers read them without the lock.
+			snapshot := *tree
+			trees = append(trees, &snapshot)
 		}
 	}
 	return trees

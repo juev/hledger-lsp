@@ -94,7 +94,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 			if tree.Resolved == primary.tree && occurrence.ID == primary.id {
 				continue
 			}
-			if index := indexOfEqualContext(readings, occurrence.InitialContext); index >= 0 {
+			if index := indexOfEqualReading(readings, tree.Resolved, occurrence.InitialContext); index >= 0 {
 				readings[index].includedFrom = append(readings[index].includedFrom, includeLabel(occurrence))
 				continue
 			}
@@ -152,9 +152,12 @@ func includeLabel(occurrence include.JournalOccurrence) string {
 	return fmt.Sprintf("%s:%d", filepath.Base(occurrence.Via.SourcePath), occurrence.Via.IncludeRange.Start.Line)
 }
 
-func indexOfEqualContext(readings []occurrenceReading, candidate parser.Context) int {
+// indexOfEqualReading finds the reading of the same include tree whose context
+// equals candidate. Equal contexts parse alike, but the readings of different
+// trees are checked against different declarations, so they stay apart.
+func indexOfEqualReading(readings []occurrenceReading, tree *include.ResolvedJournal, candidate parser.Context) int {
 	for index := range readings {
-		if readings[index].hasContext && readings[index].context.Equal(candidate) {
+		if readings[index].hasContext && readings[index].tree == tree && readings[index].context.Equal(candidate) {
 			return index
 		}
 	}
