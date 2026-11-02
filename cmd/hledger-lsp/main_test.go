@@ -364,9 +364,181 @@ func (c *testClient) RegisterCapability(context.Context, *protocol.RegistrationP
 	return nil
 }
 
-func (c *testClient) PublishDiagnostics(_ context.Context, params *protocol.PublishDiagnosticsParams) error {
-	c.diagnostics <- *params
+// PublishDiagnostics drops diagnostics when the test does not observe them and
+// otherwise waits for the test to read them, unless the connection context ends
+// first. A notification handler error fails the connection, so an abandoned
+// delivery returns nil.
+func (c *testClient) PublishDiagnostics(ctx context.Context, params *protocol.PublishDiagnosticsParams) error {
+	if c.diagnostics == nil {
+		return nil
+	}
+	select {
+	case c.diagnostics <- *params:
+	case <-ctx.Done():
+	}
 	return nil
+}
+
+// harnessFailureBound only limits how long a broken harness may hang before the
+// test reports it; a passing run never waits for it.
+const harnessFailureBound = 5 * time.Second
+
+func publishDiagnosticsAsync(ctx context.Context, c *testClient, params protocol.PublishDiagnosticsParams) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		done <- c.PublishDiagnostics(ctx, &params)
+	}()
+	return done
+}
+
+func requireReturned(t *testing.T, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(harnessFailureBound):
+		t.Fatal("PublishDiagnostics did not return")
+	}
+}
+
+func TestTestClientPublishDiagnostics(t *testing.T) {
+	params := protocol.PublishDiagnosticsParams{URI: uri.URI("file:///sink.journal")}
+	stale := protocol.PublishDiagnosticsParams{URI: uri.URI("file:///stale.journal")}
+
+	t.Run("unconfigured sink returns", func(t *testing.T) {
+		requireReturned(t, publishDiagnosticsAsync(context.Background(), &testClient{}, params))
+	})
+
+	t.Run("configured sink receives the params", func(t *testing.T) {
+		sink := make(chan protocol.PublishDiagnosticsParams, 1)
+
+		requireReturned(t, publishDiagnosticsAsync(context.Background(), &testClient{diagnostics: sink}, params))
+
+		require.Len(t, sink, 1)
+		assert.Equal(t, params, <-sink)
+	})
+
+	t.Run("full sink delivers once a reader frees it", func(t *testing.T) {
+		sink := make(chan protocol.PublishDiagnosticsParams, 1)
+		sink <- stale
+
+		done := publishDiagnosticsAsync(context.Background(), &testClient{diagnostics: sink}, params)
+
+		assert.Equal(t, stale, <-sink)
+		requireReturned(t, done)
+		require.Len(t, sink, 1)
+		assert.Equal(t, params, <-sink)
+	})
+
+	t.Run("full sink returns when the context is already canceled", func(t *testing.T) {
+		sink := make(chan protocol.PublishDiagnosticsParams, 1)
+		sink <- stale
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		requireReturned(t, publishDiagnosticsAsync(ctx, &testClient{diagnostics: sink}, params))
+
+		require.Len(t, sink, 1)
+		assert.Equal(t, stale, <-sink)
+	})
+
+	t.Run("full sink returns when the context is canceled during delivery", func(t *testing.T) {
+		sink := make(chan protocol.PublishDiagnosticsParams)
+		ctx, cancel := context.WithCancel(context.Background())
+
+		done := publishDiagnosticsAsync(ctx, &testClient{diagnostics: sink}, params)
+		cancel()
+
+		requireReturned(t, done)
+		select {
+		case published := <-sink:
+			t.Fatalf("canceled delivery reached the sink: %v", published.URI)
+		default:
+		}
+	})
+}
+
+// publishingServer publishes one diagnostics notification per URI before it
+// answers initialize. The client reads frames in wire order, so every
+// publishDiagnostics handler has started by the time Initialize returns.
+type publishingServer struct {
+	protocol.UnimplementedServer
+	uris []uri.URI
+}
+
+func (s *publishingServer) Initialize(ctx context.Context, _ *protocol.InitializeParams) (*protocol.InitializeResult, error) {
+	client, ok := protocol.ClientFromContext(ctx)
+	if !ok {
+		return nil, errors.New("no client in server context")
+	}
+	for _, documentURI := range s.uris {
+		if err := client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{URI: documentURI}); err != nil {
+			return nil, err
+		}
+	}
+	return &protocol.InitializeResult{}, nil
+}
+
+// requireWireClosed closes both ends and fails instead of hanging when a
+// handler still in flight keeps Close waiting.
+func requireWireClosed(t *testing.T, clientConn, serverConn jsonrpc2.Conn) {
+	t.Helper()
+	closed := make(chan error, 1)
+	go func() {
+		err := errors.Join(clientConn.Close(), serverConn.Close())
+		<-clientConn.Done()
+		<-serverConn.Done()
+		closed <- err
+	}()
+	select {
+	case err := <-closed:
+		require.NoError(t, err)
+	case <-time.After(harnessFailureBound):
+		t.Fatal("wire teardown blocked on an in-flight client handler")
+	}
+}
+
+func TestLSPWire_UnconfiguredDiagnosticsSinkDoesNotBlockTeardown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), harnessFailureBound)
+	defer cancel()
+
+	serverPipe, clientPipe := net.Pipe()
+	srv := &publishingServer{uris: []uri.URI{"file:///unobserved.journal"}}
+	_, serverConn, _, _ := newProtocolServerConnection(ctx, serverPipe, srv)
+	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{}, jsonrpc2.NewStream(clientPipe))
+
+	_, err := clientServer.Initialize(ctx, &protocol.InitializeParams{})
+	require.NoError(t, err)
+
+	// ctx stays live: an unconfigured sink must not depend on cancellation.
+	requireWireClosed(t, clientConn, serverConn)
+}
+
+func TestLSPWire_ConfiguredDiagnosticsSinkDeliversAndUnblocksOnCancel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), harnessFailureBound)
+	defer cancel()
+
+	serverPipe, clientPipe := net.Pipe()
+	published := []uri.URI{"file:///first.journal", "file:///second.journal"}
+	srv := &publishingServer{uris: published}
+	diagnostics := make(chan protocol.PublishDiagnosticsParams)
+	_, serverConn, _, _ := newProtocolServerConnection(ctx, serverPipe, srv)
+	_, clientConn, clientServer := protocol.NewClient(ctx, &testClient{diagnostics: diagnostics}, jsonrpc2.NewStream(clientPipe))
+
+	_, err := clientServer.Initialize(ctx, &protocol.InitializeParams{})
+	require.NoError(t, err)
+
+	select {
+	case got := <-diagnostics:
+		assert.Contains(t, published, got.URI)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for publishDiagnostics")
+	}
+
+	// The other notification still waits on the unread sink; canceling the
+	// connection context must release it so teardown completes.
+	cancel()
+	requireWireClosed(t, clientConn, serverConn)
 }
 
 func TestProtocolServer_CodeAction_DelegatesToServer(t *testing.T) {
