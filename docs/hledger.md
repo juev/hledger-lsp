@@ -139,15 +139,17 @@ For example, `PAYEE | A | B` produces payee=`PAYEE` and note=`A | B`.
 ### Indentation Rules
 
 - **Minimum**: 1 space or tab (but 2-4 spaces is conventional)
-- **Account-Amount separator**: At least 2 spaces OR 1 tab required
+- **Account-Amount separator**: two or more whitespace characters in a row, where a tab counts as one character
 
 ```
-    expenses:food    $10.00     ; correct - 2+ spaces before amount
-    expenses:food $10.00      ; correct - 1 tab before amount
-    expenses:food $10.00        ; WRONG - only 1 space, amount parsed as part of account name!
+    expenses:food  $10.00            ; correct - 2 spaces
+    expenses:food<TAB><TAB>$10.00    ; correct - 2 tabs
+    expenses:food<TAB> $10.00        ; correct - tab and space (any pair works)
+    expenses:food<TAB>$10.00         ; WRONG - a single tab, amount becomes part of the account name
+    expenses:food $10.00             ; WRONG - only 1 space, amount becomes part of the account name
 ```
 
-**Critical:** The two-space (or tab) delimiter between account and amount is essential. With only one space, hledger will misparse the amount as part of the account name.
+**Critical:** The separator must be at least two whitespace characters. A single space or a single tab is part of the account name, so `expenses:food<TAB>$10.00` is an account called `expenses:food $10.00` with no amount (hledger shows the tab as a space). The same rule applies before a `;` comment and before a `=` balance assertion on an amountless posting. After an amount, one space or tab is enough between amount, price, assertion and comment.
 
 ### Inferred Amounts
 
@@ -392,7 +394,7 @@ Parent accounts inherit child properties in reports.
 
 ### Inline Comments
 
-After two spaces or tab:
+After an amount, or after two or more whitespace characters when an account has no amount (a lone space or tab there belongs to the account name):
 
 ```
 2024-01-15 Description  ; Transaction comment

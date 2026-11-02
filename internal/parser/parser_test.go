@@ -2395,14 +2395,15 @@ func TestParser_PartialDateWithNoCommodityAmount(t *testing.T) {
 }
 
 func TestParser_TabBetweenAccountAndAmount(t *testing.T) {
-	input := "2024-01-15 test\n    expenses:food\t169\n    assets:cash"
+	input := "2024-01-15 test\n    expenses:food\t\t169\n    assets:cash"
 
 	journal, errs := Parse(input)
-	require.Empty(t, errs, "tab between account and amount should be valid")
+	require.Empty(t, errs, "two tabs between account and amount should be valid")
 	require.Len(t, journal.Transactions, 1)
 
 	posting := journal.Transactions[0].Postings[0]
 	require.NotNil(t, posting.Amount, "amount should be parsed")
+	assert.Equal(t, "expenses:food", posting.Account.Name)
 	assert.Equal(t, "169", posting.Amount.Quantity.String())
 }
 
