@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -85,6 +87,11 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 	}
 
 	content := buildHoverContentWithTransactions(element, balances, allTransactions, commodityFormats, defSymbol)
+	if element.context == HoverAmount {
+		if varied := s.amountHoverAcrossOccurrences(params.TextDocument.URI, doc, params.Position, element); varied != "" {
+			content = varied
+		}
+	}
 	if content == "" {
 		return nil, nil
 	}
@@ -94,6 +101,91 @@ func (s *Server) Hover(ctx context.Context, params *protocol.HoverParams) (*prot
 		Contents: documentationMarkupContent(content, s.clientCapabilities.hoverContentFormats),
 		Range:    &hoverRange,
 	}, nil
+}
+
+// amountHoverAcrossOccurrences returns the hover of an amount when the include
+// contexts of the document read it as different values, and "" when they all
+// read it alike (the common case, which keeps the ordinary hover). Each distinct
+// reading is listed with the includes that give it. The values are written from
+// the parsed quantity: the text of the amount is the same at every occurrence,
+// which is why a reading can differ at all.
+func (s *Server) amountHoverAcrossOccurrences(docURI uri.URI, doc string, position protocol.Position, primary *hoverElement) string {
+	readings := s.occurrenceReadings(docURI, doc)
+	if len(readings) < 2 {
+		return ""
+	}
+
+	type group struct {
+		content string
+		labels  []string
+	}
+	var groups []group
+	index := make(map[string]int)
+	for i := range readings {
+		element := primary
+		if i > 0 {
+			element = findElementAtPosition(readings[i].journal, runePosition(doc, position))
+			if element == nil || element.context != HoverAmount || element.amount == nil {
+				return ""
+			}
+		}
+		key := hoverAmountKey(element)
+		at, seen := index[key]
+		if !seen {
+			defaultSymbol := ""
+			if readings[i].tree != nil {
+				defaultSymbol = readings[i].tree.DefaultCommodityAt(readings[i].id, element.rng.Start.Offset)
+			}
+			formats := readings[i].formatsAt(element.rng.Start.Offset)
+			groups = append(groups, group{content: buildAmountHover(valueOnly(element.amount), valueOnlyCost(element.cost), formats, defaultSymbol)})
+			at = len(groups) - 1
+			index[key] = at
+		}
+		for _, label := range readings[i].includedFrom {
+			if label != "" && !slices.Contains(groups[at].labels, label) {
+				groups[at].labels = append(groups[at].labels, label)
+			}
+		}
+	}
+	if len(groups) < 2 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(groups))
+	for _, g := range groups {
+		heading := "when this file is the journal root"
+		if len(g.labels) > 0 {
+			heading = "when included from " + strings.Join(g.labels, ", ")
+		}
+		parts = append(parts, "_"+heading+"_\n\n"+g.content)
+	}
+	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// hoverAmountKey identifies what an amount and its cost are worth.
+func hoverAmountKey(element *hoverElement) string {
+	key := element.amount.Quantity.String() + "|" + element.amount.Commodity.Symbol
+	if element.cost != nil {
+		key += "|" + element.cost.Amount.Quantity.String() + "|" + element.cost.Amount.Commodity.Symbol
+	}
+	return key
+}
+
+// valueOnly copies an amount without its written digits, so it is rendered from
+// the quantity it was read as.
+func valueOnly(amount *ast.Amount) *ast.Amount {
+	copied := *amount
+	copied.RawQuantity = ""
+	return &copied
+}
+
+func valueOnlyCost(cost *ast.Cost) *ast.Cost {
+	if cost == nil {
+		return nil
+	}
+	copied := *cost
+	copied.Amount = *valueOnly(&cost.Amount)
+	return &copied
 }
 
 // firstOccurrenceIDForPath returns the ID of the first occurrence matching path,

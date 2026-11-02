@@ -44,12 +44,13 @@ type cachedDoc struct {
 	analysis         *analyzer.AnalysisResult
 	analysisExternal analyzer.ExternalDeclarations
 
-	// running holds the running balances of this version under the include tree
-	// they were replayed from. The workspace replaces the tree's pointer when any
-	// file in it changes, so the pointer stands for the whole tree's content;
-	// runningMu serialises the replay so concurrent requests share one.
+	// running holds the running balances of this version for each occurrence
+	// replayed, under the include tree they were replayed from. The workspace
+	// replaces the tree's pointer when any file in it changes, so the pointer
+	// stands for the whole tree's content; runningMu serialises the replay so
+	// concurrent requests share one.
 	runningMu sync.Mutex
-	running   *runningBalanceEntry
+	running   map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal
 
 	// others holds the parse and analysis of the document under the include
 	// contexts other than the primary one, keyed by tree and occurrence. The
@@ -73,14 +74,16 @@ type otherReading struct {
 	analysisMu       sync.Mutex
 	analysis         *analyzer.AnalysisResult
 	analysisExternal analyzer.ExternalDeclarations
+
+	effectsOnce sync.Once
+	effects     []analyzer.PostingEffect
 }
 
-// runningBalanceEntry is one replay together with the inputs that produced it.
-// tree is nil for a document outside any include tree.
-type runningBalanceEntry struct {
-	tree     *include.ResolvedJournal
-	id       include.OccurrenceID
-	balances map[analyzer.PostingRef]map[string]decimal.Decimal
+// postingEffects returns the posting effects of the reading's journal, computed
+// at most once.
+func (o *otherReading) postingEffects() []analyzer.PostingEffect {
+	o.effectsOnce.Do(func() { o.effects = analyzer.CalculatePostingEffects(o.journal) })
+	return o.effects
 }
 
 // cachedRunningBalances returns the running balances of the document's postings,
@@ -89,11 +92,12 @@ type runningBalanceEntry struct {
 // from journal. The result is shared between callers and must not be modified.
 func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *include.ResolvedJournal, id include.OccurrenceID) map[analyzer.PostingRef]map[string]decimal.Decimal {
 	doc := s.cachedParse(docURI, content)
+	key := readingKey{tree: tree, id: id}
 
 	doc.runningMu.Lock()
 	defer doc.runningMu.Unlock()
-	if r := doc.running; r != nil && r.tree == tree && r.id == id {
-		return r.balances
+	if balances, ok := doc.running[key]; ok {
+		return balances
 	}
 	var balances map[analyzer.PostingRef]map[string]decimal.Decimal
 	if tree != nil {
@@ -101,7 +105,16 @@ func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *inc
 	} else {
 		balances = analyzer.RunningBalances(journalTransactions(doc.journal), 0)
 	}
-	doc.running = &runningBalanceEntry{tree: tree, id: id, balances: balances}
+	// Entries of a replaced tree are unreachable. Bounding the map keeps a
+	// long-lived document from accumulating one replay per tree revision.
+	const maxReplays = 16
+	if len(doc.running) >= maxReplays {
+		clear(doc.running)
+	}
+	if doc.running == nil {
+		doc.running = make(map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal)
+	}
+	doc.running[key] = balances
 	return balances
 }
 

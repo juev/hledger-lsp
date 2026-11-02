@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 
@@ -32,71 +33,224 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		return nil, nil
 	}
 
-	journal, _ := s.cachedJournal(params.TextDocument.URI, content)
-	effects := s.cachedPostingEffects(params.TextDocument.URI, content)
-	var resolved *include.ResolvedJournal
-	var occurrenceID include.OccurrenceID
-	if s.workspace != nil {
-		tree, unique := s.workspace.GetUniqueResolvedForFile(uriToPath(params.TextDocument.URI))
-		occurrences := []include.JournalOccurrence(nil)
-		if unique && tree != nil {
-			occurrences = tree.OccurrencesForCanonical(uriToPath(params.TextDocument.URI))
+	path := uriToPath(params.TextDocument.URI)
+	readings := s.occurrenceReadings(params.TextDocument.URI, content)
+	effectsByReading := make([]map[analyzer.PostingRef]analyzer.PostingEffect, len(readings))
+	var refs []analyzer.PostingRef
+	known := make(map[analyzer.PostingRef]bool)
+	for index := range readings {
+		var effects []analyzer.PostingEffect
+		if readings[index].other == nil {
+			effects = s.cachedPostingEffects(params.TextDocument.URI, content)
+		} else {
+			effects = readings[index].other.postingEffects()
 		}
-		if len(occurrences) == 1 {
-			resolved, occurrenceID = tree, occurrences[0].ID
+		effectsByReading[index] = make(map[analyzer.PostingRef]analyzer.PostingEffect, len(effects))
+		for _, effect := range effects {
+			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
+			effectsByReading[index][ref] = effect
+			if !known[ref] {
+				known[ref] = true
+				refs = append(refs, ref)
+			}
 		}
 	}
+	if len(readings) > 1 {
+		sort.Slice(refs, func(i, j int) bool {
+			if refs[i].TransactionIndex != refs[j].TransactionIndex {
+				return refs[i].TransactionIndex < refs[j].TransactionIndex
+			}
+			return refs[i].PostingIndex < refs[j].PostingIndex
+		})
+	}
+
 	// Replaying the balances walks the whole include tree, so it runs only when
 	// the result will be read, and is reused until the document or its tree moves.
-	var runningBalances map[analyzer.PostingRef]map[string]decimal.Decimal
-	if settings.InlayHints.RunningBalances && (resolved != nil || s.workspace == nil) {
-		runningBalances = s.cachedRunningBalances(params.TextDocument.URI, content, resolved, occurrenceID)
+	// A balance depends on where in the journal the file sits, so every inclusion
+	// of the file has its own, not one per include context.
+	var occurrences []balanceOccurrence
+	if settings.InlayHints.RunningBalances {
+		occurrences = s.balanceOccurrences(params.TextDocument.URI, content, path)
 	}
+
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	for _, effect := range effects {
-		transaction := &journal.Transactions[effect.TransactionIndex]
-		posting := &transaction.Postings[effect.PostingIndex]
+	for _, ref := range refs {
+		posting, ok := postingOf(readings, effectsByReading, ref)
+		if !ok {
+			continue
+		}
 		// Commodity formats below are rebuilt per posting, so a posting the client
 		// did not ask about must not reach them.
 		if !postingTouchesRange(mapper, posting, params.Range) {
 			continue
 		}
-		formats := localCommodityFormatsAt(journal, posting.Range.Start.Offset)
-		if resolved != nil {
-			formats = resolved.FormatsAt(occurrenceID, posting.Range.Start.Offset)
+		offset := posting.Range.Start.Offset
+		if settings.InlayHints.InferredAmounts {
+			var values []hintValue
+			for index := range readings {
+				if effect, ok := effectsByReading[index][ref]; ok && len(effect.InferredAmounts) > 0 {
+					values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
+				}
+			}
+			if len(values) > 0 {
+				// Anchored past the end of the line rather than after the account
+				// name: an inlay hint takes up room in the rendered line, so a hint
+				// placed mid-line pushes the alignment padding — and the cursor
+				// waiting at the amount column — to the right.
+				accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
+				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.LineEndPosition(int(accountEnd.Line)), "= ", values))
+			}
 		}
-		if settings.InlayHints.InferredAmounts && len(effect.InferredAmounts) > 0 {
-			// Anchored past the end of the line rather than after the account
-			// name: an inlay hint takes up room in the rendered line, so a hint
-			// placed mid-line pushes the alignment padding — and the cursor
-			// waiting at the amount column — to the right.
-			accountEnd := mapper.ByteToLSP(posting.Account.Range.End.Offset)
-			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position:    mapper.LineEndPosition(int(accountEnd.Line)),
-				Label:       protocol.String("= " + formatAmounts(effect.InferredAmounts, formats)),
-				Kind:        protocol.InlayHintKindType,
-				PaddingLeft: boolPtr(true),
-			})
+		if settings.InlayHints.CostExpansion && posting.Cost != nil {
+			var values []hintValue
+			for index := range readings {
+				if effect, ok := effectsByReading[index][ref]; ok && len(effect.CostContribution) > 0 {
+					values = addHintValue(values, formatAmounts(effect.CostContribution, readings[index].formatsAt(offset)), readings[index].includedFrom)
+				}
+			}
+			if len(values) > 0 {
+				hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(posting.Cost.Range.End.Offset), "cost: ", values))
+			}
 		}
-		if settings.InlayHints.CostExpansion && len(effect.CostContribution) > 0 && posting.Cost != nil {
-			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position:    mapper.ByteToLSP(posting.Cost.Range.End.Offset),
-				Label:       protocol.String("cost: " + formatAmounts(effect.CostContribution, formats)),
-				Kind:        protocol.InlayHintKindType,
-				PaddingLeft: boolPtr(true),
-			})
+		var values []hintValue
+		for _, occurrence := range occurrences {
+			if amounts := occurrence.balances[ref]; len(amounts) > 0 {
+				formats := occurrence.formatsAt(offset)
+				values = addHintValue(values, formatAmounts(amounts, formats), []string{occurrence.label})
+			}
 		}
-		if amounts := runningBalances[analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}]; len(amounts) > 0 {
-			hints = appendHintInRange(hints, params.Range, protocol.InlayHint{
-				Position:    mapper.ByteToLSP(posting.Range.End.Offset),
-				Label:       protocol.String("balance: " + formatAmounts(amounts, formats)),
-				Kind:        protocol.InlayHintKindType,
-				PaddingLeft: boolPtr(true),
-			})
+		if len(values) > 0 {
+			hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(posting.Range.End.Offset), "balance: ", values))
 		}
 	}
 	return hints, nil
+}
+
+// postingOf returns the posting a ref names, from the first reading that has an
+// effect for it. The readings parse the same text, so the posting sits at the
+// same place in each.
+func postingOf(readings []occurrenceReading, effects []map[analyzer.PostingRef]analyzer.PostingEffect, ref analyzer.PostingRef) (*ast.Posting, bool) {
+	for index := range readings {
+		if _, ok := effects[index][ref]; !ok {
+			continue
+		}
+		journal := readings[index].journal
+		if ref.TransactionIndex < len(journal.Transactions) && ref.PostingIndex < len(journal.Transactions[ref.TransactionIndex].Postings) {
+			return &journal.Transactions[ref.TransactionIndex].Postings[ref.PostingIndex], true
+		}
+	}
+	return nil, false
+}
+
+// balanceOccurrence is one inclusion of the document with its replayed balances.
+type balanceOccurrence struct {
+	label     string
+	balances  map[analyzer.PostingRef]map[string]decimal.Decimal
+	formatsAt func(offset int) map[string]formatter.CommodityFormat
+}
+
+// balanceOccurrences replays the journal once per inclusion of the document, in
+// every include tree that owns it. A document that no tree owns has none, unless
+// the server has no workspace at all, in which case it is replayed on its own.
+func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []balanceOccurrence {
+	if s.workspace == nil {
+		return []balanceOccurrence{{
+			balances: s.cachedRunningBalances(docURI, content, nil, 0),
+			formatsAt: func(offset int) map[string]formatter.CommodityFormat {
+				journal, _ := s.cachedJournal(docURI, content)
+				return localCommodityFormatsAt(journal, offset)
+			},
+		}}
+	}
+
+	var result []balanceOccurrence
+	for _, tree := range s.workspace.GetIncludeTreesForFile(path) {
+		if tree.Resolved == nil {
+			continue
+		}
+		resolved := tree.Resolved
+		for _, occurrence := range resolved.OccurrencesForCanonical(path) {
+			id := occurrence.ID
+			result = append(result, balanceOccurrence{
+				label:    includeLabel(occurrence),
+				balances: s.cachedRunningBalances(docURI, content, resolved, id),
+				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
+					return resolved.FormatsAt(id, offset)
+				},
+			})
+		}
+	}
+	return result
+}
+
+// hintValue is one value a hint can show, with the includes that give it.
+type hintValue struct {
+	text   string
+	labels []string
+}
+
+// addHintValue records value for the includes labelled, merging equal values.
+func addHintValue(values []hintValue, text string, labels []string) []hintValue {
+	for index := range values {
+		if values[index].text == text {
+			for _, label := range labels {
+				if label != "" && !slices.Contains(values[index].labels, label) {
+					values[index].labels = append(values[index].labels, label)
+				}
+			}
+			return values
+		}
+	}
+	kept := make([]string, 0, len(labels))
+	for _, label := range labels {
+		if label != "" {
+			kept = append(kept, label)
+		}
+	}
+	return append(values, hintValue{text: text, labels: kept})
+}
+
+// maxHintValues is how many distinct values a hint shows before it elides the
+// rest; the tooltip lists all of them.
+const maxHintValues = 3
+
+// valuedHint builds a hint with prefix and the values joined by " | ". A single
+// value is the whole label and has no tooltip, which is how every hint of a file
+// read one way looks. With several, the tooltip names the includes behind each.
+func valuedHint(position protocol.Position, prefix string, values []hintValue) protocol.InlayHint {
+	hint := protocol.InlayHint{
+		Position:    position,
+		Kind:        protocol.InlayHintKindType,
+		PaddingLeft: boolPtr(true),
+	}
+	if len(values) == 1 {
+		hint.Label = protocol.String(prefix + values[0].text)
+		return hint
+	}
+
+	shown := make([]string, 0, maxHintValues+1)
+	for index, value := range values {
+		if index == maxHintValues {
+			shown = append(shown, "…")
+			break
+		}
+		shown = append(shown, value.text)
+	}
+	hint.Label = protocol.String(prefix + strings.Join(shown, " | "))
+
+	lines := make([]string, 0, len(values))
+	for _, value := range values {
+		line := value.text
+		if len(value.labels) > 0 {
+			line += " (when included from " + strings.Join(value.labels, ", ") + ")"
+		} else {
+			line += " (when this file is the journal root)"
+		}
+		lines = append(lines, line)
+	}
+	hint.Tooltip = protocol.String(strings.Join(lines, "\n"))
+	return hint
 }
 
 // journalTransactions presents a lone journal the way a resolved one would.

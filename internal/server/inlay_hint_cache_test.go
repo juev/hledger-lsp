@@ -137,9 +137,12 @@ func TestInlayHint_RunningBalancesAreReusedWhileNothingChanges(t *testing.T) {
 		requestHintLabels(t, srv, aURI)
 		cached, ok := srv.parseCache.Load(aURI)
 		require.True(t, ok)
-		entry := cached.(*cachedDoc).running
-		require.NotNil(t, entry)
-		return reflect.ValueOf(entry.balances).Pointer()
+		replays := cached.(*cachedDoc).running
+		require.Len(t, replays, 1)
+		for _, balances := range replays {
+			return reflect.ValueOf(balances).Pointer()
+		}
+		return 0
 	}
 	first := replayed()
 	assert.Equal(t, first, replayed(), "unchanged document and tree must reuse the replay")

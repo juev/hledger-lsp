@@ -38,8 +38,24 @@ watched journal-file changes; saving is not required.
 
 Running balances follow hledger's register: balance assignments are resolved,
 and a posting with its own `date:` applies at that date, so its hint shows the
-balance as of then. They are omitted when include ownership or occurrence is
-ambiguous.
+balance as of then.
+
+### Files included more than once
+
+hledger reads a file once per `include`, so one line can have several values: a
+`decimal-mark` that differs between includes reads `1,500` as 1.5 at one and 1500 at the
+other, and a running balance depends on where in the journal the inclusion sits. Hints and
+hover show every distinct value instead of picking one.
+
+- A hint label joins the distinct values with ` | `, at most three, then `…` (for example
+  `balance: 10 USD | 20 USD | 30 USD | …`). The tooltip lists every value with the
+  includes that give it, as `file.journal:LINE`, the file and line of the `include`
+  directive. Inferred amounts and cost expansion are shown per distinct include context.
+  Running balances are shown per inclusion, in every include tree that owns the file.
+- Hover on an amount lists each distinct reading of the amount and its cost with the
+  includes that give it, written from the parsed value.
+- A file included once, or only under equal contexts for amounts, looks as it always did:
+  one value, no tooltip.
 
 Like `hledger reg`, a posting with an empty amount gets no balance hint: a
 balance assignment that moves nothing (`cash  = 100 USD` when `cash` already
