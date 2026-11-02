@@ -28,6 +28,8 @@ var commentLines = []string{
 	"    h  1 EUR = 10 EUR ; assertion",
 	"    i  1 EUR @ 2 USD ; cost",
 	"    j  1 EUR {2 USD} ; lot",
+	"    k  1 EUR @ $6590.49 ; date",
+	"    l  1 EUR @@ $6590.49 ; total",
 }
 
 func commentJournal(lines ...string) string {
@@ -56,11 +58,17 @@ func commentCases() []string {
 func commentModes() []Options {
 	var all []Options
 	for _, mode := range []string{"", "left", "decimal"} {
-		for _, minColumn := range []int{0, 20} {
-			opts := DefaultOptions()
-			opts.AmountAlignmentMode = mode
-			opts.MinAlignmentColumn = minColumn
-			all = append(all, opts)
+		for _, column := range []int{0, 30} {
+			for _, minColumn := range []int{0, 20} {
+				for _, target := range []string{"", AlignTargetPosting} {
+					opts := DefaultOptions()
+					opts.AmountAlignmentMode = mode
+					opts.AmountAlignmentColumn = column
+					opts.MinAlignmentColumn = minColumn
+					opts.AmountAlignmentTarget = target
+					all = append(all, opts)
+				}
+			}
 		}
 	}
 	return all
@@ -93,6 +101,17 @@ func TestFormatDocument_CommentColumnIsIdempotent(t *testing.T) {
 		}
 		t.Fatalf("%d of %d journal/option pairs are not idempotent, first:\n%s", len(failures), total, strings.Join(shown, "\n"))
 	}
+}
+
+// The layout the review found under decimal alignment anchored on the posting
+// amount: a cost and a comment, with no column or minimum column set.
+func TestFormatDocument_CommentAfterCostUnderDecimalPostingAlignment(t *testing.T) {
+	input := "2024-01-01 x\n    c  ; z\n    k  1 EUR @ $6590.49 ; date\n    k  1 EUR @ $6590.49 ; date\n"
+	opts := DefaultOptions()
+	opts.AmountAlignmentMode = "decimal"
+	opts.AmountAlignmentTarget = AlignTargetPosting
+	once := formatComments(t, input, opts)
+	assert.Equal(t, once, formatComments(t, once, opts))
 }
 
 // The layout from the report: comments of two postings share a column only
