@@ -84,3 +84,31 @@ func BenchmarkFormat_Large_IncludedTwiceSameContext(b *testing.B) {
 func BenchmarkFormat_Large_IncludedTwiceConflictingMarks(b *testing.B) {
 	benchmarkFormatAfterEdit(b, []string{",", "."})
 }
+
+// benchmarkAnalyzeAfterEdit measures the per-buffer diagnostics of the first
+// request after each edit.
+func benchmarkAnalyzeAfterEdit(b *testing.B, marks []string) {
+	srv, docURI := setupOccurrenceBench(b, largeContent, marks)
+	path := uriToPath(docURI)
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		content := largeContent + strings.Repeat(" ", i%2)
+		srv.StoreDocument(docURI, content)
+		srv.workspace.MarkFileDirty(path, workspace.StaticContent(content))
+		_ = srv.analyze(docURI, path, content)
+	}
+}
+
+func BenchmarkAnalyze_Large_IncludedOnce(b *testing.B) {
+	benchmarkAnalyzeAfterEdit(b, []string{""})
+}
+
+func BenchmarkAnalyze_Large_IncludedTwiceSameContext(b *testing.B) {
+	benchmarkAnalyzeAfterEdit(b, []string{"", ""})
+}
+
+func BenchmarkAnalyze_Large_IncludedTwiceConflictingMarks(b *testing.B) {
+	benchmarkAnalyzeAfterEdit(b, []string{",", "."})
+}

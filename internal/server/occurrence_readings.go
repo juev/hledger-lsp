@@ -2,11 +2,15 @@ package server
 
 import (
 	"cmp"
+	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -29,6 +33,8 @@ type occurrenceReading struct {
 	// for a reading that has no occurrence (a document outside every tree).
 	context    parser.Context
 	hasContext bool
+	// other is nil for the primary reading, which the document cache serves.
+	other *otherReading
 	// includedFrom lists the files that include the document under this context,
 	// in workspace order. An entry is empty for a tree whose root is the document.
 	includedFrom []string
@@ -60,13 +66,25 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 		primary.tree, primary.id = tree, firstOccurrenceIDForPath(tree, path)
 		if occurrence := tree.Occurrence(primary.id); occurrence != nil {
 			primary.context, primary.hasContext = occurrence.InitialContext, true
-			primary.includedFrom = []string{occurrence.Via.SourcePath}
+			primary.includedFrom = []string{includeLabel(*occurrence)}
 		}
 	}
 	readings := []occurrenceReading{primary}
 	if s.workspace == nil || path == "" {
 		return readings
 	}
+
+	doc := s.cachedParse(docURI, content)
+	used := make(map[readingKey]bool)
+	defer func() {
+		doc.othersMu.Lock()
+		for key := range doc.others {
+			if !used[key] {
+				delete(doc.others, key)
+			}
+		}
+		doc.othersMu.Unlock()
+	}()
 
 	for _, tree := range s.workspace.GetIncludeTreesForFile(path) {
 		if tree.Resolved == nil {
@@ -77,29 +95,61 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 				continue
 			}
 			if index := indexOfEqualContext(readings, occurrence.InitialContext); index >= 0 {
-				readings[index].includedFrom = append(readings[index].includedFrom, occurrence.Via.SourcePath)
+				readings[index].includedFrom = append(readings[index].includedFrom, includeLabel(occurrence))
 				continue
 			}
-			journal, parseErrs, ok := tree.Resolved.ParseOccurrence(occurrence.ID, content)
+			key := readingKey{tree.Resolved, occurrence.ID}
+			other, ok := s.otherReadingFor(doc, key, content)
 			if !ok {
 				continue
 			}
+			used[key] = true
 			resolved, id := tree.Resolved, occurrence.ID
 			readings = append(readings, occurrenceReading{
 				context:    occurrence.InitialContext,
 				hasContext: true,
 				tree:       tree.Resolved,
 				id:         occurrence.ID,
-				journal:    journal,
-				parseErrs:  parseErrs,
+				journal:    other.journal,
+				parseErrs:  other.parseErrs,
+				other:      other,
 				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
 					return resolved.FormatsAt(id, offset)
 				},
-				includedFrom: []string{occurrence.Via.SourcePath},
+				includedFrom: []string{includeLabel(occurrence)},
 			})
 		}
 	}
 	return readings
+}
+
+// otherReadingFor returns the cached parse of content under the occurrence,
+// parsing it on first use.
+func (s *Server) otherReadingFor(doc *cachedDoc, key readingKey, content string) (*otherReading, bool) {
+	doc.othersMu.Lock()
+	defer doc.othersMu.Unlock()
+	if other, ok := doc.others[key]; ok {
+		return other, true
+	}
+	journal, parseErrs, ok := key.tree.ParseOccurrence(key.id, content)
+	if !ok {
+		return nil, false
+	}
+	other := &otherReading{journal: journal, parseErrs: parseErrs}
+	if doc.others == nil {
+		doc.others = make(map[readingKey]*otherReading)
+	}
+	doc.others[key] = other
+	return other, true
+}
+
+// includeLabel names the include directive that created an occurrence, as
+// `parent.journal:12`. The root of a tree has no directive and an empty label.
+func includeLabel(occurrence include.JournalOccurrence) string {
+	if occurrence.Via.SourcePath == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(occurrence.Via.SourcePath), occurrence.Via.IncludeRange.Start.Line)
 }
 
 func indexOfEqualContext(readings []occurrenceReading, candidate parser.Context) int {
@@ -164,4 +214,94 @@ func applyEdits(content string, edits []protocol.TextEdit) string {
 		content = applyChange(content, edit.Range, edit.NewText)
 	}
 	return content
+}
+
+// declarationsOf collects what an include tree declares, for the readings that
+// belong to a tree other than the one the workspace answers declarations for.
+func declarationsOf(tree *include.ResolvedJournal) analyzer.ExternalDeclarations {
+	external := analyzer.ExternalDeclarations{Accounts: map[string]bool{}, Commodities: map[string]bool{}}
+	for _, directive := range tree.AllDirectives() {
+		switch d := directive.(type) {
+		case ast.AccountDirective:
+			external.Accounts[d.Account.Name] = true
+		case ast.CommodityDirective:
+			external.Commodities[d.Commodity.Symbol] = true
+		}
+	}
+	return external
+}
+
+// analysisOf returns the analysis of a non-primary reading, reusing the last one
+// when it was reached under the same declarations.
+func (s *Server) analysisOf(other *otherReading, external analyzer.ExternalDeclarations) *analyzer.AnalysisResult {
+	other.analysisMu.Lock()
+	defer other.analysisMu.Unlock()
+	if other.analysis != nil && sameDeclarations(other.analysisExternal, external) {
+		return other.analysis
+	}
+	other.analysis = s.analyzeJournal(other.journal, external)
+	other.analysisExternal = external
+	return other.analysis
+}
+
+// mergeReadingDiagnostics joins the diagnostics of the readings. One that every
+// reading reports is kept as it is; one that only some readings report says
+// which includes it holds for, since the same line is fine under the others.
+func mergeReadingDiagnostics(readings []occurrenceReading, perReading [][]protocol.Diagnostic) []protocol.Diagnostic {
+	if len(readings) == 1 {
+		return perReading[0]
+	}
+
+	type key struct {
+		rng     protocol.Range
+		code    string
+		message string
+	}
+	keyOf := func(d protocol.Diagnostic) key {
+		return key{d.Range, fmt.Sprint(d.Code), fmt.Sprint(d.Message)}
+	}
+
+	holders := make(map[key][]int)
+	var order []protocol.Diagnostic
+	for index, diagnostics := range perReading {
+		for _, d := range diagnostics {
+			k := keyOf(d)
+			if _, seen := holders[k]; !seen {
+				order = append(order, d)
+			}
+			if h := holders[k]; len(h) == 0 || h[len(h)-1] != index {
+				holders[k] = append(h, index)
+			}
+		}
+	}
+
+	merged := make([]protocol.Diagnostic, 0, len(order))
+	for _, d := range order {
+		held := holders[keyOf(d)]
+		if len(held) < len(readings) {
+			d.Message = protocol.String(fmt.Sprint(d.Message) + " (" + occurrenceQualifier(readings, held) + ")")
+		}
+		merged = append(merged, d)
+	}
+	return merged
+}
+
+// occurrenceQualifier names the includes of the readings at the given indexes.
+func occurrenceQualifier(readings []occurrenceReading, held []int) string {
+	const shown = 3
+	var labels []string
+	for _, index := range held {
+		for _, label := range readings[index].includedFrom {
+			if label != "" && !slices.Contains(labels, label) {
+				labels = append(labels, label)
+			}
+		}
+	}
+	if len(labels) == 0 {
+		return "when this file is the journal root"
+	}
+	if len(labels) > shown {
+		return "when included from " + strings.Join(labels[:shown], ", ") + ", ..."
+	}
+	return "when included from " + strings.Join(labels, ", ")
 }

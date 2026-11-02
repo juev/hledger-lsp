@@ -50,6 +50,29 @@ type cachedDoc struct {
 	// runningMu serialises the replay so concurrent requests share one.
 	runningMu sync.Mutex
 	running   *runningBalanceEntry
+
+	// others holds the parse and analysis of the document under the include
+	// contexts other than the primary one, keyed by tree and occurrence. The
+	// keys carry the tree's pointer, so a changed tree never reuses an entry;
+	// occurrenceReadings drops the entries no longer asked for.
+	othersMu sync.Mutex
+	others   map[readingKey]*otherReading
+}
+
+// readingKey identifies an occurrence within one resolved tree.
+type readingKey struct {
+	tree *include.ResolvedJournal
+	id   include.OccurrenceID
+}
+
+// otherReading is the document read under a context other than the primary one.
+type otherReading struct {
+	journal   *ast.Journal
+	parseErrs []parser.ParseError
+
+	analysisMu       sync.Mutex
+	analysis         *analyzer.AnalysisResult
+	analysisExternal analyzer.ExternalDeclarations
 }
 
 // runningBalanceEntry is one replay together with the inputs that produced it.
