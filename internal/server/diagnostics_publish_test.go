@@ -624,3 +624,127 @@ func TestPublishDiagnostics_AssignmentWithPostingDateIsAnError(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishDiagnostics_ImpossibleBracketedPostingDateIsAnError(t *testing.T) {
+	content := "2024-01-01 касса\n    現金  5 USD  ; заметка [2024-13-05]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///bracket-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+			assert.Equal(t, uint32(1), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(26), invalid.Range.Start.Character)
+		})
+	}
+}
+
+func TestPublishDiagnostics_BracketedSecondaryDateTakesThePrimaryYear(t *testing.T) {
+	content := "2024-01-01 касса\n    現金  5 USD\n    ; заметка [2023-01-05=02-29]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///bracket-secondary.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, uint32(2), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(26), invalid.Range.Start.Character)
+			assert.Equal(t, uint32(31), invalid.Range.End.Character)
+		})
+	}
+}
+
+func TestPublishDiagnostics_AssignmentWithTextBracketIsNotDated(t *testing.T) {
+	// hledger reads [2024-01-05=заметка] as text, so the assignment carries no
+	// posting date and the journal loads.
+	content := "2024-01-01 касса\n    現金:口座  = -4 GBP  ; [2024-01-05=заметка]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///assignment-text-bracket.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			for _, d := range diagnostics {
+				assert.NotEqual(t, protocol.DiagnosticSeverityError, d.Severity, "got %v", codesIn(diagnostics))
+			}
+		})
+	}
+}
+
+func TestPublishDiagnostics_ImpossibleBracketedDateInAPeriodicTransaction(t *testing.T) {
+	content := "~ monthly  ; бюджет\n    расход:еда  5 USD\n    ; заметка [2024-13-05]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///periodic-bracket-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+			assert.Equal(t, uint32(2), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(15), invalid.Range.Start.Character)
+			assert.Equal(t, uint32(25), invalid.Range.End.Character)
+		})
+	}
+}
+
+func TestPublishDiagnostics_PeriodicBracketedDateFollowsTheYDirective(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		invalid bool
+		line    uint32
+	}{
+		{name: "inline, common year", content: "Y 2023\n~ monthly\n    расход  5 USD  ; заметка [02-29]\n    капитал\n", invalid: true, line: 2},
+		{name: "inline, leap year", content: "Y 2024\n~ monthly\n    расход  5 USD  ; заметка [02-29]\n    капитал\n"},
+		{name: "below the posting, common year", content: "Y 2023\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n", invalid: true, line: 3},
+		{name: "below the posting, leap year", content: "Y 2024\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n"},
+	} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(tc.name+fmt.Sprintf(" %q", newline), func(t *testing.T) {
+				ts := newTestServer()
+				diagnostics, err := ts.openAndWait(uri.URI("file:///periodic-year.journal"), strings.ReplaceAll(tc.content, "\n", newline))
+				require.NoError(t, err)
+
+				invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+				if !tc.invalid {
+					assert.Nil(t, invalid, "got %v", codesIn(diagnostics))
+					return
+				}
+				require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+				assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+				assert.Equal(t, tc.line, invalid.Range.Start.Line)
+			})
+		}
+	}
+}

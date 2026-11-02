@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/shopspring/decimal"
 
@@ -133,7 +134,9 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 		dateTagDiags := validateDateTags(tx)
 		result.Diagnostics = append(result.Diagnostics, dateTagDiags...)
 		result.Diagnostics = append(result.Diagnostics, checkAssignmentDates(tx)...)
+		result.Diagnostics = append(result.Diagnostics, validateBracketDates(tx)...)
 	}
+	result.Diagnostics = append(result.Diagnostics, validateRuleBracketDates(journal)...)
 
 	return result
 }
@@ -209,6 +212,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 		}
 		txDiags = append(txDiags, validateDateTags(&tx)...)
 		txDiags = append(txDiags, checkAssignmentDates(&tx)...)
+		txDiags = append(txDiags, validateBracketDates(&tx)...)
 
 		for _, d := range txDiags {
 			key := diagKey{d.Range.Start.Line, d.Range.Start.Column, d.Message, d.Code, d.Severity}
@@ -696,7 +700,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
 
-	checkTag := func(tag ast.Tag) {
+	checkTag := func(tag ast.Tag, year int) {
 		name := tag.Name
 		if name != "date" && name != "date2" {
 			return
@@ -713,7 +717,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 			return
 		}
 
-		if !isValidDateValue(leadingDateText(tag.Value)) {
+		if !isValidDateValueIn(leadingDateText(tag.Value), year) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
 				Severity: SeverityError,
@@ -724,17 +728,30 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		}
 	}
 
+	// A comment line below a posting belongs to that posting, and its dates are
+	// read in the transaction year; the other comment lines are the transaction's.
+	postingLines := make(map[int]bool)
+	for i := range tx.Postings {
+		for _, line := range continuationComments(tx, &tx.Postings[i]) {
+			postingLines[line.Range.Start.Line] = true
+		}
+	}
+
 	// Check transaction comments
 	for _, comment := range tx.Comments {
+		year := withoutYear
+		if postingLines[comment.Range.Start.Line] {
+			year = tx.Date.Year
+		}
 		for _, tag := range comment.Tags {
-			checkTag(tag)
+			checkTag(tag, year)
 		}
 	}
 
 	// Check posting tags
 	for _, posting := range tx.Postings {
 		for _, tag := range posting.Tags {
-			checkTag(tag)
+			checkTag(tag, tx.Date.Year)
 		}
 	}
 
@@ -766,10 +783,177 @@ func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 	return diags
 }
 
-// isValidDateValue reports whether a date:/date2: tag value is one hledger
+// validateBracketDates reports the bracketed posting dates that hledger refuses
+// to load. hledger takes a bracket for a date when everything in it is a digit,
+// -, /, . or =, with at least one digit and one of -, / or .; [garbage], [5],
+// [ 2024-01-20 ] and [2024-13-05x] stay text. Such a bracket must then be exactly
+// [date], [date=date] or [=date] with dates that exist, so [2024-13-05],
+// [2024-01-05-] and [2024-01-05=2024-01-06=2024-01-07] make the journal fail.
+// Every bracket of the comment of a posting and of the comment lines below it is
+// checked.
+func validateBracketDates(tx *ast.Transaction) []Diagnostic {
+	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.Year)
+}
+
+// validateRuleBracketDates reports the bracketed posting dates hledger refuses in
+// periodic transactions and auto posting rules. A periodic transaction reads a
+// date without a year in the year in force where it is written; an auto posting
+// rule has no year.
+func validateRuleBracketDates(journal *ast.Journal) []Diagnostic {
+	var diags []Diagnostic
+	for i := range journal.PeriodicTransactions {
+		periodic := &journal.PeriodicTransactions[i]
+		diags = append(diags, postingBracketDateDiagnostics(periodic.Postings, periodic.Comments, periodic.Year)...)
+	}
+	for i := range journal.AutoPostingRules {
+		rule := &journal.AutoPostingRules[i]
+		diags = append(diags, postingBracketDateDiagnostics(rule.Postings, rule.Comments, unknownYear)...)
+	}
+	return diags
+}
+
+func postingBracketDateDiagnostics(postings []ast.Posting, comments []ast.Comment, year int) []Diagnostic {
+	var diags []Diagnostic
+	for i := range postings {
+		posting := &postings[i]
+		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, year)
+		for _, line := range postingCommentLines(postings, comments, posting) {
+			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, year)
+		}
+	}
+	return diags
+}
+
+func appendBracketDateDiagnostics(diags []Diagnostic, comment string, base ast.Position, transactionYear int) []Diagnostic {
+	for start := 0; start < len(comment); start++ {
+		if comment[start] != '[' {
+			continue
+		}
+		length := strings.IndexByte(comment[start+1:], ']')
+		if length < 0 {
+			break
+		}
+		content := comment[start+1 : start+1+length]
+		if !isBracketedDate(content) {
+			continue
+		}
+
+		// A yearless secondary date takes the year of the primary one.
+		primary, secondary, hasSecondary := strings.Cut(content, "=")
+		secondaryYear := transactionYear
+		if primary != "" {
+			if year, ok := bracketDateYear(primary, transactionYear); ok {
+				secondaryYear = year
+			} else {
+				diags = append(diags, bracketDateDiagnostic(comment, base, start+1, primary))
+			}
+		}
+		if hasSecondary {
+			if _, ok := bracketDateYear(secondary, secondaryYear); !ok {
+				diags = append(diags, bracketDateDiagnostic(comment, base, start+1+len(primary)+1, secondary))
+			}
+		}
+	}
+	return diags
+}
+
+// bracketDateDiagnostic reports the half of a bracket that starts at byte from of
+// the comment, whose text begins just after the comment marker at base.
+func bracketDateDiagnostic(comment string, base ast.Position, from int, value string) Diagnostic {
+	column := base.Column + 1 + utf8.RuneCountInString(comment[:from])
+	message := fmt.Sprintf("posting date has invalid date value: %s", value)
+	if value == "" {
+		message = "posting date has no date after ="
+	}
+	return Diagnostic{
+		Range: ast.Range{
+			Start: ast.Position{Line: base.Line, Column: column, Offset: base.Offset + 1 + from},
+			End:   ast.Position{Line: base.Line, Column: column + utf8.RuneCountInString(value), Offset: base.Offset + 1 + from + len(value)},
+		},
+		Severity: SeverityError,
+		Code:     "INVALID_POSTING_DATE",
+		Message:  message,
+		Data:     map[string]any{"kind": "postingDate", "value": value},
+	}
+}
+
+// isBracketedDate reports whether hledger reads what is in a bracket as a date:
+// only digits, separators and =, with a digit and a separator among them.
+func isBracketedDate(content string) bool {
+	digit, separator := false, false
+	for i := 0; i < len(content); i++ {
+		switch c := content[i]; {
+		case c >= '0' && c <= '9':
+			digit = true
+		case c == '-' || c == '/' || c == '.':
+			separator = true
+		case c != '=':
+			return false
+		}
+	}
+	return digit && separator
+}
+
+// bracketDateYear reads one half of a bracketed date the way hledger does and
+// returns its year. The half is a year of four or more digits, a month and a day
+// joined by one separator, or a month and a day in the given year; nothing may
+// be left over.
+func bracketDateYear(value string, year int) (int, bool) {
+	var parts []string
+	var separators []byte
+	begin := 0
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; {
+		case c == '-' || c == '/' || c == '.':
+			parts = append(parts, value[begin:i])
+			separators = append(separators, c)
+			begin = i + 1
+		case c < '0' || c > '9':
+			return 0, false
+		}
+	}
+	parts = append(parts, value[begin:])
+	for _, part := range parts {
+		if part == "" {
+			return 0, false
+		}
+	}
+
+	switch {
+	case len(parts) == 3 && len(parts[0]) >= 4 && separators[0] == separators[1]:
+		year = yearNumber(parts[0])
+	case len(parts) == 2 && len(parts[0]) < 4 && year != unknownYear:
+	default:
+		return 0, false
+	}
+	return year, isValidDateValueIn(value, year)
+}
+
+// yearNumber returns a year written in digits, reduced to the same place in the
+// 400-year Gregorian cycle so that a year of any length keeps its leap years.
+func yearNumber(digits string) int {
+	year := 0
+	for _, ch := range digits {
+		year = (year*10 + int(ch-'0')) % 400
+	}
+	return year
+}
+
+// unknownYear stands for the year of an auto posting rule, which has none: hledger
+// refuses a bracketed date without a year there unless it follows a full date.
+const unknownYear = -2
+
+// withoutYear stands for the year of a date tag written outside a posting. hledger
+// reads no posting date there, so a value without a year is not checked against
+// the transaction year.
+const withoutYear = -1
+
+// isValidDateValueIn reports whether a date:/date2: tag value is one hledger
 // accepts. hledger requires a day: "; date:2024-01" fails to load while
 // "; date:1/5" is a valid smart date, so a year-month value is rejected here.
-func isValidDateValue(value string) bool {
+// A value without a year takes the year of the transaction it is read in: 02-29
+// is a date in 2024 and not in 2023.
+func isValidDateValueIn(value string, transactionYear int) bool {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
@@ -799,9 +983,17 @@ func isValidDateValue(value string) bool {
 		numbers = append(numbers, number)
 	}
 
-	year, month, day := 0, numbers[0], numbers[1]
+	year, month, day := transactionYear, numbers[0], numbers[1]
 	if len(numbers) == 3 {
-		year, month, day = numbers[0], numbers[1], numbers[2]
+		year, month, day = yearNumber(parts[0]), numbers[1], numbers[2]
+	}
+	if year == withoutYear {
+		return parser.IsValidCalendarDate(0, month, day)
+	}
+	if year == 0 {
+		// Year 0 is a leap year, and a value without a year in a transaction
+		// of no known year is checked against one.
+		year = 2000
 	}
 	return parser.IsValidCalendarDate(year, month, day)
 }

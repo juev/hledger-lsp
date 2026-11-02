@@ -38,6 +38,9 @@ type Transaction struct {
 }
 
 type PeriodicTransaction struct {
+	// Year is the year its postings read a date without one in: the Y directive
+	// in force where the transaction is written, else the current year.
+	Year             int
 	Period           string
 	Status           Status
 	Code             string
