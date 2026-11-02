@@ -132,3 +132,54 @@ func TestParser_AccountDirectiveWithLoneTab(t *testing.T) {
 	}
 	assert.Equal(t, []string{"e:x ; c", "a:b c", "q:w"}, names)
 }
+
+// A tab before a trailing comment is not part of a directive argument, and a
+// colon inside that comment must not turn the argument into an account.
+func TestParser_DirectiveWithTabBeforeCommentContainingColon(t *testing.T) {
+	for _, eol := range []string{"\n", "\r\n"} {
+		input := textutil.NormalizeLineEndings("commodity USD\t; note: x" + eol +
+			"commodity EUR" + eol +
+			"P 2024-01-01 EUR\t1.1 USD\t; source: ecb" + eol +
+			"payee Foo\t; a:b" + eol +
+			"payee Кафе\t; а:б" + eol +
+			"tag t\t; x:y" + eol +
+			"decimal-mark .\t; c: d" + eol +
+			"Y 2024\t; c: d" + eol)
+		journal, errs := Parse(input)
+		require.Empty(t, errs)
+
+		var commodities, payees, tags []string
+		var prices int
+		for _, directive := range journal.Directives {
+			switch d := directive.(type) {
+			case ast.CommodityDirective:
+				commodities = append(commodities, d.Commodity.Symbol)
+			case ast.PriceDirective:
+				prices++
+				assert.Equal(t, "EUR", d.Commodity.Symbol)
+				assert.Equal(t, "USD", d.Price.Commodity.Symbol)
+				assert.Equal(t, "1.1", d.Price.Quantity.String())
+			case ast.PayeeDirective:
+				payees = append(payees, d.Name)
+			case ast.TagDirective:
+				tags = append(tags, d.Name)
+			}
+		}
+		assert.Equal(t, []string{"USD", "EUR"}, commodities)
+		assert.Equal(t, 1, prices)
+		assert.Equal(t, []string{"Foo", "Кафе"}, payees)
+		assert.Equal(t, []string{"t"}, tags)
+	}
+}
+
+func TestParser_AliasAndIncludeWithTab(t *testing.T) {
+	journal, errs := Parse("alias a:b\t= c:d\ninclude f\t; c\n")
+	require.Empty(t, errs)
+	require.Len(t, journal.Directives, 1)
+	alias, ok := journal.Directives[0].(ast.AliasDirective)
+	require.True(t, ok)
+	assert.Equal(t, "a:b", alias.Original)
+	assert.Equal(t, "c:d", alias.Alias)
+	require.Len(t, journal.Includes, 1)
+	assert.Equal(t, "f", journal.Includes[0].Path)
+}
