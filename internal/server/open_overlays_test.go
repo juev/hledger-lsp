@@ -187,3 +187,51 @@ func TestWorkspace_DeletedClosedIncludeIsMissing(t *testing.T) {
 	}
 	assert.NotEmpty(t, f.ts.workspace.LoadErrors(), "the missing include is reported")
 }
+
+// A closed include that is renamed away and back arrives as Deleted and then
+// Created in separate batches. The first rebuild leaves the file without
+// owners; the second must still find the trees that include it.
+func TestWorkspace_DeletedThenCreatedClosedIncludeComesBack(t *testing.T) {
+	f := newOverlayFixture(t, overlayA)
+	_, _ = f.ts.openAndWait(f.mainURI, overlayMain)
+	_, _ = f.ts.openAndWait(f.aURI, overlayA)
+	moved := filepath.Join(f.dir, "b-moved.journal")
+
+	require.NoError(t, os.Rename(f.bPath, moved))
+	require.NoError(t, f.ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: f.bURI, Type: protocol.FileChangeTypeDeleted}},
+	}))
+	assert.Equal(t, "", amountOfTransaction(t, f.ts, "b"))
+	assert.NotEmpty(t, f.ts.workspace.LoadErrors(), "b is missing while it is renamed away")
+
+	require.NoError(t, os.Rename(moved, f.bPath))
+	require.NoError(t, f.ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: f.bURI, Type: protocol.FileChangeTypeCreated}},
+	}))
+	assert.Equal(t, "5", amountOfTransaction(t, f.ts, "b"), "b is back in the tree")
+	assert.Empty(t, f.ts.workspace.LoadErrors(), "the include no longer fails")
+}
+
+// A file that cannot be read when its document closes is not in the tree, and
+// its last buffer must stop counting, as hledger fails on the include.
+func TestWorkspace_CloseOfUnreadableFileDropsItsBuffer(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file permissions do not restrict root")
+	}
+	f := newOverlayFixture(t, overlayA)
+	_, _ = f.ts.openAndWait(f.mainURI, overlayMain)
+	_, _ = f.ts.openAndWait(f.aURI, overlayA)
+	_, _ = f.ts.openAndWait(f.bURI, overlayB)
+	_, err := f.ts.replaceAndWait(f.bURI, "2024-01-02 b\n    assets:cash  3 USD\n    equity:b\n")
+	require.NoError(t, err)
+
+	require.NoError(t, os.Chmod(f.bPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(f.bPath, 0o644) })
+	require.NoError(t, f.ts.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: f.bURI},
+	}))
+	_, err = f.ts.replaceAndWait(f.aURI, "2024-01-01 a\n    assets:cash  -20 USD\n    equity:a\n")
+	require.NoError(t, err)
+
+	assert.Equal(t, "", amountOfTransaction(t, f.ts, "b"), "the closed buffer of b no longer counts")
+}
