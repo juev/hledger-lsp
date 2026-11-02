@@ -695,7 +695,10 @@ func readTagCursor(beforeCursor string, posting bool) tagCursor {
 // isPostingComment reports whether hledger reads the comment on line n as a
 // posting comment: the line is a posting, or a ; line below a posting, of a
 // transaction, a periodic transaction or an auto posting rule. Like the parser,
-// it takes an empty line or a line at the first column as the end of the block.
+// it reads an indented line that starts with the * or ! status as a posting and
+// one that starts with # as a comment, takes an empty line or a line at the first
+// column as the end of the block, and skips a byte order mark before the first
+// line.
 func isPostingComment(lines []string, n int) bool {
 	if n < 0 || n >= len(lines) {
 		return false
@@ -707,7 +710,7 @@ func isPostingComment(lines []string, n int) bool {
 		return trimmed, trimmed != line
 	}
 	isPosting := func(trimmed string) bool {
-		return trimmed != "" && !strings.ContainsRune(";#*", rune(trimmed[0]))
+		return trimmed != "" && trimmed[0] != ';' && trimmed[0] != '#'
 	}
 
 	trimmed, ok := indented(lines[n])
@@ -720,6 +723,9 @@ func isPostingComment(lines []string, n int) bool {
 	}
 	for i := n - 1; i >= 0; i-- {
 		line := strings.TrimSuffix(lines[i], "\r")
+		if i == 0 {
+			line = strings.TrimPrefix(line, "\ufeff")
+		}
 		if line == "" {
 			return false
 		}

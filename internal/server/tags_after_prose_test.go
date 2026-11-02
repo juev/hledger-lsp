@@ -332,6 +332,16 @@ var postingCompletionCases = []struct {
 	{"periodic header", "~ monthly  ; :,кл", ",кл"},
 	{"comment line after an empty line", "2024-01-16 t\n    expenses:food  $50\n\n    ; :,кл", ",кл"},
 	{"comment line under a commodity directive", "commodity X\n    format 1.00 X\n    ; :,кл", ",кл"},
+	{"cleared posting line", "2024-01-16 t\n    * expenses:food  $50  ; оплата :,кл", "кл"},
+	{"pending posting line", "2024-01-16 t\n    ! expenses:food  $50  ; 日本 :,кл", "кл"},
+	{"comment line below a cleared first posting", "2024-01-16 t\n    * expenses:food  $50\n    ; 🍕 :\u3000,кл", "кл"},
+	{"comment line below a cleared periodic posting", "~ monthly\n    * expenses:food  $50\n    ; :,кл", "кл"},
+	{"comment line below a cleared auto rule posting", "= food\n    * expenses:tips  *0.1\n    ; :,кл", "кл"},
+	{"cleared posting line of an auto rule", "= food\n    * expenses:tips  *0.1  ; :,кл", "кл"},
+	{"BOM before a transaction header", "\ufeff2024-01-16 t\n    expenses:food  $50\n    ; заметка :,кл", "кл"},
+	{"BOM before a periodic header", "\ufeff~ monthly\n    * expenses:food  $50\n    ; :,кл", "кл"},
+	{"BOM before an auto rule header", "\ufeff= food\n    expenses:tips  *0.1\n    ; :,кл", "кл"},
+	{"BOM before a transaction header, comment line before the postings", "\ufeff2024-01-16 t\n    ; :,кл", ",кл"},
 }
 
 func TestCompletion_TagNameInPostingComment_QueryAndRange(t *testing.T) {
@@ -364,6 +374,12 @@ func TestCompletion_TagValueInPostingComment_QueryAndRange(t *testing.T) {
 		{"comment line below a posting", "2024-01-16 t\n    expenses:food  $50\n    ; заметка :,клиент:Ив", "клиент"},
 		{"comment line below a periodic posting", "~ monthly\n    expenses:food  $50\n    ; :,клиент:Ив", "клиент"},
 		{"transaction header", "2024-01-16 t  ; заметка :,клиент:Ив", ",клиент"},
+		{"cleared posting line", "2024-01-16 t\n    * expenses:food  $50  ; заметка :,клиент:Ив", "клиент"},
+		{"comment line below a cleared first posting", "2024-01-16 t\n    * expenses:food  $50\n    ; 🍕 :,клиент:Ив", "клиент"},
+		{"comment line below a cleared auto rule posting", "= food\n    * expenses:tips  *0.1\n    ; :,клиент:Ив", "клиент"},
+		{"comment line below a cleared periodic posting", "~ monthly\n    * expenses:food  $50\n    ; :,клиент:Ив", "клиент"},
+		{"BOM before a transaction header", "\ufeff2024-01-16 t\n    expenses:food  $50\n    ; :,клиент:Ив", "клиент"},
+		{"BOM before an auto rule header", "\ufeff= food\n    * expenses:tips  *0.1  ; :,клиент:Ив", "клиент"},
 	}
 	for _, tt := range tests {
 		for _, le := range lineEndings {
@@ -468,6 +484,59 @@ func TestSemanticTokens_PeriodicAndAutoRulePostingComments(t *testing.T) {
 				line := lines[i]
 				assert.Equal(t, []uint32{uint32(lsputil.UTF16Len(line) - len(want))}, tagStarts[uint32(i)], "line %d", i)
 			}
+		})
+	}
+}
+
+// The cleared and pending marks start a posting, so a comment on or below such a
+// posting is a posting comment; a byte order mark before the first header does
+// not hide that header.
+func TestCompletion_TagsInClearedPostingCommentsAfterABOM(t *testing.T) {
+	for _, le := range lineEndings {
+		t.Run(le.name, func(t *testing.T) {
+			lines := []string{
+				"\ufeff2024-01-15 test",
+				"    * expenses:food  $50  ; клиент:Иван Петров",
+				"    assets:cash",
+				"",
+				"2024-01-16 another",
+				"    * expenses:food  $50  ; оплата :,кли",
+				"    ; 🍕 :,клиент:",
+				"    assets:cash",
+			}
+			ts := newTestServer()
+			docURI := uri.URI("file:///cleared-posting-tags.journal")
+			require.NoError(t, ts.openDocument(docURI, strings.Join(lines, le.newline)))
+
+			complete := func(line int) *protocol.CompletionList {
+				result, err := ts.Server.completion(context.Background(), &protocol.CompletionParams{
+					TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+						TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+						Position:     protocol.Position{Line: uint32(line), Character: uint32(lsputil.UTF16Len(lines[line]))},
+					},
+				})
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				return result
+			}
+			itemNamed := func(list *protocol.CompletionList, label string) *protocol.CompletionItem {
+				for i := range list.Items {
+					if list.Items[i].Label == label {
+						return &list.Items[i]
+					}
+				}
+				t.Fatalf("%q not offered, got %v", label, extractLabels(list.Items))
+				return nil
+			}
+
+			name := itemNamed(complete(5), "клиент")
+			require.NotNil(t, name.TextEdit)
+			assert.Equal(t, utf16Col(t, lines[5], "кли"), completionTextEdit(*name).Range.Start.Character,
+				"the edit replaces only the name, not the comma hledger skips")
+
+			value := itemNamed(complete(6), "Иван Петров")
+			require.NotNil(t, value.TextEdit)
+			assert.Equal(t, uint32(lsputil.UTF16Len(lines[6])), completionTextEdit(*value).Range.Start.Character)
 		})
 	}
 }
