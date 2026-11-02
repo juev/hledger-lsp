@@ -64,9 +64,11 @@ sudo mv hledger-lsp /usr/local/bin/
 
 ### WebAssembly (WASI)
 
-`hledger-lsp_wasip1_wasm.wasm` runs under WASI runtimes such as wasmtime. It is
+hledger-lsp can be built as a WebAssembly module that runs under WASI runtimes
+such as wasmtime. No release contains it yet: build it from source for now; the
+release configuration adds it starting with the next release. It is
 experimental and slower than the native binaries; see [docs/wasi.md](docs/wasi.md)
-for usage, limitations and what browser editors would need.
+for build commands, usage, limitations and what browser editors would need.
 
 ### From Source
 

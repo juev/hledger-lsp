@@ -1,7 +1,8 @@
 # WebAssembly (WASI) Build
 
-hledger-lsp also ships as a WebAssembly module for WASI preview 1
-(`GOOS=wasip1 GOARCH=wasm`). The module is the same language server: it speaks
+hledger-lsp can also be built as a WebAssembly module for WASI preview 1
+(`GOOS=wasip1 GOARCH=wasm`). No published release contains this module yet;
+until one does, build it from source (see [Running](#running)). The module is the same language server: it speaks
 LSP over stdin and stdout and reads journals through the files its host lets it
 open. The native binaries remain the recommended choice for desktop editors;
 the WASI module is slower, larger in memory and depends on the host runtime.
@@ -17,8 +18,10 @@ for what an integration would need.
 | [wasmtime](https://wasmtime.dev) | 50.0.1, Linux x86_64 | Works |
 | Node.js `node:wasi` | 26.12.0 (uvwasi 0.0.23), Linux x86_64 | Works; Node marks `node:wasi` experimental |
 
-Both runtimes run the same automated session in CI and before every release
-(`TestWASISmoke` in `cmd/hledger-lsp/wasi_smoke_test.go`). The session opens a
+Both runtimes run the same automated session in CI (`TestWASISmoke` in
+`cmd/hledger-lsp/wasi_smoke_test.go`). The release configuration also runs it
+against the built module before publishing; no real release has exercised
+that step yet. The session opens a
 four-file journal with an explicit `include` and a glob `include`, Cyrillic and
 CJK account names, and CRLF line endings. It checks initialization,
 diagnostics, completion, formatting, go to definition, references, document
@@ -32,9 +35,19 @@ Other WASI runtimes were not tested.
 
 ## Running
 
-Download `hledger-lsp_wasip1_wasm.wasm` from
-[GitHub Releases](https://github.com/juev/hledger-lsp/releases). It is listed in
-`checksums.txt` and has a `.minisig` signature like the native binaries.
+Build the module from source:
+
+```bash
+GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -ldflags '-s -w' \
+  -o hledger-lsp_wasip1_wasm.wasm ./cmd/hledger-lsp
+```
+
+The release configuration (`.goreleaser.yaml`) is set up to publish the module
+as `hledger-lsp_wasip1_wasm.wasm` starting with the next release, listed in
+`checksums.txt` and signed with minisign like the native binaries. Only the
+packaging has been checked so far: a local goreleaser snapshot produced the
+file under that name and its `checksums.txt` entry. Signing is unverified; that
+run used a stand-in for `minisign` that writes placeholder signature files.
 
 The server can only open files in directories the host preopens. Preopen the
 journal directory at the same path inside the module, so the `file://` URIs the
@@ -120,7 +133,7 @@ Node 26.12.0, on an Intel Xeon E3-1245 v6 (8 threads, Linux) that was shared
 with other jobs (load average 11–18), so latencies are noisy; compare builds
 within one table rather than across tables._
 
-Module size (`-ldflags "-s -w"`, as released): 17,806,809 bytes, 3,556,306
+Module size (`-ldflags "-s -w"`, the flags the release configuration uses): 17,806,809 bytes, 3,556,306
 bytes gzip -9. The native linux/amd64 binary built the same way is 8,704,160
 bytes.
 
