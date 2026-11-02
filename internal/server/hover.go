@@ -613,7 +613,7 @@ func findTagAtPosition(tags []ast.Tag, pos protocol.Position) *hoverElement {
 		// Determine if cursor is on tag name or tag value
 		// Tag format: name:value
 		// tag.Range.Start is at the beginning of name
-		colonCol := tag.Range.Start.Column + lsputil.UTF16Len(tag.Name)
+		colonCol := tag.Range.Start.Column + utf8.RuneCountInString(tag.Name)
 		cursorCol := int(pos.Character) + 1 // convert to 1-based
 
 		if cursorCol <= colonCol {

@@ -14,6 +14,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/rules"
 	"github.com/juev/hledger-lsp/internal/textutil"
 )
@@ -329,7 +330,7 @@ func determineCompletionContext(content string, pos protocol.Position) Completio
 
 	line := lines[pos.Line]
 
-	if tagCtx := determineTagContext(line, pos); tagCtx != ContextUnknown {
+	if tagCtx := determineTagContext(line, pos, isPostingComment(lines, int(pos.Line))); tagCtx != ContextUnknown {
 		return tagCtx
 	}
 
@@ -643,29 +644,98 @@ func parseCommentCursor(line string, bytePos int) (commentCursorInfo, bool) {
 	}, true
 }
 
-func determineTagContext(line string, pos protocol.Position) CompletionContextType {
+func determineTagContext(line string, pos protocol.Position, posting bool) CompletionContextType {
 	bytePos := lsputil.UTF16OffsetToByteOffset(line, int(pos.Character))
 	info, ok := parseCommentCursor(line, bytePos)
 	if !ok {
 		return ContextUnknown
 	}
 
-	lastColon := strings.LastIndex(info.beforeCursor, ":")
-	lastComma := strings.LastIndex(info.beforeCursor, ",")
+	if readTagCursor(info.beforeCursor, posting).inValue {
+		return ContextTagValue
+	}
+	return ContextTagName
+}
 
-	if lastColon == -1 {
-		return ContextTagName
+// tagCursor is what hledger reads where the comment text before the cursor
+// ends: the value of the tag called name, or a tag name being written. start is
+// the byte offset in that text where the value or the name begins.
+type tagCursor struct {
+	inValue bool
+	name    string
+	start   int
+}
+
+// readTagCursor scans the comment text before the cursor with a colon appended,
+// as a posting comment when posting is set. When that colon ends a tag name, the
+// cursor is in the name; when it lands in the value of an earlier tag that no
+// comma has closed, the cursor is in that value; otherwise a new name starts at
+// the cursor.
+func readTagCursor(beforeCursor string, posting bool) tagCursor {
+	scan := parser.ScanCommentTags
+	if posting {
+		scan = parser.ScanPostingCommentTags
+	}
+	tags := scan(beforeCursor + ":")
+	if len(tags) == 0 {
+		return tagCursor{start: len(beforeCursor)}
+	}
+	last := tags[len(tags)-1]
+	colon := last.NameStart + len(last.Name)
+	switch {
+	case colon == len(beforeCursor):
+		return tagCursor{start: last.NameStart}
+	case !strings.Contains(beforeCursor[colon+1:], ","):
+		return tagCursor{inValue: true, name: last.Name, start: last.ValueStart}
+	default:
+		return tagCursor{start: len(beforeCursor)}
+	}
+}
+
+// isPostingComment reports whether hledger reads the comment on line n as a
+// posting comment: the line is a posting, or a ; line below a posting, of a
+// transaction, a periodic transaction or an auto posting rule. Like the parser,
+// it reads an indented line that starts with the * or ! status as a posting and
+// one that starts with # as a comment, takes an empty line or a line at the first
+// column as the end of the block, and skips a byte order mark before the first
+// line.
+func isPostingComment(lines []string, n int) bool {
+	if n < 0 || n >= len(lines) {
+		return false
+	}
+	// indented returns the line without its indent, and whether it had one.
+	indented := func(line string) (string, bool) {
+		line = strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimLeft(line, " \t")
+		return trimmed, trimmed != line
+	}
+	isPosting := func(trimmed string) bool {
+		return trimmed != "" && trimmed[0] != ';' && trimmed[0] != '#'
 	}
 
-	if lastComma > lastColon {
-		afterComma := strings.TrimSpace(info.beforeCursor[lastComma+1:])
-		if strings.Contains(afterComma, ":") {
-			return ContextTagValue
+	trimmed, ok := indented(lines[n])
+	if !ok || trimmed == "" {
+		return false
+	}
+	below := isPosting(trimmed)
+	if !below && trimmed[0] != ';' {
+		return false
+	}
+	for i := n - 1; i >= 0; i-- {
+		line := strings.TrimSuffix(lines[i], "\r")
+		if i == 0 {
+			line = strings.TrimPrefix(line, "\ufeff")
 		}
-		return ContextTagName
+		if line == "" {
+			return false
+		}
+		trimmed, ok := indented(line)
+		if !ok {
+			return below && (line[0] >= '0' && line[0] <= '9' || line[0] == '~' || line[0] == '=')
+		}
+		below = below || isPosting(trimmed)
 	}
-
-	return ContextTagValue
+	return false
 }
 
 func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *analyzer.AnalysisResult, content string, pos protocol.Position, counts map[string]int, settings completionSettings) []protocol.CompletionItem {
@@ -740,7 +810,7 @@ func (s *Server) generateCompletionItems(ctxType CompletionContextType, result *
 		lines := strings.Split(content, "\n")
 		if int(pos.Line) < len(lines) {
 			line := lines[pos.Line]
-			tagName := extractCurrentTagName(line, int(pos.Character))
+			tagName := extractCurrentTagName(line, int(pos.Character), isPostingComment(lines, int(pos.Line)))
 			if values, ok := result.TagValues[tagName]; ok {
 				for _, value := range values {
 					items = append(items, protocol.CompletionItem{
@@ -912,21 +982,14 @@ func getAccountsForPrefix(accounts *analyzer.AccountIndex, prefix string) []stri
 	return accounts.All
 }
 
-func extractCurrentTagName(line string, pos int) string {
+func extractCurrentTagName(line string, pos int, posting bool) string {
 	bytePos := lsputil.UTF16OffsetToByteOffset(line, pos)
 	info, ok := parseCommentCursor(line, bytePos)
 	if !ok {
 		return ""
 	}
 
-	lastColon := strings.LastIndex(info.beforeCursor, ":")
-	if lastColon == -1 {
-		return ""
-	}
-
-	lastComma := strings.LastIndex(info.beforeCursor[:lastColon], ",")
-	start := lastComma + 1
-	return strings.TrimSpace(info.beforeCursor[start:lastColon])
+	return readTagCursor(info.beforeCursor, posting).name
 }
 
 // generateDateCompletionItems creates date suggestions with today/yesterday/tomorrow at top.
@@ -1178,27 +1241,17 @@ func calculateTextEditRange(content string, pos protocol.Position, ctxType Compl
 		if !ok {
 			return nil
 		}
-		lastComma := strings.LastIndex(info.beforeCursor, ",")
-		if lastComma != -1 {
-			seg := info.beforeCursor[lastComma+1:]
-			trimmed := strings.TrimLeft(seg, " ")
-			startByte = info.semicolonIdx + 1 + lastComma + 1 + (len(seg) - len(trimmed))
-		} else {
-			trimmed := strings.TrimLeft(info.beforeCursor, " ")
-			startByte = info.semicolonIdx + 1 + (info.cursorInComment - len(trimmed))
-		}
+		startByte = info.semicolonIdx + 1 + readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line))).start
 	case ContextTagValue:
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return nil
 		}
-		lastColon := strings.LastIndex(info.beforeCursor, ":")
-		if lastColon == -1 {
+		cursor := readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line)))
+		if !cursor.inValue {
 			return nil
 		}
-		seg := info.beforeCursor[lastColon+1:]
-		trimmed := strings.TrimLeft(seg, " ")
-		startByte = info.semicolonIdx + 1 + lastColon + 1 + (len(seg) - len(trimmed))
+		startByte = info.semicolonIdx + 1 + cursor.start
 	case ContextDate:
 		if len(line) > 0 && line[0] >= '0' && line[0] <= '9' {
 			startByte = 0
@@ -1419,22 +1472,18 @@ func extractQueryText(content string, pos protocol.Position, ctxType CompletionC
 		if !ok {
 			return ""
 		}
-		lastComma := strings.LastIndex(info.beforeCursor, ",")
-		if lastComma != -1 {
-			return strings.TrimSpace(info.beforeCursor[lastComma+1:])
-		}
-		return strings.TrimSpace(info.beforeCursor)
+		return info.beforeCursor[readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line))).start:]
 
 	case ContextTagValue:
 		info, ok := parseCommentCursor(line, byteCol)
 		if !ok {
 			return ""
 		}
-		lastColon := strings.LastIndex(info.beforeCursor, ":")
-		if lastColon == -1 {
+		cursor := readTagCursor(info.beforeCursor, isPostingComment(lines, int(pos.Line)))
+		if !cursor.inValue {
 			return ""
 		}
-		return strings.TrimSpace(info.beforeCursor[lastColon+1:])
+		return strings.TrimSpace(info.beforeCursor[cursor.start:])
 
 	case ContextDirective:
 		return beforeCursor
