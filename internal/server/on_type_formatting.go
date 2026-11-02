@@ -170,12 +170,7 @@ func (s *Server) formatPreviousPostingLine(doc string, uri uri.URI, line int) *p
 		return nil
 	}
 
-	journal, _ := s.cachedJournal(uri, doc)
-	commodityFormats := s.commodityFormatsForDocument(uri)
-
-	settings := s.getSettings()
-	opts := formatterOptionsFrom(settings.Formatting)
-	for _, edit := range formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts) {
+	for _, edit := range s.formatEdits(uri, doc) {
 		if int(edit.Range.Start.Line) == line {
 			if edit.NewText == lines[line] {
 				return nil

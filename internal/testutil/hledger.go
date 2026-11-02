@@ -264,3 +264,43 @@ func decodeHledgerAmount(t *testing.T, cmd *exec.Cmd) HledgerAmount {
 		Commodity: amounts[0].Commodity,
 	}
 }
+
+// HledgerPostingAmounts returns every posting amount of the journal at path as
+// "<quantity> <commodity>", in the order hledger prints them. Unlike
+// HledgerReadFile it covers all transactions, so a file included several times
+// is compared at every occurrence. ok is false when hledger rejects the journal.
+func HledgerPostingAmounts(t *testing.T, hledgerPath, path string) (amounts []string, ok bool) {
+	t.Helper()
+	cmd := exec.Command(hledgerPath, "-f", path, "print", "-O", "json")
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil, false
+	}
+
+	var transactions []struct {
+		Postings []struct {
+			Amount []struct {
+				Commodity string `json:"acommodity"`
+				Quantity  struct {
+					Mantissa json.Number `json:"decimalMantissa"`
+					Places   int32       `json:"decimalPlaces"`
+				} `json:"aquantity"`
+			} `json:"pamount"`
+		} `json:"tpostings"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(stdout.String()))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&transactions))
+
+	for _, transaction := range transactions {
+		for _, posting := range transaction.Postings {
+			for _, amount := range posting.Amount {
+				mantissa, err := decimal.NewFromString(amount.Quantity.Mantissa.String())
+				require.NoError(t, err)
+				amounts = append(amounts, mantissa.Shift(-amount.Quantity.Places).String()+" "+amount.Commodity)
+			}
+		}
+	}
+	return amounts, true
+}
