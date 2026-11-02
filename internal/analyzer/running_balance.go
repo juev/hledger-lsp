@@ -35,9 +35,9 @@ type PostingRef struct {
 func RunningBalances(sourced []include.SourcedTransaction, id include.OccurrenceID) map[PostingRef]map[string]decimal.Decimal {
 	var entries []registerEntry
 	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
-	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal) {
+	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 		tx := &sourced[sourceOrder].Transaction
-		entries = append(entries, registerEntry{registerDate(tx, &tx.Postings[postingIndex]), sourceOrder, postingIndex, contribution})
+		entries = append(entries, registerEntry{registerDate(tx, &tx.Postings[postingIndex]), sourceOrder, postingIndex, contribution, priced})
 	}
 	evaluator.run(sourced)
 
@@ -73,6 +73,7 @@ type registerEntry struct {
 	sourceOrder  int
 	postingIndex int
 	contribution map[string]decimal.Decimal
+	priced       bool
 }
 
 type postingKey struct {
@@ -97,7 +98,7 @@ func registerHidden(sourced []include.SourcedTransaction, entries []registerEntr
 	}
 	for _, e := range entries {
 		p := &sourced[e.sourceOrder].Transaction.Postings[e.postingIndex]
-		if p.Amount == nil && p.BalanceAssertion != nil && p.BalanceAssertion.Cost == nil && allZero(e.contribution) {
+		if p.Amount == nil && p.BalanceAssertion != nil && p.BalanceAssertion.Cost == nil && !e.priced && allZero(e.contribution) {
 			hidden[postingKey{e.sourceOrder, e.postingIndex}] = true
 		}
 	}

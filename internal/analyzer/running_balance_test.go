@@ -368,3 +368,35 @@ func TestRunningBalances_ReportedJournalMatchesRegister(t *testing.T) {
 	assert.Equal(t, "-2", runningBalanceAt(t, balances, 1, 3, "EUR"))
 	assert.Equal(t, "-112", runningBalanceAt(t, balances, 1, 3, "USD"))
 }
+
+func TestRunningBalances_AssignmentKeepsCostOfCommodityThatNetsToZero(t *testing.T) {
+	// The EUR quantity cancels, but 29 EUR @ 2 USD stays priced, so the strict
+	// assignment moves -63 USD to the elided posting. hledger 1.52.4 `reg -I x`.
+	balances := primaryRunningBalances(t, `2024-01-01 t1
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-02 t2
+    b  29 EUR
+    e
+
+2024-01-03 t3
+    b  == 5 USD
+    x
+`)
+	assert.Equal(t, "-63", runningBalanceAt(t, balances, 2, 1, "USD"))
+	assert.Equal(t, "29", runningBalanceAt(t, balances, 2, 1, "EUR"))
+}
+
+func TestRunningBalances_AssignmentThatCarriesACostIsListed(t *testing.T) {
+	// The assigned amount is -3 EUR plus 3 EUR @ 4 USD, which sums to zero in the
+	// register but is not an empty amount, so hledger 1.52.4 lists the posting.
+	balances := primaryRunningBalances(t, `2024-01-09 t2
+    d  -3 EUR @ 4 USD
+    d  =* -3 EUR
+    a:x
+`)
+	assert.True(t, hasRunningBalance(balances, 0, 1))
+	assert.Equal(t, "-3", runningBalanceAt(t, balances, 0, 1, "EUR"))
+}
