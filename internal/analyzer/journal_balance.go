@@ -76,13 +76,16 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 	return total
 }
 
-// otherCommodities returns the balances held by an account (and, for inclusive
-// assertions, its subaccounts) in commodities other than the asserted one, in a
-// stable order. hledger's `==` form requires these to be empty, and any non-zero
-// balance counts, however small: assertions are exact.
+// otherCommodities returns what an account holds in commodities other than the
+// asserted one, in a stable order, as hledger's `==` form checks it. The
+// commodities checked are those the account itself has an entry in, even one that
+// has netted to zero; for an inclusive assertion each is totalled with the
+// subaccounts, so a subaccount can offset the account's own balance but a
+// commodity only a subaccount holds is not looked at. Any non-zero balance
+// counts, however small: assertions are exact.
 func (b accountBalances) otherCommodities(account, except string, inclusive bool) []string {
 	var result []string
-	for commodity := range b.heldCommodities(account, inclusive) {
+	for commodity := range b[account] {
 		quantity := b.amount(account, commodity, inclusive)
 		if commodity == except || quantity.IsZero() {
 			continue

@@ -1612,6 +1612,204 @@ var assignmentOrderCases = []struct {
     b
 `,
 	},
+	{
+		name: "inclusive strict assertion ignores another commodity held only by a subaccount",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive assertion ignores another commodity held only by a subaccount",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR =* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion ignores another commodity held only by a deeper subaccount",
+		input: `2024-01-01 a
+    a:x:z  1 EUR
+    a:x  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion with an own balance in the asserted commodity only",
+		input: `2024-01-01 a
+    a  1 EUR
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion lets a subaccount offset the own balance",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 USD
+    a:y  -1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion after an inclusive strict assignment",
+		input: `2024-01-01 a
+    a  1 EUR
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  ==* 1 EUR
+    e
+
+2024-01-03 c
+    a  0 EUR ==* 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion with an own balance in another commodity",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+		wantMessages: []string{"EUR also holds 1 USD"},
+	},
+	{
+		name: "inclusive strict assertion with an own balance only partly offset by a subaccount",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 USD
+    a:y  -0.5 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+		wantMessages: []string{"EUR also holds 0.5 USD"},
+	},
+	{
+		name: "inclusive strict assertion adds the subaccount to an own balance",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 GBP
+    a:x  1 GBP
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+		wantMessages: []string{"EUR also holds 2 GBP"},
+	},
+	{
+		name: "inclusive strict assertion counts an own commodity that netted to zero",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 USD
+    a  -1 USD
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+		wantMessages: []string{"EUR also holds 1 USD"},
+	},
+	{
+		name: "inclusive strict assertion counts an own commodity written as zero",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  0 USD
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR ==* 1 EUR
+    e
+`,
+		wantMessages: []string{"EUR also holds 1 USD"},
+	},
+	{
+		name: "strict assertion ignores a subaccount's commodity",
+		input: `2024-01-01 a
+    a  1 EUR
+    a:y  1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR == 1 EUR
+    e
+`,
+	},
+	{
+		name: "strict assertion ignores an own commodity that netted to zero",
+		input: `2024-01-01 a
+    a  1 EUR
+    a  1 USD
+    a  -1 USD
+    e
+
+2024-01-02 b
+    a  0 EUR == 1 EUR
+    e
+`,
+	},
+	{
+		name: "inclusive strict assertion on Cyrillic and CJK accounts",
+		input: `2024-01-01 касса
+    касса:現金  1 EUR
+    касса:счёт  1 USD
+    капитал
+
+2024-01-02 проверка
+    касса  0 EUR ==* 1 EUR
+    капитал
+`,
+	},
+	{
+		name: "inclusive strict assertion on Cyrillic and CJK accounts with an own balance in another commodity",
+		input: `2024-01-01 касса
+    касса  1 EUR
+    касса  1 USD
+    現金:счёт  0.5 GBP
+    капитал
+
+2024-01-02 проверка
+    касса  0 EUR ==* 1 EUR
+    капитал
+`,
+		wantMessages: []string{"EUR also holds 1 USD"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {
