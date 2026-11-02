@@ -736,6 +736,52 @@ var assignmentOrderCases = []struct {
 `,
 	},
 	{
+		name: "mixed postings that net to zero in the priced commodity keep the conversion",
+		input: `2024-01-01 open
+    bank  2 EUR
+    equity
+
+2024-02-02 t
+    cash  -4 USD
+    bank  == -1 USD
+    bank  == 9 EUR
+`,
+	},
+	{
+		name: "mixed postings of opposite sign cancel in the priced commodity",
+		input: `2024-01-01 open
+    wallet  5 EUR
+    equity
+
+2024-01-02 open
+    broker  -5 EUR
+    equity
+
+2024-02-01 t
+    shop     10 USD
+    wallet   == 3 USD
+    broker   == -3 USD
+    cash     -8 EUR
+`,
+	},
+	{
+		name: "Cyrillic and CJK accounts: mixed postings cancel in the priced commodity",
+		input: `2024-01-01 открытие
+    кошелёк  5 EUR
+    капитал
+
+2024-01-02 открытие
+    брокер  -5 EUR
+    капитал
+
+2024-02-01 покупка
+    店  10 USD
+    кошелёк  == 3 USD
+    брокер  == -3 USD
+    現金  -8 EUR
+`,
+	},
+	{
 		name: "non-strict assignments keep the inferred conversion price",
 		input: `2024-01-01 t1
     bank  -9 EUR
