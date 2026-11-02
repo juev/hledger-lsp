@@ -180,6 +180,13 @@ All posting amounts in a transaction must sum to zero (within balancing precisio
 - Inferred from the highest decimal precision of the amounts denominated in each commodity within the transaction
 - Cost amounts (`@`/`@@`) and the native amount behind a cost do not affect the cost commodity's precision:
   `1.005 AAPL @ $2` with `$-2.0` balances because `$` keeps precision 1 (tolerance 0.05), while `$-2.00` does not
+- A commodity written only as the cost of a group's amounts takes the finest precision of those costs (the price
+  for `@`, the total for `@@`; a cost of zero gives none), so `[b]  2 USD @ 0.25 EUR` alone is unbalanced by
+  0.5 EUR while `b  -0.1 USD @ 1 EUR` alone is within the tolerance of 0.5. Each group (real postings,
+  balanced virtual postings) counts its own costs
+- The amount hledger infers for an omitted posting counts as written, with the finest precision of the amounts
+  it offsets (a cost literal for a converted amount), and applies to every group of the transaction; it is
+  also written when it comes out as zero
 - `commodity` and `D` directive precision is **not** a floor: `commodity $1,000.000` alone does not tighten the
   tolerance for `$` amounts written with fewer decimals
 - Lot prices (`{}`/`{{}}`) are not costs: they do not participate in balancing at all

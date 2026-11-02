@@ -869,6 +869,11 @@ func (e *journalEvaluator) apply(account string, contribution map[string]decimal
 func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, effective []postingEffective, elidedByGroup map[int]int, groups [][]int) []SourcedDiagnostic {
 	var diagnostics []SourcedDiagnostic
 
+	type groupPostings struct {
+		postings []ast.Posting
+		multi    []bool
+	}
+	built := make([]groupPostings, len(groups))
 	for group, indices := range groups {
 		elidedIdx, hasElided := elidedByGroup[group]
 		postings := make([]ast.Posting, 0, len(indices))
@@ -889,6 +894,29 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 				multi = append(multi, mixed)
 			}
 		}
+		built[group] = groupPostings{postings, multi}
+	}
+
+	// The tolerance of a commodity comes from every amount written in it in the
+	// transaction, not only from those of the group being checked, and the amount
+	// hledger infers for an elided posting counts as written.
+	var written []ast.Posting
+	elided := make(map[int]bool, len(elidedByGroup))
+	for _, idx := range elidedByGroup {
+		elided[idx] = true
+	}
+	for idx := range tx.Postings {
+		if !elided[idx] {
+			written = appendEffectivePosting(written, tx.Postings[idx], effective[idx])
+		}
+	}
+	for group := range elidedByGroup {
+		written = append(written, elidedAmountPostings(built[group].postings)...)
+	}
+
+	for group := range groups {
+		_, hasElided := elidedByGroup[group]
+		postings, multi := built[group].postings, built[group].multi
 
 		if hasElided {
 			// Exactly one posting is elided in this group, so it absorbs the
@@ -896,7 +924,7 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			continue
 		}
 
-		result := checkPostingGroupMixed(postings, multi, e.tolerance)
+		result := checkPostingGroupMixed(postings, multi, maxPrecisionByCommodity(written, postings), e.tolerance)
 		if result.multipleInferred {
 			// An elided posting in the *other* group cannot balance this one.
 			diagnostics = append(diagnostics, SourcedDiagnostic{

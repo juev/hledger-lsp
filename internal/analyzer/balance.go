@@ -11,8 +11,14 @@ func CheckBalance(tx *ast.Transaction, userTolerance decimal.Decimal) *BalanceRe
 
 	realPostings, balancedVirtual := groupPostings(tx.Postings)
 
-	realGroup := checkPostingGroup(realPostings, userTolerance)
-	virtualGroup := checkPostingGroup(balancedVirtual, userTolerance)
+	written := tx.Postings
+	for _, group := range [][]ast.Posting{realPostings, balancedVirtual} {
+		if count, _ := countInferredPostings(group); count == 1 {
+			written = append(written[:len(written):len(written)], elidedAmountPostings(group)...)
+		}
+	}
+	realGroup := checkPostingGroup(realPostings, maxPrecisionByCommodity(written, realPostings), userTolerance)
+	virtualGroup := checkPostingGroup(balancedVirtual, maxPrecisionByCommodity(written, balancedVirtual), userTolerance)
 
 	if realGroup.multipleInferred || virtualGroup.multipleInferred {
 		result.Balanced = false
@@ -71,14 +77,14 @@ type postingGroupResult struct {
 // each commodity's tolerance, except that hledger infers a currency conversion
 // price when a cost-free group is left with exactly two residual commodities of
 // opposite sign (e.g. "10 AAPL" and "$-110" in one transaction).
-func checkPostingGroup(postings []ast.Posting, userTolerance decimal.Decimal) postingGroupResult {
-	return checkPostingGroupMixed(postings, nil, userTolerance)
+func checkPostingGroup(postings []ast.Posting, precisions map[string]int32, userTolerance decimal.Decimal) postingGroupResult {
+	return checkPostingGroupMixed(postings, nil, precisions, userTolerance)
 }
 
 // checkPostingGroupMixed is checkPostingGroup for a group in which some
 // postings were split from one multi-commodity amount. multi is index-aligned
 // with postings and marks those pieces; nil means there are none.
-func checkPostingGroupMixed(postings []ast.Posting, multi []bool, userTolerance decimal.Decimal) postingGroupResult {
+func checkPostingGroupMixed(postings []ast.Posting, multi []bool, precisions map[string]int32, userTolerance decimal.Decimal) postingGroupResult {
 	inferredCount, inferredIdx := countInferredPostings(postings)
 	if inferredCount > 1 {
 		return postingGroupResult{multipleInferred: true, inferredIdx: -1}
@@ -88,7 +94,6 @@ func checkPostingGroupMixed(postings []ast.Posting, multi []bool, userTolerance 
 	}
 
 	balances := sumByCommodity(postings)
-	precisions := maxPrecisionByCommodity(postings)
 
 	differences := make(map[string]decimal.Decimal)
 	signed := make(map[string]decimal.Decimal)
@@ -245,23 +250,71 @@ func balanceSumContribution(p ast.Posting) (string, decimal.Decimal, bool) {
 	return p.Cost.Amount.Commodity.Symbol, quantity, true
 }
 
-func maxPrecisionByCommodity(postings []ast.Posting) map[string]int32 {
+// elidedAmountPostings returns one posting per commodity of the amount hledger
+// infers for the single elided posting of a group, carrying the precision that
+// amount is written with, so that it counts among the amounts of the transaction.
+// The inferred amount is the cost-converted sum of the group, and its precision is
+// the finest of the amounts that went into it: that of a cost literal for a
+// converted amount, that of the quantity for the others. A commodity the group
+// sums to zero in still has one, an inferred zero.
+func elidedAmountPostings(group []ast.Posting) []ast.Posting {
 	precisions := make(map[string]int32)
-	for i := range postings {
-		amount := postingNativeAmount(postings[i])
-		if amount == nil {
+	for i := range group {
+		p := &group[i]
+		if p.Amount == nil {
 			continue
 		}
-		// hledger counts precision per commodity from the amounts denominated
-		// in that commodity. A posting whose amount is converted at a cost
-		// contributes to the cost commodity, but neither the native amount's
-		// precision nor the cost amount's precision tightens the cost
-		// commodity's tolerance (docs/hledger.md:178-181, verified against
-		// hledger 1.52.4: "1.005 AAPL @ $2" + "$-2.0" balances).
-		commodity := amount.Commodity.Symbol
-		prec := decimalPrecision(amount.Quantity)
-		if prec > precisions[commodity] {
-			precisions[commodity] = prec
+		commodity, _, _ := balanceSumContribution(*p)
+		precision := decimalPrecision(p.Amount.Quantity)
+		if p.Cost != nil {
+			precision = decimalPrecision(p.Cost.Amount.Quantity)
+		}
+		if held, ok := precisions[commodity]; !ok || precision > held {
+			precisions[commodity] = precision
+		}
+	}
+
+	var inferred []ast.Posting
+	for commodity, precision := range precisions {
+		inferred = append(inferred, ast.Posting{Amount: &ast.Amount{Quantity: decimal.New(1, -precision), Commodity: ast.Commodity{Symbol: commodity}}})
+	}
+	return inferred
+}
+
+// maxPrecisionByCommodity returns, per commodity, the number of decimals the
+// balancing tolerance of one posting group is derived from. It is the finest
+// precision of the amounts written in that commodity anywhere in the transaction
+// (written), and those only: the precision of a posting's native amount does not
+// tighten the commodity it is converted into (docs/hledger.md:178-181, verified
+// against hledger 1.52.4: "1.005 AAPL @ $2" + "$-2.0" balances). A commodity that
+// is written nowhere but appears as the cost of the group's own amounts takes the
+// finest precision of those costs, per unit for @ and as a total for @@, a cost of
+// zero giving none.
+func maxPrecisionByCommodity(written, group []ast.Posting) map[string]int32 {
+	precisions := make(map[string]int32)
+	raise := func(commodity string, precision int32) {
+		if held, ok := precisions[commodity]; !ok || precision > held {
+			precisions[commodity] = precision
+		}
+	}
+	for i := range written {
+		if amount := postingNativeAmount(written[i]); amount != nil {
+			raise(amount.Commodity.Symbol, decimalPrecision(amount.Quantity))
+		}
+	}
+
+	costs := make(map[string]int32)
+	for i := range group {
+		if cost := group[i].Cost; cost != nil && group[i].Amount != nil && !cost.Amount.Quantity.IsZero() {
+			commodity := cost.Amount.Commodity.Symbol
+			if held, ok := costs[commodity]; !ok || decimalPrecision(cost.Amount.Quantity) > held {
+				costs[commodity] = decimalPrecision(cost.Amount.Quantity)
+			}
+		}
+	}
+	for commodity, precision := range costs {
+		if _, ok := precisions[commodity]; !ok {
+			precisions[commodity] = precision
 		}
 	}
 	return precisions
