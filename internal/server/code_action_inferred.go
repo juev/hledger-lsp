@@ -132,6 +132,11 @@ func formatInferredAmount(
 	amount.DecimalMark = transactionDecimalMark(transaction, commodity, amount.Commodity.Inferred)
 	if places > 0 {
 		amount.RawQuantity = quantity.StringFixed(places)
+		// The raw text is written as is when no commodity format declares the
+		// number style, so it has to carry the mark in force itself.
+		if amount.DecimalMark == "," {
+			amount.RawQuantity = strings.Replace(amount.RawQuantity, ".", ",", 1)
+		}
 	}
 	if quantity.IsNegative() && amount.Commodity.Position == ast.CommodityLeft {
 		amount.SignBeforeCommodity = true
