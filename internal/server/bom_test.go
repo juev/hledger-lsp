@@ -343,3 +343,49 @@ func TestBOM_OnTypeNewlineAfterFirstLineHeader(t *testing.T) {
 		})
 	}
 }
+
+// Neovim sends the buffer without the mark while the file on disk has it. The
+// tree must then be built from the buffer, so edits for the child land where
+// the client has the text, and its diagnostics start at column 0 of line 5.
+func TestBOM_RenameAndDiagnosticsWithOpenChildWithoutTheMark(t *testing.T) {
+	body := "2024-01-02 * кафе\n    expenses:b  $2\n    assets:cash\n\n2024-01-03 * bad\n    expenses:c  $2\n    assets:cash  $3\n"
+	dir, mainURI, childURI := writeBOMTree(t, textutil.BOM+body)
+	ts := initWorkspaceTestServer(t, dir)
+	_, _ = ts.openAndWait(mainURI, bomMainJournal)
+	_, _ = ts.openAndWait(childURI, body)
+	for _, extra := range []string{"\n", "\n\n"} {
+		_, err := ts.replaceAndWait(mainURI, bomMainJournal+extra)
+		require.NoError(t, err)
+	}
+
+	diags := waitForDocument(t, ts.client, childURI)
+	unbalanced := diagnosticWithCode(diags, "UNBALANCED")
+	require.NotNil(t, unbalanced, "got %v", codesIn(diags))
+	assert.Equal(t, protocol.Range{
+		Start: protocol.Position{Line: 4, Character: 0},
+		End:   protocol.Position{Line: 7, Character: 0},
+	}, unbalanced.Range)
+
+	edit, err := ts.Rename(context.Background(), &protocol.RenameParams{
+		TextDocumentPositionParams: protocol.TextDocumentPositionParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: mainURI},
+			Position:     protocol.Position{Line: 4, Character: 6},
+		},
+		NewName: "assets:bank",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, edit)
+	childEdits := edit.Changes[childURI]
+	require.NotEmpty(t, childEdits)
+	assert.Equal(t, protocol.Range{
+		Start: protocol.Position{Line: 2, Character: 4},
+		End:   protocol.Position{Line: 2, Character: 15},
+	}, childEdits[0].Range)
+
+	out := body
+	for i := len(childEdits) - 1; i >= 0; i-- {
+		out = applyChange(out, childEdits[i].Range, childEdits[i].NewText)
+	}
+	assert.Contains(t, out, "\n    assets:bank\n")
+	assert.NotContains(t, out, "assassets")
+}
