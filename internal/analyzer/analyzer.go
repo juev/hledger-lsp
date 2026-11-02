@@ -797,13 +797,13 @@ func validateBracketDates(tx *ast.Transaction) []Diagnostic {
 
 // validateRuleBracketDates reports the bracketed posting dates hledger refuses in
 // periodic transactions and auto posting rules. A periodic transaction reads a
-// date without a year in the default year, which the AST does not keep, so such a
-// date is checked against a leap year there; an auto posting rule has no year.
+// date without a year in the year in force where it is written; an auto posting
+// rule has no year.
 func validateRuleBracketDates(journal *ast.Journal) []Diagnostic {
 	var diags []Diagnostic
 	for i := range journal.PeriodicTransactions {
 		periodic := &journal.PeriodicTransactions[i]
-		diags = append(diags, postingBracketDateDiagnostics(periodic.Postings, periodic.Comments, 0)...)
+		diags = append(diags, postingBracketDateDiagnostics(periodic.Postings, periodic.Comments, periodic.Year)...)
 	}
 	for i := range journal.AutoPostingRules {
 		rule := &journal.AutoPostingRules[i]

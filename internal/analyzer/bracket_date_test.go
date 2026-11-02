@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -319,6 +320,13 @@ var ruleBracketDateCases = []struct {
 	{name: "periodic, text after =", input: "~ monthly\n    a  5 USD  ; [2024-01-05=garbage]\n    b\n"},
 	{name: "periodic, yearless date", input: "~ monthly\n    a  5 USD  ; [01-05]\n    b\n"},
 	{name: "periodic, February 29 in a leap default year", input: "Y 2024\n~ monthly\n    a  5 USD  ; [02-29]\n    b\n"},
+	{name: "periodic, February 29 in a common default year", input: "Y 2023\n~ monthly\n    a  5 USD  ; [02-29]\n    b\n", invalid: true},
+	{name: "periodic, February 29 below the posting in a common default year", input: "Y 2023\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n", invalid: true},
+	{name: "periodic, February 29 below the posting in a leap default year", input: "Y 2024\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n"},
+	{name: "periodic, secondary February 29 in a common default year", input: "Y 2023\n~ monthly\n    a  5 USD  ; [=02-29]\n    b\n", invalid: true},
+	{name: "periodic, secondary February 29 in a leap default year", input: "Y 2024\n~ monthly\n    a  5 USD  ; [=02-29]\n    b\n"},
+	{name: "periodic, secondary in the leap year of the primary in a common default year", input: "Y 2023\n~ monthly\n    a  5 USD  ; [2024-01-05=02-29]\n    b\n"},
+	{name: "periodic, the Y in force where it is written", input: "Y 2024\n~ monthly\n    a  5 USD  ; [02-29]\n    b\n\nY 2023\n"},
 	{name: "periodic, yearless secondary in the leap year of the primary", input: "~ monthly\n    a  5 USD  ; [2024-01-05=02-29]\n    b\n"},
 	{name: "periodic, in the header comment", input: "~ monthly  ; [2024-13-05]\n    a  5 USD\n    b\n"},
 	{name: "periodic, on a comment line before the postings", input: "~ monthly\n    ; [2024-13-05]\n    a  5 USD\n    b\n"},
@@ -376,6 +384,97 @@ func TestAnalyzer_BracketedDateRangeInARuleCommentLine(t *testing.T) {
 	assert.Equal(t, 3, reported[0].Range.Start.Line)
 	assert.Equal(t, 11, reported[0].Range.Start.Column)
 	assert.Equal(t, 21, reported[0].Range.End.Column)
+}
+
+func TestAnalyzer_PeriodicBracketedDateUsesTheYearOfTheTransaction(t *testing.T) {
+	// The year a periodic transaction reads a date without a year in comes from the
+	// parser (Y, else the clock); set it here so the test does not depend on today.
+	for _, tc := range []struct {
+		year    int
+		invalid bool
+	}{
+		{year: 2023, invalid: true},
+		{year: 2024},
+	} {
+		journal, errs := parser.Parse("~ monthly\n    a  5 USD  ; [02-29]\n    b\n")
+		require.Empty(t, errs)
+		require.Len(t, journal.PeriodicTransactions, 1)
+		journal.PeriodicTransactions[0].Year = tc.year
+
+		reported := false
+		for _, d := range New().Analyze(journal).Diagnostics {
+			reported = reported || d.Code == "INVALID_POSTING_DATE"
+		}
+		assert.Equal(t, tc.invalid, reported, "year %d", tc.year)
+	}
+}
+
+func TestAnalyzer_PeriodicBracketedDateInAnIncludedFileUsesTheIncludingYear(t *testing.T) {
+	for _, tc := range []struct {
+		year    string
+		invalid bool
+	}{
+		{year: "2023", invalid: true},
+		{year: "2024"},
+	} {
+		var site parser.Context
+		_, errs := parser.ParseWithContext("Y "+tc.year+"\ninclude child.journal\n", parser.Context{}, func(s parser.IncludeSite) parser.ContextExports {
+			site = s.Context
+			return parser.ContextExports{}
+		})
+		require.Empty(t, errs)
+
+		child, childErrs := parser.ParseWithContext("~ monthly\n    a  5 USD\n    ; [02-29]\n    b\n", site, nil)
+		require.Empty(t, childErrs)
+
+		reported := false
+		for _, d := range New().Analyze(child.Journal).Diagnostics {
+			reported = reported || d.Code == "INVALID_POSTING_DATE"
+		}
+		assert.Equal(t, tc.invalid, reported, "Y %s", tc.year)
+	}
+}
+
+func TestOracle_PeriodicBracketedDateYearMatchesHledger(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	// Without Y both hledger and the parser read the clock, so the verdicts agree
+	// whatever year it is.
+	for _, input := range []string{
+		"~ monthly\n    a  5 USD  ; [02-29]\n    b\n",
+		"~ monthly\n    a  5 USD  ; [02-29]\n    b\n\nY 2024\n",
+	} {
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs)
+		failed := false
+		for _, d := range New().Analyze(journal).Diagnostics {
+			failed = failed || d.Severity == SeverityError
+		}
+		assert.Equal(t, !hledgerAccepts(t, hledgerPath, input), failed, "our verdict must match hledger for:\n%s", input)
+	}
+
+	// A Y in the including file applies to the included one.
+	dir := t.TempDir()
+	child := "~ monthly\n    a  5 USD\n    ; [02-29]\n    b\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "child.journal"), []byte(child), 0o600))
+	for _, tc := range []struct {
+		year    string
+		invalid bool
+	}{
+		{year: "2023", invalid: true},
+		{year: "2024"},
+	} {
+		parent := filepath.Join(dir, "parent-"+tc.year+".journal")
+		require.NoError(t, os.WriteFile(parent, []byte("Y "+tc.year+"\ninclude child.journal\n"), 0o600))
+		cmd := exec.Command(hledgerPath, "-f", parent, "print")
+		assert.Equal(t, tc.invalid, cmd.Run() != nil, "hledger with Y %s", tc.year)
+	}
 }
 
 func TestOracle_BracketedDateInRulesMatchesHledger(t *testing.T) {

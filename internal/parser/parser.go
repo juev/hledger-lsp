@@ -354,6 +354,7 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 
 func (p *Parser) parsePeriodicTransaction() *ast.PeriodicTransaction {
 	ptx := &ast.PeriodicTransaction{
+		Year:     p.partialDateYear(),
 		Postings: make([]ast.Posting, 0, 3),
 	}
 	ptx.Range.Start = toASTPosition(p.current.Pos)
@@ -539,6 +540,15 @@ func (p *Parser) isMultiplier() bool {
 	return trimmed == "" || trimmed[0] == ';'
 }
 
+// partialDateYear returns the year a date written without one is read in here:
+// the Y directive in force, else the current year.
+func (p *Parser) partialDateYear() int {
+	if p.defaultYear != 0 {
+		return p.defaultYear
+	}
+	return defaultYearForPartialDates()
+}
+
 func (p *Parser) parseDate() *ast.Date {
 	if p.current.Type != TokenDate {
 		p.error("expected date")
@@ -564,10 +574,7 @@ func (p *Parser) parseDate() *ast.Date {
 	case 2:
 		// hledger accepts a date without a year (a "smart date") and fills in
 		// the current year; it does not require a Y directive.
-		year := p.defaultYear
-		if year == 0 {
-			year = defaultYearForPartialDates()
-		}
+		year := p.partialDateYear()
 		month, err := strconv.Atoi(parts[0])
 		if err != nil {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid month: %s", parts[0])
