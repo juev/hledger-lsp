@@ -64,3 +64,21 @@ func TestCalculatePostingEffects_InferredMultiCommodityPreservesSourceOrder(t *t
 	assert.Equal(t, decimal.NewFromInt(-10), effects[2].InferredAmounts["$"])
 	assert.Equal(t, decimal.NewFromInt(-20), effects[2].InferredAmounts["EUR"])
 }
+
+// What a group with a balance assignment infers depends on the balance before
+// the transaction, so the transaction alone infers nothing for it; another group
+// of the same transaction still infers its own.
+func TestCalculatePostingEffects_AssignedGroupInfersNothing(t *testing.T) {
+	journal, errs := parser.Parse(`2026-08-03 Zestimate
+    активы:дом  =522000 USD
+    equity:gains
+    [budget:one]  $5
+    [budget:two]
+`)
+	require.Empty(t, errs)
+
+	effects := CalculatePostingEffects(journal)
+	require.Len(t, effects, 4)
+	assert.Empty(t, effects[1].InferredAmounts)
+	assert.Equal(t, decimal.NewFromInt(-5), effects[3].InferredAmounts["$"])
+}
