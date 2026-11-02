@@ -78,25 +78,15 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 
 // otherCommodities returns the balances held by an account (and, for inclusive
 // assertions, its subaccounts) in commodities other than the asserted one, in a
-// stable order. hledger's `==` form requires these to be empty, and it compares
-// each commodity using that commodity's own precision, so a balance like 0.20 EUR
-// still fails a dollar assertion.
-func (b accountBalances) otherCommodities(account, except string, inclusive bool, userTolerance decimal.Decimal) []string {
+// stable order. hledger's `==` form requires these to be empty, and any non-zero
+// balance counts, however small: assertions are exact.
+func (b accountBalances) otherCommodities(account, except string, inclusive bool) []string {
 	var result []string
 	for commodity := range b.heldCommodities(account, inclusive) {
 		quantity := b.amount(account, commodity, inclusive)
 		if commodity == except || quantity.IsZero() {
 			continue
 		}
-
-		tolerance := toleranceForPrecision(decimalPrecision(quantity))
-		if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
-			tolerance = userTolerance
-		}
-		if quantity.Abs().LessThanOrEqual(tolerance) {
-			continue
-		}
-
 		result = append(result, fmt.Sprintf("%s %s", quantity.String(), displayCommodity(commodity)))
 	}
 	sort.Strings(result)
@@ -830,13 +820,12 @@ func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingInde
 	account := p.Account.GetResolvedName()
 	commodity := assertion.Amount.Commodity.Symbol
 	actual := e.balances.amount(account, commodity, assertion.IsInclusive)
-	tolerance := toleranceForPrecision(decimalPrecision(assertion.Amount.Quantity))
-	if e.tolerance.IsPositive() && e.tolerance.GreaterThan(tolerance) {
-		tolerance = e.tolerance
-	}
 
+	// hledger compares an assertion with the calculated balance exactly: neither
+	// the precision of the asserted amount, nor the commodity style, nor the
+	// balance tolerance of transactions widens it.
 	difference := actual.Sub(assertion.Amount.Quantity)
-	if difference.Abs().GreaterThan(tolerance) {
+	if !difference.IsZero() {
 		message := fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
 			account,
 			assertion.Amount.Quantity.String(), displayCommodity(commodity),
@@ -870,10 +859,9 @@ func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingInde
 		return diagnostics
 	}
 
-	// `==` requires the account to hold nothing else. hledger compares every
-	// other commodity with its own precision, so a small EUR balance still fails
-	// a dollar assertion.
-	if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive, e.tolerance); len(others) > 0 {
+	// `==` requires the account to hold nothing else, so even a small EUR balance
+	// fails a dollar assertion.
+	if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive); len(others) > 0 {
 		diagnostics = append(diagnostics, SourcedDiagnostic{
 			Path:     path,
 			Range:    assertion.Range,
