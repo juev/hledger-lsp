@@ -470,11 +470,21 @@ func (w *Workspace) sortedTrees() []*IncludeTree {
 }
 
 // AllTrees returns all include trees in deterministic order (sorted by root path).
+//
+// The trees are snapshots taken under the lock: the workspace replaces a tree's
+// Resolved and LoadErrors in place when a file changes, and callers read them
+// without it.
 func (w *Workspace) AllTrees() []*IncludeTree {
 	w.refresh()
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	return w.sortedTrees()
+	live := w.sortedTrees()
+	snapshots := make([]*IncludeTree, 0, len(live))
+	for _, tree := range live {
+		snapshot := *tree
+		snapshots = append(snapshots, &snapshot)
+	}
+	return snapshots
 }
 
 func (w *Workspace) IndexSnapshot() IndexSnapshot {
