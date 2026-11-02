@@ -1,12 +1,15 @@
 package parser
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 func firstAmount(t *testing.T, input string) (qty, commodity string, errs []ParseError) {
@@ -151,4 +154,115 @@ func TestParser_NumberSyntax_ExponentErrorRangeCoversNumber(t *testing.T) {
 	assert.Equal(t, 3, errs[0].Pos.Line)
 	assert.Equal(t, 8, errs[0].Pos.Column)
 	assert.Equal(t, 13, errs[0].End.Column)
+}
+
+// signedAmountContexts place one amount spelling in each slot that reads an
+// amount: a posting, a unit cost, a total cost, a balance assertion and the
+// price of a P directive.
+var signedAmountContexts = map[string]string{
+	"posting":           "2024-01-01 x\n    a  %s\n    b\n",
+	"unit cost":         "2024-01-01 x\n    a  1 X @ %s\n    b\n",
+	"total cost":        "2024-01-01 x\n    a  1 X @@ %s\n    b\n",
+	"balance assertion": "2024-01-01 x\n    a  = %s\n    b\n",
+	"price directive":   "P 2024-01-01 A %s\n",
+}
+
+// readSignedAmount returns the amount a context's journal puts in its slot.
+func readSignedAmount(t *testing.T, context, journalText string) (qty, commodity string, errs []ParseError) {
+	t.Helper()
+	journal, errs := Parse(journalText)
+	if len(errs) > 0 {
+		return "", "", errs
+	}
+	var amount ast.Amount
+	switch context {
+	case "posting":
+		amount = *journal.Transactions[0].Postings[0].Amount
+	case "unit cost", "total cost":
+		amount = journal.Transactions[0].Postings[0].Cost.Amount
+	case "balance assertion":
+		amount = journal.Transactions[0].Postings[0].BalanceAssertion.Amount
+	case "price directive":
+		amount = journal.Directives[0].(ast.PriceDirective).Price
+	}
+	return amount.Quantity.String(), amount.Commodity.Symbol, nil
+}
+
+// TestParser_NumberSyntax_SecondSignAfterCommodity covers hledger's rule that a
+// sign, a prefix commodity and a second sign multiply, whatever spaces sit
+// between the parts (hledger 1.52.4).
+func TestParser_NumberSyntax_SecondSignAfterCommodity(t *testing.T) {
+	tests := []struct {
+		amount, qty, commodity string
+	}{
+		{"-EUR - 1,500", "1.5", "EUR"},
+		{"-X - 5", "5", "X"},
+		{"- EUR - 5", "5", "EUR"},
+		{"-EUR  -  5", "5", "EUR"},
+		{"-EUR -  5", "5", "EUR"},
+		{"+EUR - 5", "-5", "EUR"},
+		{"-EUR + 5", "-5", "EUR"},
+		{"+EUR + 5", "5", "EUR"},
+		{"EUR - 5", "-5", "EUR"},
+		{"-EUR - .5", "0.5", "EUR"},
+		{"-EUR - 1 500", "1500", "EUR"},
+		{`-"A B" - 5`, "5", "A B"},
+		{"-$ - 5", "5", "$"},
+		{"-руб - 5", "5", "руб"},
+		{"-元 - 5", "5", "元"},
+	}
+	for context, template := range signedAmountContexts {
+		for _, tt := range tests {
+			t.Run(context+"/"+tt.amount, func(t *testing.T) {
+				for _, eol := range []string{"\n", "\r\n"} {
+					text := textutil.NormalizeLineEndings(strings.ReplaceAll(fmt.Sprintf(template, tt.amount), "\n", eol))
+					qty, commodity, errs := readSignedAmount(t, context, text)
+					require.Empty(t, errs, "%q", text)
+					assert.Equal(t, tt.qty, qty)
+					assert.Equal(t, tt.commodity, commodity)
+				}
+			})
+		}
+	}
+}
+
+func TestParser_NumberSyntax_SecondSignAfterCommodityNeedsOneSign(t *testing.T) {
+	for context, template := range signedAmountContexts {
+		for _, amount := range []string{"-EUR --5", "-EUR - - 5", "EUR - - 5", "-EUR - EUR 5"} {
+			t.Run(context+"/"+amount, func(t *testing.T) {
+				_, _, errs := readSignedAmount(t, context, fmt.Sprintf(template, amount))
+				assert.NotEmpty(t, errs)
+			})
+		}
+	}
+}
+
+// A P directive writes the commodity it prices before its price, so a sign in
+// front of that commodity is not an amount.
+func TestParser_NumberSyntax_PriceDirectiveSignBeforePricedCommodity(t *testing.T) {
+	_, errs := Parse("P 2024-01-01 -EUR 5\n")
+	assert.NotEmpty(t, errs)
+}
+
+func TestParser_NumberSyntax_PriceDirectiveLetterCommodityBeforeNumber(t *testing.T) {
+	tests := []struct {
+		line, qty, commodity string
+	}{
+		{"P 2024-01-01 A EUR 5", "5", "EUR"},
+		{"P 2024-01-01 A EUR5", "5", "EUR"},
+		{"P 2024-01-01 A EUR -5", "-5", "EUR"},
+		{"P 2024-01-01 09:30 A EUR 5", "5", "EUR"},
+		{"P 2024-01-01 A руб 5", "5", "руб"},
+		{"P 2024-01-01 A руб -5", "-5", "руб"},
+		{"P 2024-01-01 А 5 руб", "5", "руб"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			journal, errs := Parse(tt.line + "\n")
+			require.Empty(t, errs)
+			price := journal.Directives[0].(ast.PriceDirective).Price
+			assert.Equal(t, tt.qty, price.Quantity.String())
+			assert.Equal(t, tt.commodity, price.Commodity.Symbol)
+		})
+	}
 }
