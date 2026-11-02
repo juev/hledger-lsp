@@ -2112,6 +2112,9 @@ func (p *Parser) parseComment() ast.Comment {
 		},
 		Tags: parseTags(p.current.Value, p.current.Pos),
 	}
+	if offset := p.current.Pos.Offset; offset >= 0 && offset < len(p.lexer.input) {
+		comment.Marker = p.lexer.input[offset]
+	}
 	p.advance()
 	return comment
 }
