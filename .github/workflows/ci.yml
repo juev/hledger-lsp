@@ -49,3 +49,24 @@ jobs:
       # unnoticed between runs.
       - name: Compile NFR performance tests
         run: go vet -tags perf ./internal/benchmark/
+
+  # Builds the GOOS=wasip1 module and drives it as a stdio language server
+  # under wasmtime and Node, comparing every answer with the native build.
+  wasi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: '50.0.1'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+      - run: GOOS=wasip1 GOARCH=wasm go vet ./...
+      - name: WASI smoke test
+        run: go test ./cmd/hledger-lsp -run WASISmoke -count=1 -v
+        env:
+          HLEDGER_WASI_RUNTIME: wasmtime,node
