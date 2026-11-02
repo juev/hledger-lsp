@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/include"
 )
@@ -769,4 +770,58 @@ func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *test
 		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
 		assert.Zero(t, client.refreshes.Load())
 	})
+}
+
+// heldConfigClient answers workspace/configuration only once release is closed.
+type heldConfigClient struct {
+	configClient
+	release chan struct{}
+}
+
+func (c *heldConfigClient) Configuration(ctx context.Context, params *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+	<-c.release
+	return c.configClient.Configuration(ctx, params)
+}
+
+// The hints of the first buffer are asked for before the configuration arrives.
+// Answered with the defaults they would leave out the running balances the
+// configuration turns on, and Neovim keeps showing those stale hints on the
+// visible lines even after a refresh, so the request waits for the settings.
+func TestInlayHint_WaitsForTheInitialConfiguration(t *testing.T) {
+	srv := NewServer()
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: protocol.ClientCapabilities{
+		Workspace: &protocol.WorkspaceClientCapabilities{Configuration: boolPtr(true)},
+	}})
+	require.NoError(t, err)
+	client := &heldConfigClient{
+		configClient: configClient{settings: mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"runningBalances": true}})},
+		release:      make(chan struct{}),
+	}
+	srv.SetClient(client)
+	require.NoError(t, srv.Initialized(context.Background(), &protocol.InitializedParams{}))
+
+	docURI := uri.URI("file:///test.journal")
+	srv.StoreDocument(docURI, "2024-01-15 Покупка\n    expenses:еда  $50\n    assets:cash\n")
+	answered := make(chan []protocol.InlayHint)
+	go func() {
+		hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Range:        protocol.Range{End: protocol.Position{Line: 10}},
+		})
+		assert.NoError(t, err)
+		answered <- hints
+	}()
+
+	select {
+	case <-answered:
+		t.Fatal("inlay hints were answered before the configuration arrived")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(client.release)
+
+	var labels []protocol.InlayHintLabel
+	for _, hint := range <-answered {
+		labels = append(labels, hint.Label)
+	}
+	assert.Contains(t, labels, protocol.String("balance: 50 $"))
 }

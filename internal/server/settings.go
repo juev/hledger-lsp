@@ -288,6 +288,31 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 	}
 }
 
+// initialConfigurationTimeout bounds how long a request waits for the
+// configuration fetched after initialized.
+const initialConfigurationTimeout = 2 * time.Second
+
+// awaitInitialConfiguration waits until the configuration fetched after
+// initialized has been applied, the timeout passes, or ctx is done. A client
+// asks for the hints of the buffer it opens first straight away; answered with
+// the default settings, they stay on screen even after a refresh, because
+// Neovim marks the visible lines drawn again before the refreshed hints arrive.
+func (s *Server) awaitInitialConfiguration(ctx context.Context) {
+	s.settingsMu.RLock()
+	ready := s.configReady
+	s.settingsMu.RUnlock()
+	if ready == nil {
+		return
+	}
+	timer := time.NewTimer(initialConfigurationTimeout)
+	defer timer.Stop()
+	select {
+	case <-ready:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
 // reportSettingsIssues tells the user about settings values the server rejected.
 func (s *Server) reportSettingsIssues(issues []string) {
 	if len(issues) == 0 {
