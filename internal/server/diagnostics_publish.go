@@ -24,7 +24,8 @@ type journalDiagEntry struct {
 
 // journalDiagnostics returns hledger's balance and balance-assertion verdicts for
 // the resolved include tree. The result is memoised per tree revision and
-// tolerance, because the pass runs on every published diagnostic set.
+// tolerance, because the pass runs on every published diagnostic set, and a file
+// owned by several trees asks for each of them.
 func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal, partialContext bool) []analyzer.SourcedDiagnostic {
 	if resolved == nil {
 		return nil
@@ -35,13 +36,31 @@ func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal, partialCo
 	s.journalDiagMu.Lock()
 	defer s.journalDiagMu.Unlock()
 
-	if entry := s.journalDiag; entry != nil && entry.resolved == resolved &&
+	if entry := s.journalDiag[resolved]; entry != nil &&
 		entry.tolerance == tolerance.String() && entry.partial == partialContext {
 		return entry.diags
 	}
 
 	diags := analyzer.CheckJournalBalance(resolved, tolerance, analyzer.JournalCheckOptions{PartialContext: partialContext})
-	s.journalDiag = &journalDiagEntry{resolved: resolved, tolerance: tolerance.String(), partial: partialContext, diags: diags}
+	if s.journalDiag == nil {
+		s.journalDiag = make(map[*include.ResolvedJournal]*journalDiagEntry)
+	}
+	s.journalDiag[resolved] = &journalDiagEntry{resolved: resolved, tolerance: tolerance.String(), partial: partialContext, diags: diags}
+
+	// A tree the workspace replaced is never asked for again; its verdict would
+	// otherwise stay for the life of the server.
+	const keepAtMost = 16
+	if len(s.journalDiag) > keepAtMost && s.workspace != nil {
+		live := map[*include.ResolvedJournal]bool{resolved: true}
+		for _, tree := range s.workspace.AllTrees() {
+			live[tree.Resolved] = true
+		}
+		for tree := range s.journalDiag {
+			if !live[tree] {
+				delete(s.journalDiag, tree)
+			}
+		}
+	}
 	return diags
 }
 

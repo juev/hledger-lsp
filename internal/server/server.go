@@ -62,13 +62,15 @@ type Server struct {
 	parseCache            sync.Map // map[uri.URI]*cachedDoc
 	relatedMu             sync.Mutex
 	related               map[uri.URI]map[uri.URI]bool // open documents sharing an include tree, as of the last publish
+	fanoutMu              sync.Mutex
+	fanout                map[uri.URI]map[uri.URI]bool // files other than the document itself a publish put diagnostics on
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
 	diagEntries  map[uri.URI]*diagEntry
 
 	journalDiagMu sync.Mutex
-	journalDiag   *journalDiagEntry
+	journalDiag   map[*include.ResolvedJournal]*journalDiagEntry
 	docVersions   sync.Map // map[uri.URI]uint32
 	warnedMu      sync.Mutex
 	warned        sync.Map // map[uri.URI]map[string]bool: one log line per condition
@@ -681,23 +683,15 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 	// workspace keeps those trees fresh with the open buffer, and sorts them by
 	// root path, so the primary root is chosen deterministically when several
 	// journals include the file.
-	journalTree := resolved
-	journalErrors := loadErrors
-	partialContext := false
-	if s.workspace != nil {
-		trees := s.workspace.GetIncludeTreesForFile(path)
-		switch {
-		case len(trees) == 0:
-			// The workspace does not know this file, so there may be a larger
-			// journal behind it that is not open here. The verdict is qualified so
-			// the user knows why hledger accepts a file the server flags.
-			partialContext = true
-		case trees[0].RootPath != path:
-			journalTree, journalErrors = trees[0].Resolved, trees[0].LoadErrors
-		}
-	}
+	sources := s.journalSources(path, resolved, loadErrors)
 
-	byURI := s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(journalTree, partialContext), settings.Diagnostics)
+	// Each include tree that owns the document is checked on its own: the same
+	// line can balance in one journal and fail in another.
+	treeDiagnostics := make([]map[uri.URI][]protocol.Diagnostic, len(sources))
+	for index, source := range sources {
+		treeDiagnostics[index] = s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(source.resolved, source.partial), settings.Diagnostics)
+	}
+	byURI := mergeTreeDiagnostics(docURI, sources, treeDiagnostics)
 
 	// The analysed document always gets a publish, even when it has no problems:
 	// the empty list is what clears previously reported diagnostics.
@@ -715,31 +709,34 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 	}
 
 	// A load failure belongs to the file that contains the failing directive.
-	for _, err := range journalErrors {
-		if err.Kind != include.ErrorParseError {
-			s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
-		}
+	for _, source := range sources {
+		for _, err := range source.errors {
+			if err.Kind != include.ErrorParseError {
+				s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
+			}
 
-		target := docURI
-		if err.SourcePath != "" && err.SourcePath != path {
-			target = pathToURI(err.SourcePath)
-		}
+			target := docURI
+			if err.SourcePath != "" && err.SourcePath != path {
+				target = pathToURI(err.SourcePath)
+			}
 
-		diagnostic := loadErrorDiagnostic(err)
-		if mapper := s.mapperFor(target); mapper != nil {
-			diagnostic.Range = astRangeToLSP(mapper, err.Range)
-		}
+			diagnostic := loadErrorDiagnostic(err)
+			if mapper := s.mapperFor(target); mapper != nil {
+				diagnostic.Range = astRangeToLSP(mapper, err.Range)
+			}
 
-		// The per-buffer analysis reads this document under every include
-		// context, so it normally reports the document's own syntax errors
-		// already. One it does not report (a context it did not read) still
-		// belongs here: dropping it would hide the error of an occurrence.
-		if err.Kind == include.ErrorParseError && target == docURI && reportsParseError(byURI[docURI], diagnostic) {
-			continue
+			// The per-buffer analysis reads this document under every include
+			// context, so it normally reports the document's own syntax errors
+			// already. One it does not report (a context it did not read) still
+			// belongs here: dropping it would hide the error of an occurrence.
+			if err.Kind == include.ErrorParseError && target == docURI && reportsParseError(byURI[docURI], diagnostic) {
+				continue
+			}
+			byURI[target] = append(byURI[target], diagnostic)
 		}
-		byURI[target] = append(byURI[target], diagnostic)
 	}
 
+	published := make(map[uri.URI]bool)
 	for target, diagnostics := range byURI {
 		if target == docURI {
 			s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), &version)
@@ -751,8 +748,106 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 		if _, open := s.documents.rope(target); open {
 			continue
 		}
+		published[target] = true
 		s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), nil)
 	}
+
+	// A file this document reported on last time and no longer does has nothing
+	// else to clear its problems: publish it the empty set.
+	s.fanoutMu.Lock()
+	previous := s.fanout[docURI]
+	if s.fanout == nil {
+		s.fanout = make(map[uri.URI]map[uri.URI]bool)
+	}
+	s.fanout[docURI] = published
+	s.fanoutMu.Unlock()
+	for target := range previous {
+		if published[target] {
+			continue
+		}
+		if _, open := s.documents.rope(target); open {
+			continue
+		}
+		s.publishDiagnosticSet(ctx, target, []protocol.Diagnostic{}, nil)
+	}
+}
+
+// journalSource is one include tree the document belongs to, as the journal-level
+// checks see it.
+type journalSource struct {
+	resolved *include.ResolvedJournal
+	errors   []include.LoadError
+	// partial marks a document no tree owns: there may be a larger journal behind
+	// it that is not open here, and the verdict is qualified accordingly.
+	partial bool
+}
+
+// journalSources lists the trees to check the document in. Balance rules and
+// assertions depend on every file of the journal, so an included file is
+// evaluated in the context of each root that includes it instead of as a journal
+// of its own; otherwise an assertion in a year file would not see the balances
+// the journal's other files establish. The workspace keeps those trees fresh
+// with the open buffer and sorts them by root path. A tree rooted at the
+// document itself is replaced by resolved, which was built from the buffer.
+func (s *Server) journalSources(path string, resolved *include.ResolvedJournal, loadErrors []include.LoadError) []journalSource {
+	var trees []*workspace.IncludeTree
+	if s.workspace != nil {
+		trees = s.workspace.GetIncludeTreesForFile(path)
+	}
+	if s.workspace != nil && len(trees) == 0 {
+		return []journalSource{{resolved: resolved, errors: loadErrors, partial: true}}
+	}
+
+	var sources []journalSource
+	for _, tree := range trees {
+		switch {
+		case tree.RootPath == path:
+			sources = append(sources, journalSource{resolved: resolved, errors: loadErrors})
+		case tree.Resolved != nil:
+			sources = append(sources, journalSource{resolved: tree.Resolved, errors: tree.LoadErrors})
+		}
+	}
+	if len(sources) == 0 {
+		sources = append(sources, journalSource{resolved: resolved, errors: loadErrors})
+	}
+	return sources
+}
+
+// mergeTreeDiagnostics joins the diagnostics each tree produced, per file. One
+// that every tree owning the file reports is kept as it is; one that only some
+// trees report says which includes it holds for.
+func mergeTreeDiagnostics(docURI uri.URI, sources []journalSource, perTree []map[uri.URI][]protocol.Diagnostic) map[uri.URI][]protocol.Diagnostic {
+	if len(sources) == 1 {
+		return perTree[0]
+	}
+
+	targets := make(map[uri.URI]bool)
+	for _, byURI := range perTree {
+		for target := range byURI {
+			targets[target] = true
+		}
+	}
+
+	merged := make(map[uri.URI][]protocol.Diagnostic, len(targets))
+	for target := range targets {
+		targetPath := uriToPath(target)
+		var lists [][]protocol.Diagnostic
+		var labels [][]string
+		for index, source := range sources {
+			occurrences := source.resolved.OccurrencesForCanonical(targetPath)
+			if target != docURI && len(occurrences) == 0 {
+				continue
+			}
+			lists = append(lists, perTree[index][target])
+			var treeLabels []string
+			for _, occurrence := range occurrences {
+				treeLabels = append(treeLabels, includeLabel(occurrence))
+			}
+			labels = append(labels, treeLabels)
+		}
+		merged[target] = mergeQualified(lists, labels)
+	}
+	return merged
 }
 
 // reportsParseError reports whether diagnostics already hold the syntax error,
