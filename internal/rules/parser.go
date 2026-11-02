@@ -62,7 +62,7 @@ func (p *parser) parseFile() (*RulesFile, []Diagnostic) {
 			rf.Assignments = append(rf.Assignments, a)
 
 		default:
-			if p.current.Type == TokenText && p.current.Pos.Column == 1 {
+			if p.current.Type == TokenText && p.current.Pos.Column == p.lexer.FirstColumn(p.current.Pos.Line) {
 				tok := p.current
 				p.diags = append(p.diags, Diagnostic{
 					Range:    tokenRange(tok),
@@ -186,7 +186,7 @@ loop:
 				if p.current.Type == TokenNewline {
 					p.advance()
 				}
-			} else if len(block.Assignments) == 0 && p.current.Pos.Column == 1 {
+			} else if len(block.Assignments) == 0 && p.current.Pos.Column == p.lexer.FirstColumn(p.current.Pos.Line) {
 				tok := p.current
 				block.Patterns = append(block.Patterns, tok.Value)
 				lastPatternEnd = ast.Position{
@@ -288,7 +288,7 @@ rows:
 			p.advance()
 		case p.current.Type == TokenComment:
 			rf.Comments = append(rf.Comments, p.parseComment())
-		case (p.current.Type == TokenRegex || p.current.Type == TokenSeparator) && p.current.Pos.Column == 1:
+		case (p.current.Type == TokenRegex || p.current.Type == TokenSeparator) && p.current.Pos.Column == p.lexer.FirstColumn(p.current.Pos.Line):
 			table.Rows = append(table.Rows, p.parseIfTableRow(table.Fields))
 		default:
 			break rows

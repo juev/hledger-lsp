@@ -82,7 +82,12 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 	}
 
 	if filetype.IsRules(string(params.TextDocument.URI)) {
-		response.CompletionList = s.rulesCompletion(doc, params)
+		text, position, shift := withoutLeadingBOM(doc, params.Position)
+		trimmed := *params
+		trimmed.Position = position
+		list := s.rulesCompletion(text, &trimmed)
+		shiftFirstLineEdits(list, shift)
+		response.CompletionList = list
 		return response, nil
 	}
 
@@ -200,6 +205,28 @@ func withoutLeadingBOM(doc string, pos protocol.Position) (string, protocol.Posi
 		}
 	}
 	return doc[len(textutil.BOM):], pos, shift
+}
+
+// shiftFirstLineEdits moves the edits of items that touch line 1 right by shift
+// columns, undoing withoutLeadingBOM for ranges computed on the trimmed text.
+func shiftFirstLineEdits(list *protocol.CompletionList, shift uint32) {
+	if list == nil || shift == 0 {
+		return
+	}
+	for i := range list.Items {
+		edit, ok := list.Items[i].TextEdit.(*protocol.TextEdit)
+		if !ok || edit == nil {
+			continue
+		}
+		moved := *edit
+		if moved.Range.Start.Line == 0 {
+			moved.Range.Start.Character += shift
+		}
+		if moved.Range.End.Line == 0 {
+			moved.Range.End.Character += shift
+		}
+		list.Items[i].TextEdit = &moved
+	}
 }
 
 func getCountsForContext(ctxType CompletionContextType, result *analyzer.AnalysisResult, settings completionSettings) map[string]int {

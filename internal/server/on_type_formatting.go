@@ -10,6 +10,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 type lineKind int
@@ -120,6 +121,8 @@ func (s *Server) onTypeNewline(doc string, params *protocol.DocumentOnTypeFormat
 		indentUnit = "\t"
 	}
 
+	// A byte order mark may start line 1 and is not part of the line's content.
+	prevLine = strings.TrimPrefix(prevLine, textutil.BOM)
 	kind := classifyLine(prevLine)
 	var newIndent string
 	switch kind {
