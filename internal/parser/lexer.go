@@ -572,6 +572,10 @@ func (l *Lexer) scanQuotedCommodity() Token {
 func (l *Lexer) scanLBrace() Token {
 	startPos := l.position()
 	l.advance()
+	// A lot price starts a new amount, possibly with a prefix commodity, so the
+	// number before it must not make the symbol take its digits.
+	l.afterNumber = false
+	l.afterSign = false
 
 	if l.pos < len(l.input) && l.peek() == '{' {
 		l.advance()
@@ -604,6 +608,9 @@ func (l *Lexer) scanRBrace() Token {
 func (l *Lexer) scanAt() Token {
 	startPos := l.position()
 	l.advance()
+	// A cost starts a new amount, possibly with a prefix commodity.
+	l.afterNumber = false
+	l.afterSign = false
 
 	if l.pos < len(l.input) && l.peek() == '@' {
 		l.advance()
