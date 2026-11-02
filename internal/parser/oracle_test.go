@@ -249,6 +249,26 @@ var commodityDirectiveJournals = []string{
 
 	"commodity 元\n    format 1000.00 圆\n",
 	"commodity 1000.00 元\n    note 备注\n",
+	"commodity 1.000,00\tEUR\n",
+	"commodity EUR\t1.000,00\n",
+	"commodity EUR\n    format 1000.00\tEUR\n",
+	"commodity EUR\n    format EUR\t1000.00\n",
+	"commodity EUR\n    format EUR \t 1000.00\n",
+	"commodity EUR\n    format 1000.00 \t EUR\n",
+	"commodity \"A B\"\t1.000,00\n",
+	"commodity 1.000,00\t\"A B\"\n",
+	"commodity \"A B\"\n    format \"A B\"\t1000.00\n",
+	"commodity \"A B\"\n    format 1000.00\t\"A B\"\n",
+	"commodity $\t1000\n",
+	"commodity $\t1000.00\n",
+	"commodity EUR\n    format\t1000.00 EUR\n",
+	"commodity EUR\n    format 1000.00\tEUR @ 2 USD\n",
+	"commodity EUR\n    format 1000.00\tUSD\n",
+	"commodity EUR\t1000.00\n    note a\n",
+	"commodity -EUR\t1000.00\n",
+	"commodity EUR\n    format -\tEUR 1000.00\n",
+	"commodity EUR\n    format -EUR\t1000.00\n",
+	"commodity EUR\n    format EUR\t.50\n",
 }
 
 // TestOracle_CommodityDirectiveSubdirectivesMatchHledger compares which commodity
@@ -307,6 +327,14 @@ var commodityStyleJournals = []string{
 	"commodity €1.000,00 ; c\n2024-01-02 t\n    a  €1.234\n    c\n",
 	"commodity € 1.000,00\n2024-01-02 t\n    a  €1.234\n    c\n",
 	"commodity 1.000,00€\n2024-01-02 t\n    a  €1.234\n    c\n",
+	"commodity 1.000,00\tEUR\n2024-01-02 t\n    a  EUR 1.234\n    b  1.234\n    c\n",
+	"commodity EUR\t1.000,00\n2024-01-02 t\n    a  EUR 1.234\n    c\n",
+	"commodity 1.000,00\t\"A B\"\n2024-01-02 t\n    a  \"A B\" 1.234\n    c\n",
+	"commodity \"A B\"\t1.000,00\n2024-01-02 t\n    a  \"A B\" 1.234\n    c\n",
+	"commodity EUR\n    format EUR\t1.000,00\n2024-01-02 t\n    a  EUR 1.234\n    c\n",
+	"commodity EUR\n    format 1.000,00 \t EUR\n2024-01-02 t\n    a  EUR 1.234\n    c\n",
+	"commodity EUR \t 1.000,00\n2024-01-02 t\n    a  EUR 1.234\n    c\n",
+	"commodity EUR\t.50\n2024-01-02 t\n    a  EUR 1.234\n    c\n",
 }
 
 // TestOracle_CommodityStyleDeclarationsReadLikeHledger compares how hledger and

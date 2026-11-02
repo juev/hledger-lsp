@@ -134,6 +134,13 @@ func TestParser_CommodityFormatSymbolAccepted(t *testing.T) {
 		"commodity EUR\n    format 1\u2009000,00 EUR\n",
 		"commodity EUR\n    format 1000,00\u00a0EUR\n",
 		"commodity EUR\n    format 1000,00\u2007EUR\n",
+		"commodity EUR\n    format 1000.00\tEUR\n",
+		"commodity EUR\n    format EUR\t1000.00\n",
+		"commodity EUR\n    format EUR \t 1000.00\n",
+		"commodity EUR\n    format 1000.00 \t EUR\n",
+		"commodity \"A B\"\n    format \"A B\"\t1000.00\n",
+		"commodity \"A B\"\n    format 1000.00\t\"A B\"\n",
+		"commodity EUR\n    format -\tEUR 1000.00\n",
 	} {
 		_, errs := Parse(input)
 		assert.Empty(t, errs, input)
@@ -256,4 +263,42 @@ func TestParser_CommodityDirectiveFormatKeepsWrittenSpacing(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, tt.format, dir.Format, tt.directive)
 	}
+}
+
+func TestParser_CommodityDirectiveTabsAreSpaces(t *testing.T) {
+	tests := []struct {
+		directive, symbol, qty string
+	}{
+		{"commodity 1.000,00\tEUR\n", "EUR", "1.234"},
+		{"commodity EUR\t1.000,00\n", "EUR", "1.234"},
+		{"commodity EUR \t 1.000,00\n", "EUR", "1.234"},
+		{"commodity 1.000,00 \t EUR\n", "EUR", "1.234"},
+		{"commodity \"A B\"\t1.000,00\n", "A B", "1.234"},
+		{"commodity 1.000,00\t\"A B\"\n", "A B", "1.234"},
+		{"commodity EUR\n    format 1.000,00\tEUR\n", "EUR", "1.234"},
+		{"commodity EUR\n    format EUR\t1.000,00\n", "EUR", "1.234"},
+		{"commodity руб\t1.000,00\n", "руб", "1.234"},
+		{"commodity 1.000,00\t元\n", "元", "1.234"},
+	}
+	for _, tt := range tests {
+		sym := tt.symbol
+		if strings.Contains(sym, " ") {
+			sym = `"` + sym + `"`
+		}
+		journal, errs := Parse(tt.directive + "2024-01-02 t\n    a  " + sym + " 1.234\n    b  1.234\n    c\n")
+		require.Empty(t, errs, tt.directive)
+		postings := journal.Transactions[0].Postings
+		assert.Equal(t, "1234", postings[0].Amount.Quantity.String(), "style must apply: %q", tt.directive)
+		assert.Equal(t, "1.234", postings[1].Amount.Quantity.String(), "bare amount must keep the default: %q", tt.directive)
+	}
+}
+
+func TestParser_CommodityDirectiveTabbedFormatErrors(t *testing.T) {
+	_, errs := Parse("commodity EUR\n    format 1000.00\tUSD\n")
+	require.Len(t, errs, 1)
+	assert.Equal(t, `commodity directive symbol "EUR" and format directive symbol "USD" should be the same`, errs[0].Message)
+
+	_, errs = Parse("commodity 1000.00\tEUR\n    note a\n")
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, `subdirective "note" is not allowed`)
 }
