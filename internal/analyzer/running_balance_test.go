@@ -400,3 +400,35 @@ func TestRunningBalances_AssignmentThatCarriesACostIsListed(t *testing.T) {
 	assert.True(t, hasRunningBalance(balances, 0, 1))
 	assert.Equal(t, "-3", runningBalanceAt(t, balances, 0, 1, "EUR"))
 }
+
+func TestJournalEvaluator_ObserveReportsPricedPerPosting(t *testing.T) {
+	// The assignment is the last posting of its transaction and carries
+	// 29 EUR @ 2 USD. The plain transaction after it must not inherit that.
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 t1
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d  7 EUR
+    d  58 USD
+
+2024-01-02 t2
+    x  -13 EUR
+    y  -58 USD
+    b  = 13 EUR
+
+2024-01-03 t3
+    p  1 EUR
+    q  -1 EUR
+`})
+	type key struct{ order, posting int }
+	priced := map[key]bool{}
+	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
+	evaluator.observe = func(order, posting int, _ map[string]decimal.Decimal, isPriced bool) {
+		priced[key{order, posting}] = isPriced
+	}
+	evaluator.run(resolved.TransactionsWithSource())
+
+	assert.True(t, priced[key{1, 2}], "the assignment posting carries a cost")
+	assert.False(t, priced[key{1, 0}])
+	assert.False(t, priced[key{2, 0}], "a plain posting after it carries none")
+	assert.False(t, priced[key{2, 1}])
+}

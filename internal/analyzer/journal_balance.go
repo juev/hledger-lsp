@@ -206,9 +206,6 @@ type journalEvaluator struct {
 	// observe, when set, receives each posting's contribution as the replay
 	// applies it, and whether it carries a cost.
 	observe func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool)
-	// emittedPriced tells observe whether the contribution being emitted
-	// carries a cost, which the contribution map alone cannot show.
-	emittedPriced bool
 }
 
 // postingEffective is the amount a posting contributes to the journal once
@@ -297,7 +294,7 @@ func (e *journalEvaluator) run(sourced []include.SourcedTransaction) []SourcedDi
 			e.deferAssignments(tx, path, index)
 			continue
 		}
-		diagnostics = append(diagnostics, e.evaluate(tx, path, false, func(postingIndex int, contribution map[string]decimal.Decimal) {
+		diagnostics = append(diagnostics, e.evaluate(tx, path, false, func(postingIndex int, contribution map[string]decimal.Decimal, _ bool) {
 			e.recordEvent(tx, path, index, postingIndex, contribution)
 		})...)
 	}
@@ -338,7 +335,7 @@ func HasCheckedBalanceAssignment(tx *ast.Transaction) bool {
 // transaction that has them may only be evaluated from replay. Replay passes
 // carryCosts for those transactions, whose postings keep their cost in the
 // running balance.
-func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts bool, emit func(postingIndex int, contribution map[string]decimal.Decimal)) []SourcedDiagnostic {
+func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts bool, emit func(postingIndex int, contribution map[string]decimal.Decimal, priced bool)) []SourcedDiagnostic {
 	effective := make([]postingEffective, len(tx.Postings))
 	var diagnostics []SourcedDiagnostic
 
@@ -386,8 +383,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 			continue
 		}
 
-		e.emittedPriced = len(effective[i].priced) > 0
-		emit(i, effective[i].native)
+		emit(i, effective[i].native, len(effective[i].priced) > 0)
 	}
 
 	// More than one amount-less posting in a group cannot be inferred, so the
@@ -417,8 +413,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 	}
 
 	for group, index := range elidedByGroup {
-		e.emittedPriced = false
-		emit(index, e.elidedContribution(tx, effective, index, groups[group]))
+		emit(index, e.elidedContribution(tx, effective, index, groups[group]), false)
 	}
 
 	diagnostics = append(diagnostics, e.balanceDiagnostics(tx, path, effective, elidedByGroup, groups)...)
@@ -536,11 +531,11 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 
 	var balanceDiagnostics, assertionDiagnostics []SourcedDiagnostic
 	for _, event := range e.events {
-		step := func(postingIndex int, contribution map[string]decimal.Decimal) {
+		step := func(postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
 			if e.observe != nil {
-				e.observe(event.sourceOrder, postingIndex, contribution, e.emittedPriced)
+				e.observe(event.sourceOrder, postingIndex, contribution, priced)
 			}
 			if posting.BalanceAssertion != nil {
 				assertionDiagnostics = append(assertionDiagnostics, e.assertionDiagnostics(event.tx, postingIndex, event.path)...)
@@ -550,7 +545,7 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 			balanceDiagnostics = append(balanceDiagnostics, e.evaluate(event.tx, event.path, true, step)...)
 			continue
 		}
-		step(event.postingIndex, event.contribution)
+		step(event.postingIndex, event.contribution, false)
 	}
 	return append(balanceDiagnostics, assertionDiagnostics...)
 }
