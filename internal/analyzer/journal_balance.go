@@ -516,13 +516,22 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 	for group, indices := range groups {
 		elidedIdx, hasElided := elidedByGroup[group]
 		postings := make([]ast.Posting, 0, len(indices))
+		var multi []bool
 		for _, idx := range indices {
 			if hasElided && idx == elidedIdx {
 				continue
 			}
 			// Assertion-only postings are balanced by construction; their
 			// inferred amount is what keeps the group in balance.
+			before := len(postings)
 			postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx])
+			for len(multi) < before {
+				multi = append(multi, false)
+			}
+			mixed := tx.Postings[idx].Amount == nil && nonZeroCommodities(effective[idx].native) > 1
+			for len(multi) < len(postings) {
+				multi = append(multi, mixed)
+			}
 		}
 
 		if hasElided {
@@ -531,7 +540,7 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			continue
 		}
 
-		result := checkPostingGroup(postings, e.tolerance)
+		result := checkPostingGroupMixed(postings, multi, e.tolerance)
 		if result.multipleInferred {
 			// An elided posting in the *other* group cannot balance this one.
 			diagnostics = append(diagnostics, SourcedDiagnostic{
@@ -562,6 +571,17 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 	}
 
 	return diagnostics
+}
+
+// nonZeroCommodities counts the commodities an inferred amount actually moves.
+func nonZeroCommodities(amount map[string]decimal.Decimal) int {
+	count := 0
+	for _, quantity := range amount {
+		if !quantity.IsZero() {
+			count++
+		}
+	}
+	return count
 }
 
 // elidedContribution returns the mixed amount hledger infers for the single

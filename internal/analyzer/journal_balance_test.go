@@ -699,6 +699,68 @@ var assignmentOrderCases = []struct {
 	wantMessages []string
 }{
 	{
+		name: "strict assignment mixed amount blocks the inferred conversion price",
+		input: `2024-01-01 t1
+    bank  -9 EUR
+    b
+
+2024-01-17 t0
+    bank  == -3 USD
+    a  1 EUR
+    bank  = -4 EUR
+`,
+		wantMessages: []string{"EUR off by 6; USD off by -3"},
+	},
+	{
+		name: "strict assignment mixed amount with a second posting in its commodity",
+		input: `2024-01-01 t1
+    bank  -9 EUR
+    b
+
+2024-01-17 t0
+    bank  == -3 USD
+    a  -6 EUR
+`,
+		wantMessages: []string{"EUR off by 3; USD off by -3"},
+	},
+	{
+		name: "strict assignment mixed amount balanced by plain postings",
+		input: `2024-01-01 t1
+    bank  -9 EUR
+    b
+
+2024-01-17 t0
+    bank  == -3 USD
+    a  -9 EUR
+    c  3 USD
+`,
+	},
+	{
+		name: "non-strict assignments keep the inferred conversion price",
+		input: `2024-01-01 t1
+    bank  -9 EUR
+    b
+
+2024-01-17 t0
+    bank  = -3 USD
+    a  1 EUR
+    bank  = -4 EUR
+`,
+	},
+	{
+		name: "Cyrillic and CJK accounts: strict assignment mixed amount is unbalanced",
+		input: `2024-01-01 открытие
+    банк  -9 EUR
+    капитал
+
+2024-01-17 сверка
+    банк  == -3 USD
+    расходы:食  1 EUR
+    банк  = -4 EUR
+`,
+		wantMessages: []string{"EUR off by 6; USD off by -3"},
+	},
+	{
 		name: "later dated posting crosses an assignment",
 		input: `2024-12-31 * charge
     liabilities:card  -10 USD  ; date:2025-01-02
