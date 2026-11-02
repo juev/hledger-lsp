@@ -54,3 +54,18 @@ func TestDiagnostics_LoneTabBetweenAccountAndAmountIsReported(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, codesIn(diags), "two tabs separate the amount")
 }
+
+func TestDiagnostics_DirectivesWithTabBeforeCommentStayClean(t *testing.T) {
+	for name, input := range map[string]string{
+		"LF":   "commodity USD\t; note: x\nP 2024-01-01 EUR\t1.1 USD\t; source: ecb\npayee Кафе\t; а:б\n2024-01-01 Кафе\n    a  5 USD\n    b  -5 USD\n",
+		"CRLF": "commodity USD\t; note: x\r\nP 2024-01-01 EUR\t1.1 USD\t; source: ecb\r\npayee Кафе\t; а:б\r\n2024-01-01 Кафе\r\n    a  5 USD\r\n    b  -5 USD\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := newTestServer()
+			diags, err := ts.openAndWait(uri.URI("file:///dirs.journal"), input)
+			require.NoError(t, err)
+			assert.Nil(t, diagnosticWithCode(diags, "EXPECTED_COMMODITY"), "got %v", codesIn(diags))
+			assert.Nil(t, diagnosticWithCode(diags, "UNDECLARED_COMMODITY"), "got %v", codesIn(diags))
+		})
+	}
+}

@@ -953,7 +953,10 @@ func (l *Lexer) looksLikeAccount() bool {
 				break
 			}
 			i += size
-		} else if isAccountTerminator(r) {
+		} else if r == '\t' || isAccountTerminator(r) {
+			// A tab ends the candidate: the colon test only looks at the first
+			// token of a directive argument or top-level line, and a colon in
+			// a trailing "; comment: x" must not make it an account.
 			break
 		} else if r == '=' && l.inDirective {
 			break

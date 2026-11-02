@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/testutil"
 )
 
@@ -83,4 +84,42 @@ func hledgerPostings(t *testing.T, hledgerPath, input string) ([]hledgerPosting,
 	require.NoError(t, json.Unmarshal(out, &transactions))
 	require.Len(t, transactions, 1)
 	return transactions[0].Postings, true
+}
+
+// TestOracle_DirectiveWithTabBeforeCommentMatchesHledger checks that directive
+// arguments survive a tab before a comment that contains a colon.
+func TestOracle_DirectiveWithTabBeforeCommentMatchesHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	input := "commodity USD\t; note: x\ncommodity EUR\nP 2024-01-01 EUR\t1.1 USD\t; source: ecb\n" +
+		"payee Foo\t; a:b\npayee Кафе\t; а:б\ntag t\t; x:y\nalias a\t= b\n" +
+		"2024-01-01 Foo\n    a  5 USD\n    c\n"
+
+	list := func(command string) []string {
+		cmd := exec.Command(hledgerPath, "-f", "-", command)
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.Output()
+		require.NoError(t, err, command)
+		return strings.Fields(string(out))
+	}
+
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	var commodities, payees, tags []string
+	for _, directive := range journal.Directives {
+		switch d := directive.(type) {
+		case ast.CommodityDirective:
+			commodities = append(commodities, d.Commodity.Symbol)
+		case ast.PayeeDirective:
+			payees = append(payees, d.Name)
+		case ast.TagDirective:
+			tags = append(tags, d.Name)
+		}
+	}
+	assert.ElementsMatch(t, list("commodities"), commodities)
+	assert.Subset(t, list("payees"), payees)
+	assert.ElementsMatch(t, []string{"t"}, tags)
+	assert.Contains(t, list("tags"), "t")
+	assert.Equal(t, []string{"P", "2024-01-01", "EUR", "1.1", "USD"}, list("prices"))
+	assert.Equal(t, []string{"b", "c"}, list("accounts"))
 }
