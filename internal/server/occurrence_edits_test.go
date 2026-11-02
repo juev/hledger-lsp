@@ -90,7 +90,7 @@ func setupOccurrences(t *testing.T, layout occurrenceLayout, shared string) (*te
 
 // Writing a number from the first occurrence's reading rules changes its value
 // at an occurrence that reads it differently: `10 EUR` becoming `10,00 EUR`
-// reads as 1010 under a dot mark. Format must leave such numbers as written.
+// reads as 1000 under a dot mark. Format must leave such numbers as written.
 func TestFormat_KeepsNumbersThatOccurrencesReadDifferently(t *testing.T) {
 	tests := []struct {
 		name   string

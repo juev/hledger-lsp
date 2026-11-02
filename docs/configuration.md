@@ -111,7 +111,7 @@ hledger reads at each of them.
 
 - **Format, range formatting and on-type formatting** rewrite a number only when
   every occurrence renders it to the same text. When they disagree anywhere in
-  the file (for example `10 EUR` would become `10,00 EUR`, which reads as 1010
+  the file (for example `10 EUR` would become `10,00 EUR`, which reads as 1000
   under a `.` decimal mark), the file keeps its numbers as written and only the
   layout is normalised: indent, spacing and alignment.
 - **Insert inferred amount** and the unbalanced-transaction fix (the quick fix
