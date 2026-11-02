@@ -10,6 +10,7 @@ import (
 	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/server"
+	"github.com/juev/hledger-lsp/internal/stdin"
 )
 
 var (
@@ -26,7 +27,7 @@ func main() {
 
 	ctx := context.Background()
 	srv := server.NewServerWithVersion(Version)
-	_, conn, _, lifecycleState := newServerConnection(ctx, stdrwc{}, srv)
+	_, conn, _, lifecycleState := newServerConnection(ctx, stdrwc{in: stdin.New()}, srv)
 	code := waitForServerExit(conn, lifecycleState)
 	if code != 0 {
 		os.Exit(code)
@@ -84,10 +85,12 @@ func (lspCodec) Unmarshal(data []byte, v any) error {
 	return protocol.Unmarshal(data, v)
 }
 
-type stdrwc struct{}
+type stdrwc struct {
+	in io.Reader
+}
 
-func (stdrwc) Read(p []byte) (int, error) {
-	return os.Stdin.Read(p)
+func (s stdrwc) Read(p []byte) (int, error) {
+	return s.in.Read(p)
 }
 
 func (stdrwc) Write(p []byte) (int, error) {

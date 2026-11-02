@@ -43,6 +43,31 @@ builds:
       - -X main.Commit={{.ShortCommit}}
       - -X main.Date={{.Date}}
 
+  # WebAssembly build for WASI preview 1 hosts (wasmtime, Node's node:wasi).
+  # The post hook runs the stdio LSP smoke test against the built module, so
+  # a module that fails under a real runtime stops the release.
+  - id: hledger-lsp-wasi
+    main: ./cmd/hledger-lsp
+    binary: hledger-lsp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - wasip1
+    goarch:
+      - wasm
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.Date={{.Date}}
+    hooks:
+      post:
+        - cmd: go test ./cmd/hledger-lsp -run WASISmoke -count=1
+          env:
+            - HLEDGER_WASI_RUNTIME=wasmtime,node
+            - HLEDGER_WASI_WASM={{ abs .Path }}
+          output: true
+
 archives:
   - formats:
       - binary
