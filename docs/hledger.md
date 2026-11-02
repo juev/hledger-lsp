@@ -275,6 +275,18 @@ $100        ; Symbol before, no space
 10 "ACME Inc." @ $50
 ```
 
+**Unquoted symbols:** hledger 1.52.4 reads every character as part of an unquoted symbol except ASCII digits, space, tab and ``-+.@*;"{}=``. Punctuation, brackets and any other Unicode character belong to the symbol, and the symbol runs as far as such characters go:
+
+```
+,5          ; symbol ",", quantity 5
+$,5         ; symbol "$,", quantity 5
+5 EUR!      ; symbol "EUR!"
+5 (x)       ; symbol "(x)"
+5 😀        ; symbol "😀"
+```
+
+The same rule holds in postings, costs, balance assertions, the `D` directive and the `commodity` directive, and for the commodity a `P` directive prices. That commodity must be followed by a space and may not hold a digit or a character from the list above unless it is quoted. A comma glued to a symbol is part of it, so a number that starts with the decimal comma needs a prefix symbol and a space: `$ ,5` is `$ 0.5`. After the price, hledger ignores the rest of a `P` line. A `(` or `[` after a complete amount opens a lot annotation instead of a symbol.
+
 ### Decimal Mark Disambiguation
 
 When amounts contain only one period or comma (e.g., `1,000`), hledger assumes it's a decimal mark. Use `decimal-mark` directive to clarify:
