@@ -47,15 +47,10 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		}
 	}
 	// Replaying the balances walks the whole include tree, so it runs only when
-	// the result will be read.
+	// the result will be read, and is reused until the document or its tree moves.
 	var runningBalances map[analyzer.PostingRef]map[string]decimal.Decimal
-	if settings.InlayHints.RunningBalances {
-		switch {
-		case resolved != nil:
-			runningBalances = analyzer.RunningBalances(resolved.TransactionsWithSource(), occurrenceID)
-		case s.workspace == nil:
-			runningBalances = analyzer.RunningBalances(journalTransactions(journal), 0)
-		}
+	if settings.InlayHints.RunningBalances && (resolved != nil || s.workspace == nil) {
+		runningBalances = s.cachedRunningBalances(params.TextDocument.URI, content, resolved, occurrenceID)
 	}
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
