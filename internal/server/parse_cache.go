@@ -50,10 +50,10 @@ type cachedDoc struct {
 	// stands for the whole tree's content; runningMu serialises the replay so
 	// concurrent requests share one.
 	runningMu sync.Mutex
-	running   map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal
+	running   map[readingKey]analyzer.Replay
 	// runningOffsets is running re-keyed by where each posting is written in the
 	// inclusion's own journal; both are dropped together.
-	runningOffsets map[readingKey]map[int]map[string]decimal.Decimal
+	runningOffsets map[readingKey]offsetReplay
 
 	// others holds the parse and analysis of the document under the include
 	// contexts other than the primary one, keyed by tree and occurrence. The
@@ -98,30 +98,36 @@ func (o *otherReading) postingEffects() []analyzer.PostingEffect {
 	return o.effects
 }
 
-// cachedRunningBalances returns the running balances of the document's postings,
-// replaying the journal only when this version has not been replayed under the
-// same include tree and occurrence. A lone document (tree == nil) is replayed
-// from journal. The result is shared between callers and must not be modified.
-func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *include.ResolvedJournal, id include.OccurrenceID) map[analyzer.PostingRef]map[string]decimal.Decimal {
-	return s.cachedRunningBalancesOf(docURI, content, tree, []include.OccurrenceID{id})[id]
+// offsetReplay is a replay keyed by the offset each posting starts at.
+type offsetReplay struct {
+	balances map[int]map[string]decimal.Decimal
+	assigned map[int]map[string]decimal.Decimal
 }
 
-// cachedRunningBalancesOf is cachedRunningBalances for several occurrences of
-// one tree: those not replayed yet are replayed together, in one pass over the
-// journal.
-func (s *Server) cachedRunningBalancesOf(docURI uri.URI, content string, tree *include.ResolvedJournal, ids []include.OccurrenceID) map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal {
+// cachedReplay returns the replay of the document's postings (running balances
+// and assigned amounts), replaying the journal only when this version has not
+// been replayed under the same include tree and occurrence. A lone document
+// (tree == nil) is replayed from journal. The result is shared between callers
+// and must not be modified.
+func (s *Server) cachedReplay(docURI uri.URI, content string, tree *include.ResolvedJournal, id include.OccurrenceID) analyzer.Replay {
+	return s.cachedReplaysOf(docURI, content, tree, []include.OccurrenceID{id})[id]
+}
+
+// cachedReplaysOf is cachedReplay for several occurrences of one tree: those
+// not replayed yet are replayed together, in one pass over the journal.
+func (s *Server) cachedReplaysOf(docURI uri.URI, content string, tree *include.ResolvedJournal, ids []include.OccurrenceID) map[include.OccurrenceID]analyzer.Replay {
 	doc := s.cachedParse(docURI, content)
 
 	doc.runningMu.Lock()
 	defer doc.runningMu.Unlock()
 	if doc.running == nil {
-		doc.running = make(map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal)
+		doc.running = make(map[readingKey]analyzer.Replay)
 	}
-	result := make(map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal, len(ids))
+	result := make(map[include.OccurrenceID]analyzer.Replay, len(ids))
 	var missing []include.OccurrenceID
 	for _, id := range ids {
-		if balances, ok := doc.running[readingKey{tree: tree, id: id}]; ok {
-			result[id] = balances
+		if replay, ok := doc.running[readingKey{tree: tree, id: id}]; ok {
+			result[id] = replay
 		} else {
 			missing = append(missing, id)
 		}
@@ -130,15 +136,15 @@ func (s *Server) cachedRunningBalancesOf(docURI uri.URI, content string, tree *i
 		return result
 	}
 
-	var replayed map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal
+	var replayed map[include.OccurrenceID]analyzer.Replay
 	if tree != nil {
-		replayed = analyzer.RunningBalancesFor(tree.TransactionsWithSource(), missing)
+		replayed = analyzer.ReplayFor(tree.TransactionsWithSource(), missing)
 	} else {
-		replayed = analyzer.RunningBalancesFor(journalTransactions(doc.journal), missing)
+		replayed = analyzer.ReplayFor(journalTransactions(doc.journal), missing)
 	}
-	for id, balances := range replayed {
-		doc.running[readingKey{tree: tree, id: id}] = balances
-		result[id] = balances
+	for id, replay := range replayed {
+		doc.running[readingKey{tree: tree, id: id}] = replay
+		result[id] = replay
 	}
 	return result
 }

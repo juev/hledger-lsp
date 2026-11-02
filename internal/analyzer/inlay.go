@@ -16,13 +16,16 @@ type PostingEffect struct {
 }
 
 // CalculatePostingEffects derives posting facts in source order. Inferred amounts
-// balance only real or balanced-virtual posting groups.
+// balance only real or balanced-virtual posting groups. A group with a balance
+// assignment has none: what it infers depends on the balance before the
+// transaction, which only a replay of the journal knows (see ReplayFor).
 func CalculatePostingEffects(journal *ast.Journal) []PostingEffect {
 	effects := make([]PostingEffect, 0)
 
 	for transactionIndex := range journal.Transactions {
 		transaction := &journal.Transactions[transactionIndex]
 		inferred := inferredAmountsByPosting(transaction.Postings)
+		dropAssignedGroups(transaction.Postings, inferred)
 
 		for postingIndex := range transaction.Postings {
 			posting := &transaction.Postings[postingIndex]
@@ -64,6 +67,25 @@ func inferredAmountsByPosting(postings []ast.Posting) map[int]map[string]decimal
 	}
 
 	return inferred
+}
+
+// dropAssignedGroups removes the inferred amounts of the groups that hold a
+// balance assignment.
+func dropAssignedGroups(postings []ast.Posting, inferred map[int]map[string]decimal.Decimal) {
+	if len(inferred) == 0 {
+		return
+	}
+	groups := postingGroups(postings)
+	for _, group := range groups {
+		for _, index := range group {
+			if postings[index].Amount == nil && postings[index].BalanceAssertion != nil {
+				for _, member := range group {
+					delete(inferred, member)
+				}
+				break
+			}
+		}
+	}
 }
 
 func costContribution(posting *ast.Posting) map[string]decimal.Decimal {
