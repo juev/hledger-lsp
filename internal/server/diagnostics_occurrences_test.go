@@ -285,3 +285,77 @@ func TestPublishDiagnostics_IncludedFileSetDoesNotDependOnWhoPublishedLast(t *te
 		assert.ElementsMatch(t, want, set, "opening the including file replaced the included file's set")
 	}
 }
+
+// An assertion that fails only in the journal of one root is published for the
+// open included file, naming that root; the other root reads it clean.
+func TestPublishDiagnostics_AssertionOfAnotherRootReachesOpenIncludedFile(t *testing.T) {
+	shared := "2024-01-02 x\n    expenses:food   10 EUR\n    assets:cash   -10 EUR = -10 EUR\n"
+	failing := "2024-01-01 open\n    assets:cash   100 EUR\n    equity\n\ninclude shared.journal\n"
+	clean := "include shared.journal\n"
+
+	tests := []struct{ name, aRoot, zRoot, label string }{
+		{"failing root last", clean, failing, "(when included from z-root.journal:5)"},
+		{"failing root first", failing, clean, "(when included from a-root.journal:5)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJournals(t, dir, map[string]string{"a-root.journal": tt.aRoot, "z-root.journal": tt.zRoot, "shared.journal": shared})
+
+			published := publishedFor(t, dir, shared, nil)
+			var failed []protocol.Diagnostic
+			for _, d := range published {
+				if fmt.Sprint(d.Code) == "BALANCE_ASSERTION_FAILED" {
+					failed = append(failed, d)
+				}
+			}
+			require.Len(t, failed, 1, "messages: %v", messages(published))
+			assert.Contains(t, fmt.Sprint(failed[0].Message), tt.label)
+		})
+	}
+}
+
+// A file that had problems from this root and no longer has any is cleared.
+func TestPublishDiagnostics_IncludedFileThatBecameCleanIsCleared(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-02 x\n    expenses:food   10 EUR\n    assets:cash   -10 EUR = -10 EUR\n"
+	failing := "2024-01-01 open\n    assets:cash   100 EUR\n    equity\n\ninclude shared.journal\n"
+	fixed := "2024-01-01 open\n    assets:cash   0 EUR\n    equity\n\ninclude shared.journal\n"
+	removed := "2024-01-01 open\n    assets:cash   100 EUR\n    equity\n"
+
+	for name, edited := range map[string]string{"assertion fixed": fixed, "include removed": removed} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJournals(t, dir, map[string]string{"main.journal": failing, "shared.journal": shared})
+			ts := initWorkspaceTestServer(t, dir)
+			mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+
+			require.NoError(t, ts.openDocument(mainURI, failing))
+			require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 1 }, 2*time.Second, 10*time.Millisecond)
+
+			_, err := ts.replaceAndWait(mainURI, edited)
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				sets := publishedSets(ts, sharedURI)
+				return len(sets) > 0 && len(sets[len(sets)-1]) == 0
+			}, 2*time.Second, 10*time.Millisecond, "shared.journal still shows %v", lastSet(ts, sharedURI))
+		})
+	}
+}
+
+func TestIncludeLabel_NamesTheDirectiveAndNothingForTheRoot(t *testing.T) {
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": "\ninclude child.journal\n", "child.journal": "; child\n"})
+	ts, _ := formatServer(t, dir, filepath.Join(dir, "child.journal"), "; child\n")
+
+	trees := ts.workspace.GetIncludeTreesForFile(filepath.Join(dir, "child.journal"))
+	require.Len(t, trees, 1)
+	root := trees[0].Resolved.Occurrence(1)
+	require.NotNil(t, root)
+	assert.Empty(t, includeLabel(*root), "the root of a tree has no include directive")
+
+	occurrences := trees[0].Resolved.OccurrencesForPath(filepath.Join(dir, "child.journal"))
+	require.Len(t, occurrences, 1)
+	assert.Equal(t, "main.journal:2", includeLabel(occurrences[0]))
+}

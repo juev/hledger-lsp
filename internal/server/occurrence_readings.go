@@ -146,7 +146,7 @@ func (s *Server) otherReadingFor(doc *cachedDoc, key readingKey, content string)
 // includeLabel names the include directive that created an occurrence, as
 // `parent.journal:12`. The root of a tree has no directive and an empty label.
 func includeLabel(occurrence include.JournalOccurrence) string {
-	if occurrence.Via.SourcePath == "" {
+	if occurrence.Via.ParentID == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", filepath.Base(occurrence.Via.SourcePath), occurrence.Via.IncludeRange.Start.Line)
@@ -254,6 +254,19 @@ func mergeReadingDiagnostics(readings []occurrenceReading, perReading [][]protoc
 	if len(readings) == 1 {
 		return perReading[0]
 	}
+	labels := make([][]string, len(readings))
+	for index := range readings {
+		labels[index] = readings[index].includedFrom
+	}
+	return mergeQualified(perReading, labels)
+}
+
+// mergeQualified joins per-source diagnostics, labels[i] naming the includes of
+// source i. A diagnostic held by fewer than all sources gets a qualifier.
+func mergeQualified(perSource [][]protocol.Diagnostic, labels [][]string) []protocol.Diagnostic {
+	if len(perSource) == 1 {
+		return perSource[0]
+	}
 
 	type key struct {
 		rng     protocol.Range
@@ -266,7 +279,7 @@ func mergeReadingDiagnostics(readings []occurrenceReading, perReading [][]protoc
 
 	holders := make(map[key][]int)
 	var order []protocol.Diagnostic
-	for index, diagnostics := range perReading {
+	for index, diagnostics := range perSource {
 		for _, d := range diagnostics {
 			k := keyOf(d)
 			if _, seen := holders[k]; !seen {
@@ -281,20 +294,20 @@ func mergeReadingDiagnostics(readings []occurrenceReading, perReading [][]protoc
 	merged := make([]protocol.Diagnostic, 0, len(order))
 	for _, d := range order {
 		held := holders[keyOf(d)]
-		if len(held) < len(readings) {
-			d.Message = protocol.String(fmt.Sprint(d.Message) + " (" + occurrenceQualifier(readings, held) + ")")
+		if len(held) < len(perSource) {
+			d.Message = protocol.String(fmt.Sprint(d.Message) + " (" + occurrenceQualifier(labels, held) + ")")
 		}
 		merged = append(merged, d)
 	}
 	return merged
 }
 
-// occurrenceQualifier names the includes of the readings at the given indexes.
-func occurrenceQualifier(readings []occurrenceReading, held []int) string {
+// occurrenceQualifier names the includes of the sources at the given indexes.
+func occurrenceQualifier(labelsOf [][]string, held []int) string {
 	const shown = 3
 	var labels []string
 	for _, index := range held {
-		for _, label := range readings[index].includedFrom {
+		for _, label := range labelsOf[index] {
 			if label != "" && !slices.Contains(labels, label) {
 				labels = append(labels, label)
 			}
