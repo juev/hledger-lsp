@@ -302,4 +302,79 @@ var assertionCostJournals = map[string]string{
     現金  ==* 3 EUR @@ 7 USD
     資本
 `,
+	"assertion cost replaces balances held at two unit prices": `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	"assertion cost at a unit price replaces a total cost": `2024-01-01 t1
+    bank  = 2 GBP @@ 4 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	"assertion total costs add up and restate to nothing": `2024-01-01 t
+    bank  = 2 GBP @@ 4 EUR
+    c
+
+2024-01-02 t
+    bank  = 3 GBP @@ 9 EUR
+    c
+
+2024-01-03 t
+    bank  = 3 GBP @@ 9 EUR
+    c
+`,
+	"assertion total cost over total costs of several totals": `2024-01-01 t
+    bank  1 GBP @@ 4 EUR
+    bank  2 GBP @@ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 5 GBP @@ 20 EUR
+    c
+`,
+	"assertion cost over unit prices written alike and in another cost commodity": `2024-01-01 t
+    bank  1 GBP @ 2 EUR
+    bank  1 GBP @ 2.0 EUR
+    bank  1 GBP @ 2 USD
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 2 GBP @ 2 EUR
+    c
+`,
+	"assertion cost over a unit price and a total cost that cancel in quantity": `2024-01-01 t
+    bank  -2 GBP @ 3 EUR
+    bank  2 GBP @@ 6 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 0 GBP @ 2 EUR
+    c
+`,
+	"assertion cost over two prices on Cyrillic and CJK accounts": `2024-01-01 t1
+    банк:現金  1 GBP @ 1 EUR
+    банк:現金  1 GBP @ 3 EUR
+    касса  = 0 EUR
+    капитал
+
+2024-01-02 t2
+    банк:現金  = 2 GBP @ 2 EUR
+    資本
+
+2024-01-03 t3
+    банк:現金  = 2 GBP @@ 4 EUR
+    資本
+`,
 }

@@ -1315,6 +1315,93 @@ var assignmentOrderCases = []struct {
     equity  -7 USD
 `,
 	},
+	{
+		name: "assertion cost at another price keeps the conversion price explicit",
+		input: `2024-01-01 t1
+    bank  = 7 GBP @ 1 EUR
+    c
+
+2024-01-02 t2
+    bank  4.5 GBP
+    c
+
+2024-01-03 t3
+    bank  = 3 GBP @ 3 EUR
+    b  1.5 GBP
+`,
+		wantMessages: []string{"EUR off by 2; GBP off by -3"},
+	},
+	{
+		name: "balanced virtual assertion cost at another price keeps the conversion price explicit",
+		input: `2024-01-12 t2
+    bank  4.5 GBP
+    c
+
+2024-01-14 t3
+    bank  7 GBP @ 1 EUR
+    [bank]  == 3 GBP @ 3 EUR
+    b
+`,
+		wantMessages: []string{"EUR off by 2; GBP off by -4.5"},
+	},
+	{
+		name: "assertion cost over prices that cancel in quantity keeps the conversion price explicit",
+		input: `2024-01-01 t1
+    b  -10 EUR @ 2 USD
+    b  10 EUR @ 3 USD
+    c  = 0 EUR
+    d
+
+2024-01-02 t2
+    b  = 2 EUR @ 5 USD
+    x  1 GBP
+    y  -3 EUR
+`,
+		wantMessages: []string{"EUR off by -3; GBP off by 1"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices",
+		input: `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b  3 GBP
+    b  -5 EUR
+`,
+		wantMessages: []string{"EUR off by -5; GBP off by 3"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices on Cyrillic and CJK accounts",
+		input: `2024-01-01 t1
+    банк:現金  1 GBP @ 1 EUR
+    банк:現金  1 GBP @ 3 EUR
+    касса  = 0 EUR
+    капитал
+
+2024-01-02 t2
+    банк:現金  = 2 GBP @ 2 EUR
+    資本  3 GBP
+    資本  -5 EUR
+`,
+		wantMessages: []string{"EUR off by -5; GBP off by 3"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices and balances",
+		input: `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {

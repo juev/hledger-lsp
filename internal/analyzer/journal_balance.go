@@ -119,11 +119,25 @@ func (b accountBalances) heldCommodities(account string, inclusive bool) map[str
 	return held
 }
 
-// pricedKey identifies an amount that was written with a cost: the commodity it
-// is denominated in and the commodity of its cost.
+// pricedKey identifies an amount that was written with a cost the way hledger
+// tells such amounts apart: by commodity, by the commodity of the cost, and by the
+// unit price for @ or as one group for @@. Amounts under one key add up, while
+// amounts under different keys stay apart even when their quantities cancel.
 type pricedKey struct {
 	commodity     string
 	costCommodity string
+	// unitPrice is the canonical text of the @ price, empty for @@.
+	unitPrice string
+	total     bool
+}
+
+// costKey returns the key an amount with the given cost is held under.
+func costKey(amount ast.Amount, cost *ast.Cost) pricedKey {
+	key := pricedKey{commodity: amount.Commodity.Symbol, costCommodity: cost.Amount.Commodity.Symbol, total: cost.IsTotal}
+	if !cost.IsTotal {
+		key.unitPrice = cost.Amount.Quantity.String()
+	}
+	return key
 }
 
 // pricedAmount is what an account holds under one pricedKey: the quantity, and
@@ -356,8 +370,8 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 				precision: decimalPrecision(p.Amount.Quantity),
 			}
 			if carryCosts && p.Cost != nil {
-				if costCommodity, value, ok := balanceSumContribution(*p); ok {
-					e.priced.add(p.Account.GetResolvedName(), pricedKey{p.Amount.Commodity.Symbol, costCommodity}, p.Amount.Quantity, value)
+				if _, value, ok := balanceSumContribution(*p); ok {
+					e.priced.add(p.Account.GetResolvedName(), costKey(*p.Amount, p.Cost), p.Amount.Quantity, value)
 				}
 			}
 		case p.BalanceAssertion != nil:
@@ -484,12 +498,12 @@ func assertionPricedPart(assertion *ast.BalanceAssertion) (pricedPart, bool) {
 	if assertion.Cost == nil {
 		return pricedPart{}, false
 	}
-	costCommodity, value, ok := balanceSumContribution(ast.Posting{Amount: &assertion.Amount, Cost: assertion.Cost})
+	_, value, ok := balanceSumContribution(ast.Posting{Amount: &assertion.Amount, Cost: assertion.Cost})
 	if !ok {
 		return pricedPart{}, false
 	}
 	return pricedPart{
-		pricedKey: pricedKey{assertion.Amount.Commodity.Symbol, costCommodity},
+		pricedKey: costKey(assertion.Amount, assertion.Cost),
 		quantity:  assertion.Amount.Quantity,
 		value:     value,
 	}, true
@@ -497,7 +511,8 @@ func assertionPricedPart(assertion *ast.BalanceAssertion) (pricedPart, bool) {
 
 // mergePricedParts sums parts that share a key and drops those that cancel out,
 // so an assignment that restates the balance an account already holds at the same
-// cost has no priced part left and moves nothing.
+// cost has no priced part left and moves nothing. Parts at different prices stay
+// apart, as they do in hledger.
 func mergePricedParts(parts []pricedPart) []pricedPart {
 	if len(parts) == 0 {
 		return parts
@@ -515,12 +530,21 @@ func mergePricedParts(parts []pricedPart) []pricedPart {
 		merged = append(merged, pricedPart{pricedKey: key, quantity: sum.quantity, value: sum.value})
 	}
 	sort.Slice(merged, func(i, j int) bool {
-		if merged[i].commodity != merged[j].commodity {
-			return merged[i].commodity < merged[j].commodity
-		}
-		return merged[i].costCommodity < merged[j].costCommodity
+		return lessPricedKey(merged[i].pricedKey, merged[j].pricedKey)
 	})
 	return merged
+}
+
+func lessPricedKey(a, b pricedKey) bool {
+	switch {
+	case a.commodity != b.commodity:
+		return a.commodity < b.commodity
+	case a.costCommodity != b.costCommodity:
+		return a.costCommodity < b.costCommodity
+	case a.total != b.total:
+		return !a.total
+	}
+	return a.unitPrice < b.unitPrice
 }
 
 // pricedParts returns the negation of the priced balances an assignment replaces
@@ -534,7 +558,7 @@ func (e *journalEvaluator) pricedParts(account, commodity string, scope pricedSc
 		}
 		parts = append(parts, pricedPart{pricedKey: key, quantity: amount.quantity.Neg(), value: amount.value.Neg()})
 	}
-	sort.Slice(parts, func(i, j int) bool { return parts[i].costCommodity < parts[j].costCommodity })
+	sort.Slice(parts, func(i, j int) bool { return lessPricedKey(parts[i].pricedKey, parts[j].pricedKey) })
 	return parts
 }
 
@@ -941,20 +965,25 @@ func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effecti
 	return postings
 }
 
-// pricedPosting renders a priced part as a posting whose total cost is the part's
-// value. A part whose quantity is zero or whose value has the opposite sign cannot
-// be written as a total cost, so it contributes its value in the cost commodity.
+// pricedPosting renders a priced part as a posting that keeps its cost, so the
+// balance check sees that the transaction names a conversion rate. An @ part is
+// written at its unit price. An @@ part has no price of its own: its quantity and
+// its total cost can differ in sign or the quantity can be zero once parts are
+// added, so the total is stored with the sign that makes the posting convert to
+// exactly the part's value.
 func pricedPosting(posting ast.Posting, part pricedPart) ast.Posting {
-	if part.quantity.IsZero() || part.quantity.Sign() != part.value.Sign() {
-		posting.Amount = &ast.Amount{Quantity: part.value, Commodity: ast.Commodity{Symbol: part.costCommodity}}
-		posting.Cost = nil
-		return posting
-	}
 	posting.Amount = &ast.Amount{Quantity: part.quantity, Commodity: ast.Commodity{Symbol: part.commodity}}
-	posting.Cost = &ast.Cost{
-		Amount:  ast.Amount{Quantity: part.value.Abs(), Commodity: ast.Commodity{Symbol: part.costCommodity}},
-		IsTotal: true,
+	cost := &ast.Cost{Amount: ast.Amount{Commodity: ast.Commodity{Symbol: part.costCommodity}}}
+	if part.total {
+		cost.IsTotal = true
+		cost.Amount.Quantity = part.value
+		if part.quantity.IsNegative() {
+			cost.Amount.Quantity = part.value.Neg()
+		}
+	} else {
+		cost.Amount.Quantity, _ = decimal.NewFromString(part.unitPrice)
 	}
+	posting.Cost = cost
 	return posting
 }
 
