@@ -683,9 +683,6 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 			if posting.BalanceAssertion.Cost != nil {
 				checkAmountCommodity(&posting.BalanceAssertion.Cost.Amount)
 			}
-			if posting.BalanceAssertion.LotPrice != nil && posting.BalanceAssertion.LotPrice.Cost != nil {
-				checkAmountCommodity(posting.BalanceAssertion.LotPrice.Cost)
-			}
 		}
 		if posting.LotPrice != nil && posting.LotPrice.Cost != nil {
 			checkAmountCommodity(posting.LotPrice.Cost)

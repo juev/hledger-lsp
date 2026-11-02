@@ -555,7 +555,9 @@ func (l *Lexer) scanQuotedCommodity() Token {
 	l.advance()
 
 	start := l.pos
-	for l.pos < len(l.input) && l.peek() != '"' && l.peek() != '\n' {
+	// hledger does not read a quoted commodity that contains `;`: the quote is
+	// left unterminated and the `;` starts a comment.
+	for l.pos < len(l.input) && l.peek() != '"' && l.peek() != '\n' && l.peek() != ';' {
 		l.advance()
 	}
 	value := l.input[start:l.pos]

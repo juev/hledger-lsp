@@ -239,9 +239,6 @@ func postingAmounts(posting *ast.Posting) []*ast.Amount {
 		if posting.BalanceAssertion.Cost != nil {
 			amounts = append(amounts, &posting.BalanceAssertion.Cost.Amount)
 		}
-		if posting.BalanceAssertion.LotPrice != nil {
-			amounts = append(amounts, posting.BalanceAssertion.LotPrice.Cost)
-		}
 	}
 	return amounts
 }

@@ -995,9 +995,6 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 			sb.WriteString("= ")
 		}
 		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
-		if posting.BalanceAssertion.LotPrice != nil {
-			writeLotPrice(&sb, posting.BalanceAssertion.LotPrice, commodityFormats)
-		}
 		if posting.BalanceAssertion.Cost != nil {
 			if posting.BalanceAssertion.Cost.IsTotal {
 				sb.WriteString(" @@ ")
@@ -1094,18 +1091,20 @@ func commoditySymbolDisplay(c *ast.Commodity) string {
 }
 
 func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) {
-	if lot.Cost != nil {
+	if lot.Cost != nil || lot.Braces {
 		if lot.IsTotal {
 			sb.WriteString(" {{")
 		} else {
 			sb.WriteString(" {")
 		}
-		if lot.Fixed {
-			// {=PRICE} / {{=PRICE}}: the amount is the whole lot cost, so the
-			// `=` must survive formatting (hledger 1.52 accepts this form).
-			sb.WriteString("=")
+		if lot.Cost != nil {
+			if lot.Fixed {
+				// {=PRICE} / {{=PRICE}}: the amount is the whole lot cost, so the
+				// `=` must survive formatting (hledger 1.52 accepts this form).
+				sb.WriteString("=")
+			}
+			writeAmountWithSign(sb, lot.Cost, commodityFormats)
 		}
-		writeAmountWithSign(sb, lot.Cost, commodityFormats)
 		if lot.IsTotal {
 			sb.WriteString("}}")
 		} else {
@@ -1119,7 +1118,7 @@ func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[
 		sb.WriteString("]")
 	}
 
-	if lot.Label != "" {
+	if lot.Label != "" || lot.Noted {
 		sb.WriteString(" (")
 		sb.WriteString(lot.Label)
 		sb.WriteString(")")
