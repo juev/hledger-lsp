@@ -41,6 +41,12 @@ and a posting with its own `date:` applies at that date, so its hint shows the
 balance as of then. They are omitted when include ownership or occurrence is
 ambiguous.
 
+Like `hledger reg`, a posting with an empty amount gets no balance hint: a
+balance assignment that moves nothing (`cash  = 100 USD` when `cash` already
+holds 100 USD) and the elided posting that balances it. The posting still counts
+towards later balances. A zero written out (`cash  0 USD`) is a real amount,
+which `reg` lists, so it keeps its hint.
+
 ## Completion
 
 | Setting | Default | Description |

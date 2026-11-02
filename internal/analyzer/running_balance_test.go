@@ -196,3 +196,73 @@ func TestRunningBalances_DatedAssignmentPostingStaysAtTransactionDate(t *testing
 `)
 	assert.Equal(t, "6", runningBalanceAt(t, balances, 1, 0, "USD"))
 }
+
+func hasRunningBalance(balances map[PostingRef]map[string]decimal.Decimal, transaction, posting int) bool {
+	_, ok := balances[PostingRef{TransactionIndex: transaction, PostingIndex: posting}]
+	return ok
+}
+
+// hledger 1.52.4 `reg` omits an assignment that moves nothing, and the elided
+// posting that balances it; it lists written zeros and zeros that cancel.
+func TestRunningBalances_RegisterHidesEmptyAmounts(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-01 seed
+    assets:cash  100 USD
+    equity:opening
+
+2024-01-02 no-op assignment
+    assets:cash  = 100 USD
+    equity:opening
+
+2024-01-03 written zero
+    assets:cash  0 USD
+    equity:opening
+
+2024-01-04 zero that cancels
+    assets:cash  5 USD
+    assets:cash  -5 USD
+    equity:opening
+
+2024-01-05 no-op assignment in a second commodity
+    assets:cash  = 100 USD
+    assets:cash  = 0 EUR
+    equity:opening
+
+2024-01-06 moving assignment
+    assets:cash  = 150 USD
+    equity:opening
+`)
+	assert.True(t, hasRunningBalance(balances, 0, 0))
+
+	assert.False(t, hasRunningBalance(balances, 1, 0), "assignment that moves nothing")
+	assert.False(t, hasRunningBalance(balances, 1, 1), "elided posting balancing nothing")
+
+	assert.Equal(t, "100", runningBalanceAt(t, balances, 2, 0, "USD"), "written zero")
+	assert.True(t, hasRunningBalance(balances, 2, 1))
+	assert.True(t, hasRunningBalance(balances, 3, 0))
+	assert.True(t, hasRunningBalance(balances, 3, 1))
+	assert.True(t, hasRunningBalance(balances, 3, 2), "elided zero beside written amounts")
+
+	assert.False(t, hasRunningBalance(balances, 4, 0))
+	assert.False(t, hasRunningBalance(balances, 4, 1))
+	assert.False(t, hasRunningBalance(balances, 4, 2))
+
+	assert.Equal(t, "150", runningBalanceAt(t, balances, 5, 0, "USD"))
+	assert.Equal(t, "-150", runningBalanceAt(t, balances, 5, 1, "USD"))
+}
+
+func TestRunningBalances_HiddenAssignmentStillCountsTowardsLaterBalances(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-01 сид
+    активы:касса  100 ₽
+    капитал
+
+2024-01-02 проверка
+    активы:касса  = 100 ₽
+    капитал
+
+2024-01-03 расход
+    активы:касса  -30 ₽
+    расходы
+`)
+	assert.False(t, hasRunningBalance(balances, 1, 0))
+	assert.Equal(t, "70", runningBalanceAt(t, balances, 2, 0, "₽"))
+}
