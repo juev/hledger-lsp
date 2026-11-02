@@ -551,7 +551,7 @@ func (c *lspProcess) waitExit(timeout time.Duration) error {
 		return nil
 	case <-deadline:
 		_ = c.cmd.Process.Kill()
-		<-exited
+		<-exited //nolint:errcheck // reap after Kill; the timeout is the error to report
 		return fmt.Errorf("server did not exit within %s", timeout)
 	}
 }
