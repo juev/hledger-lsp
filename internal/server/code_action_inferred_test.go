@@ -178,6 +178,8 @@ func inferredLayouts() []inferredLayout {
 			postings: cost("15.50 USD"), want: "-15.50 USD", quantity: "-15.5"},
 		{name: "no directive, comma cost keeps the default mark",
 			postings: cost("15,50 USD"), want: "-15.50 USD", quantity: "-15.5"},
+		{name: "decimal-mark comma without a commodity format",
+			directives: "decimal-mark ,\n", postings: cost("15,50 USD"), want: "-15,50 USD", quantity: "-15.5"},
 		{name: "same commodity on another posting under decimal-mark",
 			directives: "decimal-mark ,\ncommodity 1,000.00 USD\n", postings: "    b\n    a  10,50 USD\n    c  4,50 USD\n", want: "-15,00 USD", quantity: "-15"},
 		{name: "unit cost under decimal-mark",
