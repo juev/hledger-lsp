@@ -51,6 +51,9 @@ type cachedDoc struct {
 	// concurrent requests share one.
 	runningMu sync.Mutex
 	running   map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal
+	// runningOffsets is running re-keyed by where each posting is written in the
+	// inclusion's own journal; both are dropped together.
+	runningOffsets map[readingKey]map[int]map[string]decimal.Decimal
 
 	// others holds the parse and analysis of the document under the include
 	// contexts other than the primary one, keyed by tree and occurrence. The
@@ -77,14 +80,15 @@ type otherReading struct {
 
 	effectsOnce sync.Once
 	effects     []analyzer.PostingEffect
-	indexOnce   sync.Once
-	index       map[analyzer.PostingRef]analyzer.PostingEffect
+	locatedOnce sync.Once
+	located     map[int]locatedEffect
 }
 
-// postingEffectIndex returns the effects keyed by posting, built at most once.
-func (o *otherReading) postingEffectIndex() map[analyzer.PostingRef]analyzer.PostingEffect {
-	o.indexOnce.Do(func() { o.index = postingEffectIndex(o.postingEffects()) })
-	return o.index
+// locatedEffects returns the effects keyed by where their posting is written,
+// built at most once.
+func (o *otherReading) locatedEffects() map[int]locatedEffect {
+	o.locatedOnce.Do(func() { o.located = locateEffects(o.journal, o.postingEffects()) })
+	return o.located
 }
 
 // postingEffects returns the posting effects of the reading's journal, computed
@@ -149,6 +153,7 @@ func (s *Server) keepRunningBalances(docURI uri.URI, content string, used map[re
 	for key := range doc.running {
 		if !used[key] {
 			delete(doc.running, key)
+			delete(doc.runningOffsets, key)
 		}
 	}
 }

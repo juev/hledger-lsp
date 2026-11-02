@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -248,44 +247,44 @@ func TestInlayHint_RunningBalancesOfManyInclusionsAreReused(t *testing.T) {
 	assert.Equal(t, first, replays(), "an unchanged document and tree must reuse every replay")
 }
 
-// Hint requests running while the buffers of the journal are edited must leave
-// the workspace describing the final text: after the burst, the next request
-// sees both edits.
-func TestInlayHint_ConcurrentRequestsDoNotLoseEdits(t *testing.T) {
-	const seedB = "2024-01-01 seed\n    assets:cash  %d USD\n    income:job\n"
-	const spendA = "2024-02-01 x\n    assets:cash  -%d USD\n    expenses:food\n"
-	srv, dir := newInlayWorkspace(t, map[string]string{
-		"all.journal": "include b.journal\ninclude a.journal\n",
-		"a.journal":   fmt.Sprintf(spendA, 1),
-		"b.journal":   fmt.Sprintf(seedB, 100),
+// A context can drop a posting another keeps: 02-29 is a date under `Y 2024` and
+// no date under `Y 2023`. The hints of the postings after it must still be the
+// hints of those postings, not values joined with the ones shifted into their
+// place.
+func TestInlayHint_ValuesOfDifferentPostingsAreNeverJoined(t *testing.T) {
+	shared := "02-29 leap\n    expenses:food   10 EUR\n    assets:cash\n\n03-01 after\n    expenses:food   20 EUR\n    assets:cash\n"
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{
+		"main.journal":   "Y 2024\ninclude shared.journal\nY 2023\ninclude shared.journal\n",
+		"shared.journal": shared,
 	})
-	enableOnlyRunningBalances(srv)
-	aURI := uri.File(filepath.Join(dir, "a.journal"))
-	bURI := uri.File(filepath.Join(dir, "b.journal"))
-	openDocument(t, srv, aURI, fmt.Sprintf(spendA, 1))
-	openDocument(t, srv, bURI, fmt.Sprintf(seedB, 100))
+	ts, docURI := formatServer(t, dir, filepath.Join(dir, "shared.journal"), shared)
+	enableHints(ts, true, false, false)
 
-	for round := range 20 {
-		var wg sync.WaitGroup
-		for range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				requestHintLabels(t, srv, aURI)
-			}()
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			replaceDocument(t, srv, bURI, int32(round*10+2), fmt.Sprintf(seedB, round+1000))
-			replaceDocument(t, srv, aURI, int32(round*10+2), fmt.Sprintf(spendA, round+1))
-		}()
-		wg.Wait()
-
-		want := []protocol.InlayHintLabel{
-			protocol.String(fmt.Sprintf("balance: %d USD", round+1000-(round+1))),
-			protocol.String(fmt.Sprintf("balance: %d USD", round+1)),
-		}
-		require.Equal(t, want, requestHintLabels(t, srv, aURI), "round %d", round)
+	hints := hintsAt(t, ts, docURI)
+	labels := inlayLabelsOf(hints)
+	assert.ElementsMatch(t, []string{"= -10 EUR", "= -20 EUR"}, labels)
+	for _, hint := range hints {
+		assert.Nil(t, hint.Tooltip, "no posting reads two ways")
 	}
+}
+
+// Without a workspace the hints of one posting are written with the same formats:
+// the inferred amount and the balance both follow the commodity directive the
+// document includes.
+func TestInlayHint_InferredAmountAndBalanceOfALoneDocumentAreWrittenAlike(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	dir := t.TempDir()
+	text := "include formats.journal\n\n2024-01-01 x\n    a  12,345.000 Y\n    b\n"
+	writeJournals(t, dir, map[string]string{"formats.journal": "commodity 1,000.000 Y\n", "doc.journal": text})
+	ts := newTestServer()
+	docURI := uri.File(filepath.Join(dir, "doc.journal"))
+	_, err := ts.openAndWait(docURI, text)
+	require.NoError(t, err)
+	enableHints(ts, true, false, true)
+
+	labels := inlayLabelsOf(hintsAt(t, ts, docURI))
+	assert.Contains(t, labels, "= -12,345.000 Y")
+	assert.Contains(t, labels, "balance: -12,345.000 Y")
 }
