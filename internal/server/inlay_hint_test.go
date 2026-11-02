@@ -175,3 +175,58 @@ func TestInlayHint_RunningBalanceOmittedWhereRegisterHidesThePosting(t *testing.
 		})
 	}
 }
+
+// A running balance leaves out the commodities the account holds none of. When
+// it holds none of any, it shows a zero in the commodity the line moves, so the
+// hint still says the account is empty.
+func TestInlayHint_RunningBalanceLeavesOutZeroCommodities(t *testing.T) {
+	for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			enableOnlyRunningBalances(srv)
+			docURI := uri.URI("file:///test.journal")
+			lines := []string{
+				"commodity 1,000.00 USD",
+				"commodity 1,000.00 EUR",
+				"",
+				"2024-01-01 Пополнение",
+				"    активы:счёт  100.00 USD",
+				"    активы:счёт  50.00 EUR",
+				"    equity:opening",
+				"",
+				"2024-01-02 Снятие",
+				"    активы:счёт  -100.00 USD",
+				"    расходы:еда",
+				"",
+				"2024-01-03 Снятие",
+				"    активы:счёт  -50.00 EUR",
+				"    расходы:еда",
+				"",
+				"2024-01-04 Проверка",
+				"    активы:счёт  =0.00 USD",
+				"    расходы:еда",
+				"",
+			}
+			srv.StoreDocument(docURI, strings.Join(lines, newline))
+
+			hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+				Range:        protocol.Range{End: protocol.Position{Line: 30}},
+			})
+			require.NoError(t, err)
+			byLine := make(map[uint32]protocol.InlayHintLabel)
+			for _, hint := range hints {
+				byLine[hint.Position.Line] = hint.Label
+			}
+			assert.Equal(t, map[uint32]protocol.InlayHintLabel{
+				4:  protocol.String("balance: 100.00 USD"),
+				5:  protocol.String("balance: 50.00 EUR, 100.00 USD"),
+				6:  protocol.String("balance: -50.00 EUR, -100.00 USD"),
+				9:  protocol.String("balance: 50.00 EUR"),
+				10: protocol.String("balance: 100.00 USD"),
+				13: protocol.String("balance: 0.00 EUR"),
+				14: protocol.String("balance: 50.00 EUR, 100.00 USD"),
+			}, byLine)
+		})
+	}
+}

@@ -78,9 +78,13 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 		}
 		var values []hintValue
+		var transacted []string
 		for index, occurrence := range occurrences {
 			if amounts := balanceAt(index); len(amounts) > 0 {
-				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
+				if transacted == nil {
+					transacted = transactedCommodities(posting, len(readings), effectAt)
+				}
+				values = addHintValue(values, formatAmounts(shownBalance(amounts, transacted), occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
 		if len(values) > 0 {
@@ -141,6 +145,52 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		}, func(occurrence int) map[string]decimal.Decimal { return balancesByOffset[occurrence][offset] })
 	}
 	return hints, nil
+}
+
+// shownBalance leaves out the commodities a running balance holds none of. A
+// balance that is zero in every commodity shows a zero in the commodities the
+// posting moves instead, so the hint still says the account is empty.
+func shownBalance(amounts map[string]decimal.Decimal, transacted []string) map[string]decimal.Decimal {
+	shown := make(map[string]decimal.Decimal, len(amounts))
+	for commodity, quantity := range amounts {
+		if !quantity.IsZero() {
+			shown[commodity] = quantity
+		}
+	}
+	if len(shown) > 0 {
+		return shown
+	}
+	for _, commodity := range transacted {
+		if _, held := amounts[commodity]; held {
+			shown[commodity] = decimal.Zero
+		}
+	}
+	if len(shown) == 0 {
+		return amounts
+	}
+	return shown
+}
+
+// transactedCommodities returns the commodities a posting moves: the one it
+// writes or assigns, or those inferred for it in any reading.
+func transactedCommodities(posting *ast.Posting, readings int, effectAt func(reading int) (analyzer.PostingEffect, bool)) []string {
+	switch {
+	case posting.Amount != nil:
+		return []string{posting.Amount.Commodity.Symbol}
+	case posting.BalanceAssertion != nil:
+		return []string{posting.BalanceAssertion.Amount.Commodity.Symbol}
+	}
+	commodities := []string{}
+	for index := range readings {
+		if effect, ok := effectAt(index); ok {
+			for commodity := range effect.InferredAmounts {
+				if !slices.Contains(commodities, commodity) {
+					commodities = append(commodities, commodity)
+				}
+			}
+		}
+	}
+	return commodities
 }
 
 // locatedEffect is a posting effect with the posting it belongs to.
