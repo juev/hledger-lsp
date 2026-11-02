@@ -90,8 +90,10 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 
 // formatInferredAmount renders the single inferred amount the way the
 // transaction already writes that commodity: same symbol position and at least
-// as many decimal places as its siblings. A commodity directive still wins,
-// because FormatAmount prefers a declared format over the raw quantity.
+// as many decimal places as its siblings. The decimal mark and the quoting of
+// the symbol come from the amounts of that commodity in the transaction; the
+// commodity format only supplies the rest of the number style, and its own mark
+// yields to the one in force where the transaction is written.
 func formatInferredAmount(
 	transaction *ast.Transaction,
 	amounts map[string]decimal.Decimal,
@@ -120,7 +122,6 @@ func formatInferredAmount(
 			continue
 		}
 		amount.Commodity.Position = sibling.Commodity.Position
-		amount.Commodity.Quoted = sibling.Commodity.Quoted
 		if siblingPlaces := -sibling.Quantity.Exponent(); siblingPlaces > places {
 			places = siblingPlaces
 		}
@@ -129,6 +130,7 @@ func formatInferredAmount(
 	// A journal that never spells this commodity out — every amount inherits it
 	// from the default commodity directive — keeps the inserted amount bare too.
 	amount.Commodity.Inferred = !transactionWritesCommodity(transaction, commodity)
+	amount.Commodity.Quoted = transactionQuotesCommodity(transaction, commodity)
 	amount.DecimalMark = transactionDecimalMark(transaction, commodity, amount.Commodity.Inferred)
 	if places > 0 {
 		amount.RawQuantity = quantity.StringFixed(places)
@@ -161,6 +163,20 @@ func transactionDecimalMark(transaction *ast.Transaction, commodity string, infe
 		}
 	}
 	return ""
+}
+
+// transactionQuotesCommodity reports whether the transaction writes the
+// commodity symbol in quotes anywhere, a cost or an assertion included. A symbol
+// with a space or a digit only parses back when it keeps its quotes.
+func transactionQuotesCommodity(transaction *ast.Transaction, commodity string) bool {
+	for i := range transaction.Postings {
+		for _, amt := range postingAmounts(&transaction.Postings[i]) {
+			if amt != nil && amt.Commodity.Symbol == commodity && !amt.Commodity.Inferred && amt.Commodity.Quoted {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // transactionWritesCommodity reports whether the transaction spells the
