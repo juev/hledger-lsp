@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 type Lexer struct {
@@ -25,10 +27,17 @@ type Lexer struct {
 	prevType       TokenType
 }
 
+// NewLexer skips a leading UTF-8 byte order mark: hledger accepts one at the
+// start of a file. Token offsets still count the mark's bytes, so they stay
+// valid against the string the caller passed in.
 func NewLexer(input string) *Lexer {
+	start := 0
+	if strings.HasPrefix(input, textutil.BOM) {
+		start = len(textutil.BOM)
+	}
 	return &Lexer{
 		input:         input,
-		pos:           0,
+		pos:           start,
 		line:          1,
 		column:        1,
 		atStart:       true,
