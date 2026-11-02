@@ -440,6 +440,9 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 		scope = scopeSubtree
 	}
 	priced := e.pricedParts(account, commodity, scope)
+	if assertedPart, ok := assertionPricedPart(assertion); ok {
+		priced = append(priced, assertedPart)
+	}
 
 	for other := range e.balances.heldCommodities(account, assertion.IsInclusive) {
 		if other == commodity {
@@ -470,7 +473,54 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 			priced = append(priced, parts...)
 		}
 	}
-	return contribution, priced
+	return contribution, mergePricedParts(priced)
+}
+
+// assertionPricedPart returns the asserted amount as a priced part when the
+// assertion carries a cost. hledger gives the inferred posting that cost, and it
+// covers the whole asserted amount rather than only the change, while the balance
+// it replaces is taken out at the costs it was held at.
+func assertionPricedPart(assertion *ast.BalanceAssertion) (pricedPart, bool) {
+	if assertion.Cost == nil {
+		return pricedPart{}, false
+	}
+	costCommodity, value, ok := balanceSumContribution(ast.Posting{Amount: &assertion.Amount, Cost: assertion.Cost})
+	if !ok {
+		return pricedPart{}, false
+	}
+	return pricedPart{
+		pricedKey: pricedKey{assertion.Amount.Commodity.Symbol, costCommodity},
+		quantity:  assertion.Amount.Quantity,
+		value:     value,
+	}, true
+}
+
+// mergePricedParts sums parts that share a key and drops those that cancel out,
+// so an assignment that restates the balance an account already holds at the same
+// cost has no priced part left and moves nothing.
+func mergePricedParts(parts []pricedPart) []pricedPart {
+	if len(parts) == 0 {
+		return parts
+	}
+	sums := make(map[pricedKey]pricedAmount, len(parts))
+	for _, part := range parts {
+		sum := sums[part.pricedKey]
+		sums[part.pricedKey] = pricedAmount{quantity: sum.quantity.Add(part.quantity), value: sum.value.Add(part.value)}
+	}
+	merged := make([]pricedPart, 0, len(sums))
+	for key, sum := range sums {
+		if sum.quantity.IsZero() && sum.value.IsZero() {
+			continue
+		}
+		merged = append(merged, pricedPart{pricedKey: key, quantity: sum.quantity, value: sum.value})
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].commodity != merged[j].commodity {
+			return merged[i].commodity < merged[j].commodity
+		}
+		return merged[i].costCommodity < merged[j].costCommodity
+	})
+	return merged
 }
 
 // pricedParts returns the negation of the priced balances an assignment replaces

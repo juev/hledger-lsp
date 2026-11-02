@@ -432,10 +432,12 @@ func TestOracle_RunningBalancesMatchHledgerRegister(t *testing.T) {
 		t.Skip("hledger is not installed")
 	}
 
-	for name, input := range runningBalanceOracleJournals {
-		t.Run(name, func(t *testing.T) {
-			assertRunningBalancesMatchRegister(t, hledgerPath, input)
-		})
+	for _, journals := range []map[string]string{runningBalanceOracleJournals, assertionCostJournals} {
+		for name, input := range journals {
+			t.Run(name, func(t *testing.T) {
+				assertRunningBalancesMatchRegister(t, hledgerPath, input)
+			})
+		}
 	}
 }
 

@@ -29,8 +29,8 @@ type PostingRef struct {
 // file and leave out ones written earlier.
 //
 // A posting the register leaves out has no entry, though its amount still counts
-// towards the balances: an assignment that moves nothing, with no cost, has an
-// empty amount, and so does an elided posting whose group holds no other amount.
+// towards the balances: an assignment that moves nothing, with no cost left, has
+// an empty amount, and so does an elided posting whose group holds no other amount.
 // A written or inferred zero is a real amount the register lists.
 func RunningBalances(sourced []include.SourcedTransaction, id include.OccurrenceID) map[PostingRef]map[string]decimal.Decimal {
 	return RunningBalancesFor(sourced, []include.OccurrenceID{id})[id]
@@ -92,10 +92,11 @@ type postingKey struct {
 }
 
 // registerHidden returns the postings hledger's register leaves out because
-// their amount is empty. An assignment that moves nothing is empty unless it has
-// a cost, and so is an elided posting whose balancing group has no other amount
-// to offset, even when it is alone; an explicit zero, or a zero that cancels
-// written amounts, is still listed.
+// their amount is empty. An assignment that moves nothing is empty unless a cost
+// is left in it, whether it replaces a priced balance or asserts one, and so is
+// an elided posting whose balancing group has no other amount to offset, even
+// when it is alone; an explicit zero, or a zero that cancels written amounts, is
+// still listed.
 func registerHidden(sourced []include.SourcedTransaction, entries []registerEntry) map[postingKey]bool {
 	hidden := make(map[postingKey]bool)
 	allZero := func(contribution map[string]decimal.Decimal) bool {
@@ -108,7 +109,7 @@ func registerHidden(sourced []include.SourcedTransaction, entries []registerEntr
 	}
 	for _, e := range entries {
 		p := &sourced[e.sourceOrder].Transaction.Postings[e.postingIndex]
-		if p.Amount == nil && p.BalanceAssertion != nil && p.BalanceAssertion.Cost == nil && !e.priced && allZero(e.contribution) {
+		if p.Amount == nil && p.BalanceAssertion != nil && !e.priced && allZero(e.contribution) {
 			hidden[postingKey{e.sourceOrder, e.postingIndex}] = true
 		}
 	}
