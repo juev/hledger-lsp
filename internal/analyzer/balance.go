@@ -124,9 +124,9 @@ func checkPostingGroupMixed(postings []ast.Posting, multi []bool, userTolerance 
 // hledger prices only the postings whose amount is a single commodity, and only
 // in the commodity of the first posting amount. A posting that holds several
 // commodities (a strict or inclusive balance assignment clearing the other
-// commodities of an account) stays unpriced, so when it holds that first
-// commodity the conversion no longer closes the sum and the transaction is
-// rejected. Verified against hledger 1.52.4.
+// commodities of an account) stays unpriced, so when these postings hold a
+// non-zero total of that first commodity the conversion no longer closes the sum
+// and the transaction is rejected. Verified against hledger 1.52.4.
 func isTwoCommodityConversion(postings []ast.Posting, multi []bool, signed map[string]decimal.Decimal) bool {
 	if len(signed) != 2 || hasExplicitCost(postings) {
 		return false
@@ -146,9 +146,11 @@ func isTwoCommodityConversion(postings []ast.Posting, multi []bool, signed map[s
 	return positive == 1 && negative == 1
 }
 
-// holdsPricedCommodityInMixedPosting reports whether a multi-commodity posting
-// holds a non-zero amount of the commodity hledger would price: the commodity of
-// the first posting amount.
+// holdsPricedCommodityInMixedPosting reports whether the multi-commodity
+// postings leave a non-zero total of the commodity hledger would price: the
+// commodity of the first posting amount. Single-commodity postings are converted
+// at the inferred price and close the sum, so only what the unpriced postings
+// hold in that commodity remains; pieces of opposite sign cancel.
 func holdsPricedCommodityInMixedPosting(postings []ast.Posting, multi []bool, signed map[string]decimal.Decimal) bool {
 	priced := ""
 	for i := range postings {
@@ -160,15 +162,19 @@ func holdsPricedCommodityInMixedPosting(postings []ast.Posting, multi []bool, si
 			break
 		}
 	}
+
+	total := decimal.Zero
+	var precision int32
 	for i := range postings {
-		if i >= len(multi) || !multi[i] || postings[i].Amount == nil {
+		if i >= len(multi) || !multi[i] || postings[i].Amount == nil || postings[i].Amount.Commodity.Symbol != priced {
 			continue
 		}
-		if postings[i].Amount.Commodity.Symbol == priced && !postings[i].Amount.Quantity.IsZero() {
-			return true
+		total = total.Add(postings[i].Amount.Quantity)
+		if p := decimalPrecision(postings[i].Amount.Quantity); p > precision {
+			precision = p
 		}
 	}
-	return false
+	return total.Abs().GreaterThan(toleranceForPrecision(precision))
 }
 
 // hasExplicitCost reports whether any posting in the group carries an explicit
