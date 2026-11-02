@@ -62,6 +62,12 @@ chmod +x hledger-lsp
 sudo mv hledger-lsp /usr/local/bin/
 ```
 
+### WebAssembly (WASI)
+
+`hledger-lsp_wasip1_wasm.wasm` runs under WASI runtimes such as wasmtime. It is
+experimental and slower than the native binaries; see [docs/wasi.md](docs/wasi.md)
+for usage, limitations and what browser editors would need.
+
 ### From Source
 
 ```bash
