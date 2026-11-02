@@ -12,6 +12,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/testutil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 // sideSymbols are commodity symbols of different widths and scripts. Display
@@ -128,8 +129,8 @@ func TestFormatDocument_CommoditySideChangeNextToBareAmount(t *testing.T) {
 			once := formatForOracle(t, input)
 			assert.Equal(t, once, formatForOracle(t, once))
 
-			crlf := strings.ReplaceAll(strings.ReplaceAll(input, "\n", "\r\n"), "\r\n", "\n")
-			assert.Equal(t, once, formatForOracle(t, crlf))
+			crlf := strings.ReplaceAll(input, "\n", "\r\n")
+			assert.Equal(t, once, formatForOracle(t, textutil.NormalizeLineEndings(crlf)))
 		})
 	}
 }
