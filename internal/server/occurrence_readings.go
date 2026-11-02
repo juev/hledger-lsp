@@ -66,7 +66,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 		primary.tree, primary.id = tree, firstOccurrenceIDForPath(tree, path)
 		if occurrence := tree.Occurrence(primary.id); occurrence != nil {
 			primary.context, primary.hasContext = occurrence.InitialContext, true
-			primary.includedFrom = []string{includeLabel(*occurrence)}
+			primary.includedFrom = []string{occurrenceLabel(tree, *occurrence)}
 		}
 	}
 	readings := []occurrenceReading{primary}
@@ -95,7 +95,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 				continue
 			}
 			if index := indexOfEqualReading(readings, tree.Resolved, occurrence.InitialContext); index >= 0 {
-				readings[index].includedFrom = append(readings[index].includedFrom, includeLabel(occurrence))
+				readings[index].includedFrom = append(readings[index].includedFrom, occurrenceLabel(tree.Resolved, occurrence))
 				continue
 			}
 			key := readingKey{tree.Resolved, occurrence.ID}
@@ -116,7 +116,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
 					return resolved.FormatsAt(id, offset)
 				},
-				includedFrom: []string{includeLabel(occurrence)},
+				includedFrom: []string{occurrenceLabel(tree.Resolved, occurrence)},
 			})
 		}
 	}
@@ -145,6 +145,31 @@ func (s *Server) otherReadingFor(doc *cachedDoc, key readingKey, content string)
 
 // includeLabel names the include directive that created an occurrence, as
 // `parent.journal:12`. The root of a tree has no directive and an empty label.
+// occurrenceLabel is includeLabel made unambiguous: when another inclusion of
+// the same file sits at the same directive (a file reached through two parents
+// that both include it from line 1), the label also names the parents, nearest
+// first, as `mid.journal:1 via a.journal:1`.
+func occurrenceLabel(tree *include.ResolvedJournal, occurrence include.JournalOccurrence) string {
+	short := includeLabel(occurrence)
+	if short == "" {
+		return short
+	}
+	sameLabel := 0
+	for _, other := range tree.OccurrencesForCanonical(occurrence.Path) {
+		if includeLabel(other) == short {
+			sameLabel++
+		}
+	}
+	if sameLabel < 2 {
+		return short
+	}
+	label := short
+	for parent := tree.Occurrence(occurrence.Via.ParentID); parent != nil && parent.Via.SourcePath != ""; parent = tree.Occurrence(parent.Via.ParentID) {
+		label += " via " + includeLabel(*parent)
+	}
+	return label
+}
+
 func includeLabel(occurrence include.JournalOccurrence) string {
 	if occurrence.Via.ParentID == 0 {
 		return ""

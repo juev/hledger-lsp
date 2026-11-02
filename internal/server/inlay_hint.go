@@ -154,7 +154,11 @@ type balanceOccurrence struct {
 // every include tree that owns it. A document that no tree owns has none, unless
 // the server has no workspace at all, in which case it is replayed on its own.
 func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []balanceOccurrence {
+	used := make(map[readingKey]bool)
+	defer func() { s.keepRunningBalances(docURI, content, used) }()
+
 	if s.workspace == nil {
+		used[readingKey{}] = true
 		return []balanceOccurrence{{
 			balances: s.cachedRunningBalances(docURI, content, nil, 0),
 			formatsAt: func(offset int) map[string]formatter.CommodityFormat {
@@ -172,8 +176,9 @@ func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []bala
 		resolved := tree.Resolved
 		for _, occurrence := range resolved.OccurrencesForCanonical(path) {
 			id := occurrence.ID
+			used[readingKey{tree: resolved, id: id}] = true
 			result = append(result, balanceOccurrence{
-				label:    includeLabel(occurrence),
+				label:    occurrenceLabel(resolved, occurrence),
 				balances: s.cachedRunningBalances(docURI, content, resolved, id),
 				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
 					return resolved.FormatsAt(id, offset)

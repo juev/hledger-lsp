@@ -54,8 +54,14 @@ hover show every distinct value instead of picking one.
   Running balances are shown per inclusion, in every include tree that owns the file.
 - Hover on an amount lists each distinct reading of the amount and its cost with the
   includes that give it, written from the parsed value.
-- A file included once, or only under equal contexts for amounts, looks as it always did:
-  one value, no tooltip.
+- When several inclusions give the same running balance or the same inferred amount, one value
+  is shown and the tooltip is omitted. Inclusions at the same directive (a file reached through
+  two parents that both include it from line 1) are told apart by their parents, nearest
+  first: `mid.journal:1 via a.journal:1`.
+- Hint values use the commodity styles of the include tree, as `hledger reg` prints them. A
+  file included more than once used to take only its own directives, so with
+  `commodity 1.000,00 EUR` declared in the including file an inferred amount read `= -1234 EUR`
+  and now reads `= -1.234,00 EUR`, as it already did for a file included once.
 
 Like `hledger reg`, a posting with an empty amount gets no balance hint: a
 balance assignment that moves nothing (`cash  = 100 USD` when `cash` already
