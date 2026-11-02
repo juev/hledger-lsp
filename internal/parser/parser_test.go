@@ -4178,8 +4178,10 @@ func TestParser_BalanceAssertionUnclosedLotPrice(t *testing.T) {
     assets:cash
 `
 	journal, errs := Parse(input)
-	// parseLotPriceInto silently recovers from unclosed brace
-	require.Empty(t, errs)
+	// hledger rejects an unclosed lot price; the parser reports it and still
+	// recovers on the next transaction.
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "expected } to close the lot cost")
 	require.Len(t, journal.Transactions, 2)
 	assert.Equal(t, "groceries", journal.Transactions[1].Description)
 
@@ -4299,4 +4301,46 @@ func TestContext_Equal(t *testing.T) {
 	assert.False(t, Context{}.Equal(parse("decimal-mark ,\n")))
 	assert.False(t, Context{}.Equal(parse("apply account счета\n")))
 	assert.False(t, Context{}.Equal(parse("alias старый = новый\n")))
+}
+
+func TestParser_LotPriceQuotedCommodityIsNotALabel(t *testing.T) {
+	for _, amount := range []string{`1 Q {"A B" -5}`, `1 Q {{-5 "A B"}}`, `1 Q {"漢 字" -5}`, `1 Q {"Ж Ы" -5}`} {
+		t.Run(amount, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Empty(t, errs)
+
+			lot := journal.Transactions[0].Postings[0].LotPrice
+			require.NotNil(t, lot)
+			assert.Empty(t, lot.Label)
+			require.NotNil(t, lot.Cost)
+			assert.True(t, lot.Cost.Commodity.Quoted)
+			assert.True(t, lot.Cost.Quantity.Equal(decimal.NewFromInt(-5)))
+		})
+	}
+}
+
+func TestParser_RejectsAnnotationsHledgerRejects(t *testing.T) {
+	cases := map[string]string{
+		`1 Q @ -5 X @ 5 Y`:              "only one cost",
+		`1 Q @ 5 X @@ 6 X`:              "only one cost",
+		`1 Q {{-5;c}}`:                  "expected }} to close the lot cost",
+		`1 Q {-5;c}`:                    "expected } to close the lot cost",
+		`1 Q {5 X} {6 Y}`:               "only one lot cost",
+		`1 Q [2024-01-01] [2024-01-02]`: "only one lot date",
+		`1 Q (a) {5 X} (b)`:             "only one lot note",
+		`1 Q {5 X`:                      "expected } to close the lot cost",
+		`1 Q {{5 X}`:                    "expected }} to close the lot cost",
+		`1 Q {5 X}}`:                    "expected } to close the lot cost",
+		`1 Q @ "漢 字" 5 @ "Ж Ы" 5`:       "only one cost",
+	}
+	for amount, message := range cases {
+		t.Run(amount, func(t *testing.T) {
+			input := "2024-01-01 x\n    a  " + amount + "\n    b\n\n2024-01-02 y\n    a  1 Q\n    b\n"
+			journal, errs := Parse(input)
+			require.Len(t, errs, 1)
+			assert.Contains(t, errs[0].Message, message)
+			require.Len(t, journal.Transactions, 2, "the next transaction must still be parsed")
+			assert.Greater(t, journal.Transactions[0].Postings[0].UnparsedTail.End.Offset, journal.Transactions[0].Postings[0].UnparsedTail.Start.Offset)
+		})
+	}
 }
