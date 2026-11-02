@@ -144,8 +144,13 @@ type Parser struct {
 	// transaction being parsed: hledger applies their tags to the transaction and
 	// to all of its postings.
 	postingComments []ast.Comment
-	// prevEnd is where the token before the current one ends.
+	// prevEnd is where the token before the current one ends, prevPos where it starts.
 	prevEnd Position
+	prevPos Position
+	// glueSensitiveEnd is the end offset of the last amount whose text hledger
+	// extends over a `[` written right against it: a bare number or an unquoted
+	// commodity on the right. -1 when the last amount is not one.
+	glueSensitiveEnd int
 	// faulted is set while a posting is parsed when its rest cannot be read:
 	// abandonPostingOnFault then drops the remainder of the line.
 	faulted bool
@@ -862,6 +867,11 @@ func (p *Parser) parseAmount() *ast.Amount {
 			// hledger reads a `(...)` written right against an unquoted commodity
 			// as part of its symbol, so `Y(n)` is one commodity, not `Y` and a note.
 			for !quoted && p.current.Type == TokenCode && p.current.Pos.Offset == end.Offset {
+				if !isSymbolText(p.current.Value) || p.unterminatedCode() {
+					p.error("a note must be separated from the commodity by a space")
+					p.skipToNextLine()
+					return nil
+				}
 				amount.Commodity.Symbol += p.lexer.input[p.current.Pos.Offset:p.current.End.Offset]
 				amount.Commodity.Range.End = toASTPosition(p.current.End)
 				end = p.current.End
@@ -917,7 +927,25 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount.Quantity = qty
 
 	amount.Range.End = toASTPosition(p.current.Pos)
+	p.glueSensitiveEnd = -1
+	if amount.Commodity.Inferred || amount.Commodity.Symbol == "" ||
+		(amount.Commodity.Position == ast.CommodityRight && !amount.Commodity.Quoted) {
+		p.glueSensitiveEnd = p.prevEnd.Offset
+	}
 	return amount
+}
+
+// isSymbolText reports whether text can be part of an unquoted commodity symbol,
+// which hledger ends at digits, signs, `.`, `@`, `*`, `;`, `=`, braces, quotes
+// and whitespace.
+func isSymbolText(text string) bool {
+	return !strings.ContainsAny(text, "0123456789-+.@*;= \t\"{}")
+}
+
+// unterminatedCode reports whether the current `(` note lacks its `)`.
+func (p *Parser) unterminatedCode() bool {
+	end := p.current.End.Offset
+	return end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != ')'
 }
 
 // unterminatedQuote reports whether the current quoted commodity lacks its
@@ -1063,19 +1091,13 @@ func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
 	return ba
 }
 
-// gluedToCommodity reports whether the current token follows, without a space,
-// text that hledger reads as part of a commodity symbol. Only `}`, `)` and `]`
-// may be followed directly by the next annotation.
+// gluedToCommodity reports whether the current `[` follows, without a space, an
+// amount that hledger reads on into the bracket: a bare number or a commodity on
+// the right that is not quoted. After a commodity on the left, a closing quote or
+// a closing `}` `)` `]` the bracket starts a lot date.
 func (p *Parser) gluedToCommodity() bool {
 	end := p.prevEnd.Offset
-	if end != p.current.Pos.Offset || end == 0 {
-		return false
-	}
-	switch p.lexer.input[end-1] {
-	case '}', ')', ']':
-		return false
-	}
-	return true
+	return end == p.current.Pos.Offset && end == p.glueSensitiveEnd
 }
 
 // parseLotAnnotations reads the cost and lot annotations that follow a posting
@@ -1121,7 +1143,7 @@ func (p *Parser) parseLotAnnotations(posting *ast.Posting) {
 				return
 			}
 			seenNote = true
-			if end := p.current.End.Offset; end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != ')' {
+			if p.unterminatedCode() {
 				p.annotationFault(start, "expected ) to close the lot note")
 				return
 			}
@@ -2160,6 +2182,7 @@ func IsValidTagName(name string) bool {
 
 func (p *Parser) advance() {
 	p.prevEnd = p.current.End
+	p.prevPos = p.current.Pos
 	p.current = p.lexer.Next()
 }
 
@@ -2311,6 +2334,12 @@ func (p *Parser) skipIndentedBlock() {
 }
 
 func (p *Parser) error(format string, args ...any) {
+	// At a line break the token ends on the next line, so the error points at
+	// the last token of the line instead.
+	if (p.current.Type == TokenNewline || p.current.Type == TokenEOF) && p.prevPos.Line == p.current.Pos.Line && p.prevPos.Offset < p.current.Pos.Offset {
+		p.errorCodeAt(CodeParseError, p.prevPos, p.current.Pos, format, args...)
+		return
+	}
 	p.errorCodeAt(CodeParseError, p.current.Pos, p.current.End, format, args...)
 }
 

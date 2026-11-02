@@ -4188,7 +4188,7 @@ func TestParser_UnfinishedAnnotationKeepsTheFollowingLines(t *testing.T) {
 	unfinished := []string{
 		`1 Q {$`, `1 Q {"A B"`, `1 Q {X`, `1 Q {-`, `1 Q {5 X`, `1 Q {{5 X}`,
 		`1 Q {2026-01-15, 5 X}`, `1 Q {"lbl", 5 X}`, `1 Q {"A;B" 5}`,
-		`1 Q @`, `1 Q @ (n)`, `1 Q {5 X} @`, `$`, `1 Q []`, `1 Q (n`, `1 Q [2024-01-01`, `1 Q @ 3 Y[2024-01-01]`, `{5 X}`, `1 Q = `, `1 Q {"漢 字"`, `"Ж Ы" 1 {"П`,
+		`1 Q @`, `1 Q @ (n)`, `1 Q {5 X} @`, `$`, `1 Q []`, `1 Q(n)[2024-01-01]`, `1 Q(a b)`, `1 Q (n`, `1 Q [2024-01-01`, `1 Q @ 3 Y[2024-01-01]`, `{5 X}`, `1 Q = `, `1 Q {"漢 字"`, `"Ж Ы" 1 {"П`,
 	}
 	for _, amount := range unfinished {
 		t.Run(amount, func(t *testing.T) {
@@ -4254,6 +4254,41 @@ func TestParser_EmptyLotAnnotationsAreKept(t *testing.T) {
 			lot := journal.Transactions[0].Postings[0].LotPrice
 			require.NotNil(t, lot)
 			check(t, lot)
+		})
+	}
+}
+
+func TestParser_LotDateGluedToAmountsHledgerReadsItAfter(t *testing.T) {
+	for _, amount := range []string{
+		`$1[2024-01-01]`, `1 "Q"[2024-01-01]`, `1 "A B"[2024-01-01]`, `EUR 1[2024-01-01]`, `€1[2024-01-01]`,
+		`$-1[2024-01-01]`, `-$1[2024-01-01]`, `1 Q @ $3[2024-01-01]`, `1 Q @ 3 "Y"[2024-01-01]`, `1 "漢 字"[2024-01-01]`,
+	} {
+		t.Run(amount, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Empty(t, errs)
+			require.NotNil(t, journal.Transactions[0].Postings[0].LotPrice)
+			assert.Equal(t, "2024-01-01", journal.Transactions[0].Postings[0].LotPrice.Date)
+		})
+	}
+}
+
+func TestParser_RejectsLotDateGluedToBareNumberOrRightCommodity(t *testing.T) {
+	for _, amount := range []string{`1[2024-01-01]`, `1 Q[2024-01-01]`, `1 €[2024-01-01]`, `1 Q @ 3 Y[2024-01-01]`} {
+		t.Run(amount, func(t *testing.T) {
+			_, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Len(t, errs, 1)
+			assert.Contains(t, errs[0].Message, "space before the lot date")
+		})
+	}
+}
+
+func TestParser_ExpectedNumberErrorStaysOnItsLine(t *testing.T) {
+	for _, amount := range []string{`1 Q {"A B"`, `1 Q @`, `1 Q =`} {
+		t.Run(amount, func(t *testing.T) {
+			_, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.NotEmpty(t, errs)
+			assert.Equal(t, 2, errs[0].Pos.Line)
+			assert.Equal(t, 2, errs[0].End.Line)
 		})
 	}
 }
