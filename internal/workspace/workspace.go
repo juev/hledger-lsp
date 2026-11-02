@@ -61,6 +61,11 @@ const RevisionUnknown uint64 = 0
 // to. Reading the version last is what makes that safe: versions only increase,
 // so a version equal to the recorded one means the content read just before it
 // was still the recorded content.
+//
+// A StaticContent source stands for a file no editor holds: a rebuild reads it
+// from disk, and the file stops being treated as open. Any other source is a
+// live editor buffer, and every rebuild of a tree that includes the file takes
+// its current content, not only the rebuild its own edit triggers.
 type ContentSource interface {
 	Version() uint64
 	Materialize() string
@@ -77,6 +82,9 @@ func (c StaticContent) Materialize() string { return string(c) }
 // pendingEdit is an editor edit that has been recorded but not yet applied to
 // the include trees and the workspace index.
 type pendingEdit struct {
+	// removed marks a file that is gone from disk: it carries no content, but
+	// the trees that included it must be rebuilt.
+	removed       bool
 	source        ContentSource
 	sourceVersion uint64
 	revision      uint64
@@ -103,7 +111,11 @@ type Workspace struct {
 	fileTree   map[string][]string     // filePath → sorted owning root paths
 	dirty      map[string]pendingEdit  // filePath → edit not yet applied
 	dirtyCount atomic.Int64            // len(dirty), readable without mu
-	revision   uint64                  // monotonic edit counter, guarded by mu
+	// open holds the live buffer of every file an editor has open, which a
+	// rebuild must see in place of the disk even when the file was not edited
+	// in the batch that triggered it.
+	open     map[string]ContentSource
+	revision uint64 // monotonic edit counter, guarded by mu
 	// contentRevisions records, per filePath, the revision of the most recent
 	// content recorded for it. Unlike dirty, entries outlive refresh, so a
 	// caller holding the current buffer can ask whether a tree is up to date
@@ -125,6 +137,7 @@ func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
 		trees:            make(map[string]*IncludeTree),
 		fileTree:         make(map[string][]string),
 		dirty:            make(map[string]pendingEdit),
+		open:             make(map[string]ContentSource),
 		contentRevisions: make(map[string]uint64),
 		includeGraph:     make(map[string][]string),
 		reverseGraph:     make(map[string][]string),
@@ -141,6 +154,7 @@ func (w *Workspace) Initialize() error {
 	w.fileTree = make(map[string][]string)
 	w.dirty = make(map[string]pendingEdit)
 	w.dirtyCount.Store(0)
+	w.open = make(map[string]ContentSource)
 	w.contentRevisions = make(map[string]uint64)
 	w.index = NewWorkspaceIndex()
 	w.includeGraph = make(map[string][]string)
@@ -497,10 +511,32 @@ func (w *Workspace) MarkFileDirty(path string, source ContentSource) uint64 {
 	defer w.mu.Unlock()
 
 	w.revision++
+	if _, onDisk := source.(StaticContent); onDisk {
+		delete(w.open, path)
+	} else {
+		w.open[path] = source
+	}
 	w.dirty[path] = pendingEdit{source: source, sourceVersion: sourceVersion, revision: w.revision}
 	w.contentRevisions[path] = w.revision
 	w.dirtyCount.Store(int64(len(w.dirty)))
 	return w.revision
+}
+
+// MarkFileRemoved records that path no longer exists on disk and is not held by
+// an editor. The trees that include it are rebuilt on the next refresh, which
+// reports the missing include as hledger does.
+func (w *Workspace) MarkFileRemoved(path string) {
+	if path == "" || !filetype.IsJournalPath(path) {
+		return
+	}
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.revision++
+	delete(w.open, path)
+	w.dirty[path] = pendingEdit{removed: true, revision: w.revision}
+	w.dirtyCount.Store(int64(len(w.dirty)))
 }
 
 // ContentRevision returns the revision of the content most recently recorded
@@ -562,6 +598,15 @@ func (w *Workspace) applyDirtyLocked() {
 			continue
 		}
 
+		if edit.removed {
+			for _, rootPath := range w.fileTree[path] {
+				if overlays[rootPath] == nil {
+					overlays[rootPath] = make(map[string]include.OverlayEntry)
+				}
+			}
+			continue
+		}
+
 		// Read the content, then the version. A document that was edited again
 		// since the mark carries a newer version, and this entry describes
 		// content no caller can name any more: the newer edit has already
@@ -609,6 +654,7 @@ func (w *Workspace) applyDirtyLocked() {
 		if tree == nil {
 			continue
 		}
+		w.addOpenBuffersLocked(entries)
 		resolved, errs := w.loader.LoadWithOptions(rootPath, include.LoadOptions{Overlays: entries})
 		tree.Resolved = resolved
 		tree.LoadErrors = errs
@@ -915,4 +961,22 @@ func (w *Workspace) GetDeclaredAccounts() map[string]bool {
 		return nil
 	}
 	return w.GetDeclaredAccountsForFile(root)
+}
+
+// addOpenBuffersLocked adds the current buffer of every open file to entries,
+// except files the batch already supplied. A tree is rebuilt from the loader,
+// which reads whatever it is not given from disk, so an open file that was
+// not edited this time would otherwise lose its unsaved changes. Caller must
+// hold the write lock.
+func (w *Workspace) addOpenBuffersLocked(entries map[string]include.OverlayEntry) {
+	for path, source := range w.open {
+		if _, ok := entries[path]; ok {
+			continue
+		}
+		entries[path] = include.OverlayEntry{
+			SourcePath: path,
+			Content:    source.Materialize(),
+			Revision:   w.contentRevisions[path],
+		}
+	}
 }

@@ -460,6 +460,9 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 			if data, err := os.ReadFile(path); err == nil {
 				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 				s.loader.InvalidateFile(path)
+			} else if os.IsNotExist(err) {
+				s.workspace.MarkFileRemoved(path)
+				s.loader.InvalidateFile(path)
 			}
 		}
 	}
@@ -937,6 +940,9 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 			if data, err := os.ReadFile(path); err == nil {
 				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 			}
+		}
+		if change.Type == protocol.FileChangeTypeDeleted {
+			s.workspace.MarkFileRemoved(path)
 		}
 
 		// Refreshes the pending edits before answering, so the republish below
