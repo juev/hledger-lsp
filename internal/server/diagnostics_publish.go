@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
@@ -132,7 +133,7 @@ func (s *Server) sourcedDiagnosticsByURI(docURI uri.URI, path string, diags []an
 			converted.Range = *astRangeToProtocol(diag.Range)
 		}
 		if len(diag.Data) > 0 {
-			if raw, err := protocol.Marshal(diag.Data); err == nil {
+			if raw, err := marshalDiagnosticData(diag.Data); err == nil {
 				converted.Data = protocol.LSPAny(raw)
 			}
 		}
@@ -226,4 +227,11 @@ func (s *Server) documentVersion(docURI uri.URI) uint32 {
 		}
 	}
 	return 0
+}
+
+// marshalDiagnosticData encodes a diagnostic's structured data with its keys in
+// a fixed order. The same state must always produce the same bytes: a set whose
+// encoding changes from one run to the next looks changed and is published again.
+func marshalDiagnosticData(data map[string]any) ([]byte, error) {
+	return json.Marshal(data)
 }

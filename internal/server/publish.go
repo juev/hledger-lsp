@@ -39,13 +39,17 @@ type publishRound struct {
 	docContent string
 	settings   diagnosticsSettings
 
+	// closed marks a round for a file that is not open: there is no buffer to
+	// read it from, so it has no standalone view.
+	closed         bool
 	standalone     []journalSource
 	standaloneDone bool
 	byTree         map[*include.ResolvedJournal]map[uri.URI][]protocol.Diagnostic
 }
 
-// publishAffected recomputes and publishes the diagnostics of docURI and of every
-// file its include trees contain or contained when it was last published.
+// publishAffected recomputes and publishes the diagnostics of the open document
+// docURI and of every file its include trees contain, or contained when it was
+// last published.
 func (s *Server) publishAffected(ctx context.Context, docURI uri.URI, content string, version uint32, revision uint64) {
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
@@ -73,65 +77,23 @@ func (s *Server) publishAffected(ctx context.Context, docURI uri.URI, content st
 		}
 	}
 
-	docSources := round.sourcesFor(docURI)
-	affected := map[uri.URI]bool{docURI: true}
-	for _, source := range docSources {
-		for _, err := range source.errors {
-			if err.Kind != include.ErrorParseError {
-				s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
-			}
-		}
-		for index := range source.resolved.Occurrences {
-			affected[pathToURI(source.resolved.Occurrences[index].Path)] = true
-		}
-	}
-
-	s.publishedMu.Lock()
-	for other := range s.affected[docURI] {
-		affected[other] = true
-	}
-	if s.affected == nil {
-		s.affected = make(map[uri.URI]map[uri.URI]bool)
-	}
-	s.affected[docURI] = affected
-	s.publishedMu.Unlock()
-
-	targets := make([]uri.URI, 0, len(affected))
-	for target := range affected {
-		if target != docURI {
-			targets = append(targets, target)
-		}
-	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
-
-	// The analysed document always gets a publish, even when it has no problems:
-	// the empty list is what clears previously reported diagnostics, and it
-	// carries the version the client is waiting for.
-	set := round.setFor(docURI)
-	if ctx.Err() != nil {
-		return
-	}
-	s.publishDiagnosticSet(ctx, docURI, set, &version)
-	s.rememberPublished(docURI, set)
-
-	for _, target := range targets {
-		set := round.setFor(target)
-		if ctx.Err() != nil {
-			return
-		}
-		s.publishIfChanged(ctx, target, set)
-	}
+	s.publishCoverage(ctx, round, &version, false)
 }
 
-// publishClosed publishes what a file shows once it is no longer open: the
-// verdicts of the trees that contain it, with no buffer of its own.
-func (s *Server) publishClosed(ctx context.Context, docURI uri.URI) {
+// publishTreesOf republishes everything the include trees of a file that is not
+// open cover: after the file was closed and reverted to what is on disk
+// (forget), or after it changed on disk. The file itself is published only when
+// its set changed.
+func (s *Server) publishTreesOf(ctx context.Context, docURI uri.URI, forget bool) {
 	if s.client == nil || filetype.IsRules(string(docURI)) {
 		s.forgetPublished(docURI)
 		return
 	}
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 
 	round := &publishRound{
 		server:   s,
@@ -139,16 +101,85 @@ func (s *Server) publishClosed(ctx context.Context, docURI uri.URI) {
 		docPath:  uriToPath(docURI),
 		settings: s.getSettings().Diagnostics,
 		byTree:   make(map[*include.ResolvedJournal]map[uri.URI][]protocol.Diagnostic),
+		closed:   true,
 	}
-	var set []protocol.Diagnostic
-	if s.getSettings().Features.Diagnostics {
-		set = round.setFor(docURI)
+	if !s.getSettings().Features.Diagnostics {
+		s.publishDiagnosticSet(ctx, docURI, []protocol.Diagnostic{}, nil)
+		s.forgetPublished(docURI)
+		return
 	}
+	s.publishCoverage(ctx, round, nil, forget)
+}
+
+// publishCoverage publishes the full set of the round's document and of every
+// file its trees contain now or contained at its previous publish. The
+// coverage is replaced by the current one afterwards, or dropped when the
+// document is gone, so it never holds more than the last publish saw.
+func (s *Server) publishCoverage(ctx context.Context, round *publishRound, version *uint32, forget bool) {
+	docURI := round.docURI
+	docSources := round.sourcesFor(docURI)
+	current := map[uri.URI]bool{docURI: true}
+	for _, source := range docSources {
+		for _, err := range source.errors {
+			if err.Kind != include.ErrorParseError {
+				s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
+			}
+		}
+		for index := range source.resolved.Occurrences {
+			current[pathToURI(source.resolved.Occurrences[index].Path)] = true
+		}
+	}
+
 	s.publishedMu.Lock()
-	delete(s.affected, docURI)
+	targets := make(map[uri.URI]bool, len(current))
+	for target := range current {
+		targets[target] = true
+	}
+	for previous := range s.affected[docURI] {
+		targets[previous] = true
+	}
 	s.publishedMu.Unlock()
-	s.publishDiagnosticSet(ctx, docURI, set, nil)
-	s.rememberPublished(docURI, set)
+	delete(targets, docURI)
+
+	ordered := make([]uri.URI, 0, len(targets))
+	for target := range targets {
+		ordered = append(ordered, target)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+
+	set := round.setFor(docURI)
+	if ctx.Err() != nil {
+		return
+	}
+	if version != nil || forget {
+		// The analysed document always gets a publish, even when it has no
+		// problems: the empty list is what clears previously reported
+		// diagnostics, and it carries the version the client is waiting for. A
+		// closed document gets one as well, so its panel is cleared.
+		s.publishDiagnosticSet(ctx, docURI, set, version)
+		s.rememberPublished(docURI, set)
+	} else {
+		s.publishIfChanged(ctx, docURI, set)
+	}
+
+	for _, target := range ordered {
+		set := round.setFor(target)
+		if ctx.Err() != nil {
+			return
+		}
+		s.publishIfChanged(ctx, target, set)
+	}
+
+	s.publishedMu.Lock()
+	if forget {
+		delete(s.affected, docURI)
+	} else {
+		if s.affected == nil {
+			s.affected = make(map[uri.URI]map[uri.URI]bool)
+		}
+		s.affected[docURI] = current
+	}
+	s.publishedMu.Unlock()
 }
 
 func (s *Server) publishIfChanged(ctx context.Context, target uri.URI, set []protocol.Diagnostic) {
@@ -212,7 +243,7 @@ func (r *publishRound) sourcesFor(target uri.URI) []journalSource {
 			return sources
 		}
 	}
-	if target != r.docURI {
+	if target != r.docURI || r.closed {
 		return nil
 	}
 	if !r.standaloneDone {

@@ -465,7 +465,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 			}
 		}
 	}
-	s.publishClosed(ctx, params.TextDocument.URI)
+	s.publishTreesOf(ctx, params.TextDocument.URI, true)
 	return nil
 }
 
@@ -693,7 +693,7 @@ func (s *Server) readingDiagnostics(reading *occurrenceReading, result *analyzer
 			Code:     protocol.String(diag.Code),
 		}
 		if len(diag.Data) > 0 {
-			if raw, err := protocol.Marshal(diag.Data); err == nil {
+			if raw, err := marshalDiagnosticData(diag.Data); err == nil {
 				converted.Data = protocol.LSPAny(raw)
 			}
 		}
@@ -892,27 +892,29 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 			s.workspace.MarkFileRemoved(path)
 		}
 
-		// Refreshes the pending edits before answering, so the republish below
-		// sees the file as it is on disk now.
-		parents := s.workspace.GetIncludedBy(path)
-		for _, parentPath := range parents {
-			parentURI := pathToURI(parentPath)
-			if _, isOpen := s.documents.Load(parentURI); isOpen {
-				affected[parentURI] = true
-			}
+		// The file and every file that includes it can change what the trees
+		// around them report. Their trees are read after the pending edits are
+		// applied, so the republish sees the file as it is on disk now.
+		affected[pathToURI(path)] = true
+		for _, parentPath := range s.workspace.GetIncludedBy(path) {
+			affected[pathToURI(parentPath)] = true
 		}
 	}
 
 	for docURI := range affected {
-		// Revision before content, as in republishDiagnostics: a concurrent edit
-		// can only make the pair mismatch, never wrongly match.
-		var revision uint64
-		if s.workspace != nil {
-			revision = s.workspace.ContentRevision(uriToPath(docURI))
+		if _, open := s.documents.rope(docURI); open {
+			// Revision before content, as in republishDiagnostics: a concurrent
+			// edit can only make the pair mismatch, never wrongly match.
+			var revision uint64
+			if s.workspace != nil {
+				revision = s.workspace.ContentRevision(uriToPath(docURI))
+			}
+			if text, ok := s.documents.rope(docURI); ok {
+				s.publishDiagnostics(ctx, docURI, text, s.documentVersion(docURI), revision)
+			}
+			continue
 		}
-		if text, ok := s.documents.rope(docURI); ok {
-			s.publishDiagnostics(ctx, docURI, text, s.documentVersion(docURI), revision)
-		}
+		s.publishTreesOf(ctx, docURI, false)
 	}
 
 	return nil

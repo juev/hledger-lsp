@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
+
+	"github.com/juev/hledger-lsp/internal/include"
 )
 
 // publishedFor opens the buffer in a workspace rooted at dir and returns what the
@@ -447,4 +449,154 @@ func TestDidClose_ForgetsWhatWasPublishedForTheDocument(t *testing.T) {
 	defer ts.publishedMu.Unlock()
 	assert.NotContains(t, ts.published, docURI)
 	assert.NotContains(t, ts.affected, docURI)
+}
+
+// The same state gives the same set, byte for byte, including the structured data
+// of each diagnostic: a set that differs run to run would be published again for
+// nothing.
+func TestPublishDiagnostics_SetOfTheSameStateIsEqual(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-01 x\n    expenses:food   10 EUR\n    assets:cash\n"
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": "account other\ninclude shared.journal\n", "shared.journal": shared})
+	ts := initWorkspaceTestServer(t, dir)
+	strict(ts)
+	sharedURI := uri.File(filepath.Join(dir, "shared.journal"))
+	require.NoError(t, ts.openDocument(sharedURI, shared))
+
+	round := func() *publishRound {
+		return &publishRound{
+			server: ts.Server, docURI: sharedURI, docPath: uriToPath(sharedURI), docContent: shared,
+			settings: ts.getSettings().Diagnostics, byTree: make(map[*include.ResolvedJournal]map[uri.URI][]protocol.Diagnostic),
+		}
+	}
+	first := round().setFor(sharedURI)
+	require.NotEmpty(t, first)
+	require.NotNil(t, first[0].Data, "the diagnostics carry structured data")
+	for range 20 {
+		require.Equal(t, first, round().setFor(sharedURI))
+	}
+}
+
+// An edit that changes nothing for the other files of the tree publishes nothing
+// for them.
+func TestPublishDiagnostics_UnchangedFilesAreNotPublishedAgain(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-01 x\n    expenses:food   10 EUR\n    assets:cash\n"
+	mainText := "account other\ninclude shared.journal\n"
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": mainText, "shared.journal": shared})
+	ts := initWorkspaceTestServer(t, dir)
+	strict(ts)
+	mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+	require.NoError(t, ts.openDocument(sharedURI, shared))
+	require.NoError(t, ts.openDocument(mainURI, mainText))
+	require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) > 0 && len(publishedSets(ts, mainURI)) > 0 }, 2*time.Second, 10*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	before := len(publishedSets(ts, sharedURI))
+
+	for n := range 5 {
+		_, err := ts.replaceAndWait(mainURI, mainText+fmt.Sprintf("; note %d\n", n))
+		require.NoError(t, err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, before, len(publishedSets(ts, sharedURI)), "shared.journal reads the same, so it is not published again")
+}
+
+// Closing a buffer reverts the file to what is on disk, and everything its trees
+// cover is recomputed from that, as for any other change.
+func TestDidClose_RepublishesTheFilesOfItsTrees(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-02 x\n    expenses:food   10 EUR\n    assets:cash   -10 EUR = -10 EUR\n"
+	root := func(opening string) string {
+		return "2024-01-01 open\n    assets:cash   " + opening + " EUR\n    equity\n\ninclude shared.journal\n"
+	}
+
+	t.Run("an unsaved root edit is dropped", func(t *testing.T) {
+		dir := t.TempDir()
+		writeJournals(t, dir, map[string]string{"a-root.journal": root("100"), "shared.journal": shared})
+		ts := initWorkspaceTestServer(t, dir)
+		aURI, sharedURI := uri.File(filepath.Join(dir, "a-root.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+
+		require.NoError(t, ts.openDocument(aURI, root("100")))
+		require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 1 }, 2*time.Second, 10*time.Millisecond)
+		_, err := ts.replaceAndWait(aURI, root("0"))
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 0 }, 2*time.Second, 10*time.Millisecond)
+
+		require.NoError(t, ts.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{TextDocument: protocol.TextDocumentIdentifier{URI: aURI}}))
+		require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 1 }, 2*time.Second, 10*time.Millisecond,
+			"shared.journal shows %v, but the root on disk fails it", lastSet(ts, sharedURI))
+	})
+
+	t.Run("an unsaved included edit is dropped from an open root", func(t *testing.T) {
+		dir := t.TempDir()
+		mainText := "include shared.journal\n\n2024-12-31 check\n    assets:cash   0 EUR = 100 EUR\n    equity\n"
+		seed := "2024-01-01 seed\n    assets:cash   100 EUR\n    equity\n"
+		writeJournals(t, dir, map[string]string{"main.journal": mainText, "shared.journal": seed})
+		ts := initWorkspaceTestServer(t, dir)
+		mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+
+		require.NoError(t, ts.openDocument(mainURI, mainText))
+		require.NoError(t, ts.openDocument(sharedURI, seed))
+		_, err := ts.replaceAndWait(sharedURI, "2024-01-01 seed\n    assets:cash   50 EUR\n    equity\n")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return len(lastSet(ts, mainURI)) == 1 }, 2*time.Second, 10*time.Millisecond)
+
+		require.NoError(t, ts.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{TextDocument: protocol.TextDocumentIdentifier{URI: sharedURI}}))
+		require.Eventually(t, func() bool { return len(lastSet(ts, mainURI)) == 0 }, 2*time.Second, 10*time.Millisecond,
+			"main.journal still shows %v", lastSet(ts, mainURI))
+	})
+}
+
+// A root changed on disk changes what an open included file is reported for.
+func TestDidChangeWatchedFiles_RepublishesOpenFilesOfTheTree(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-02 x\n    expenses:food   10 EUR\n    assets:cash   -10 EUR = -10 EUR\n"
+	root := func(opening string) string {
+		return "2024-01-01 open\n    assets:cash   " + opening + " EUR\n    equity\n\ninclude shared.journal\n"
+	}
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"a-root.journal": root("100"), "shared.journal": shared})
+	ts := initWorkspaceTestServer(t, dir)
+	sharedURI := uri.File(filepath.Join(dir, "shared.journal"))
+	require.NoError(t, ts.openDocument(sharedURI, shared))
+	require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 1 }, 2*time.Second, 10*time.Millisecond)
+
+	writeJournals(t, dir, map[string]string{"a-root.journal": root("0")})
+	require.NoError(t, ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
+		Changes: []protocol.FileEvent{{URI: uri.File(filepath.Join(dir, "a-root.journal")), Type: protocol.FileChangeTypeChanged}},
+	}))
+	require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 0 }, 2*time.Second, 10*time.Millisecond,
+		"shared.journal still shows %v", lastSet(ts, sharedURI))
+}
+
+// What a document covers is what its last publish saw, not everything it ever saw.
+func TestPublishDiagnostics_CoverageDoesNotOnlyGrow(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": "include a.journal\ninclude b.journal\n", "a.journal": "; a\n", "b.journal": "; b\n"})
+	ts := initWorkspaceTestServer(t, dir)
+	mainURI, bURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "b.journal"))
+	require.NoError(t, ts.openDocument(mainURI, "include a.journal\ninclude b.journal\n"))
+	require.Eventually(t, func() bool {
+		ts.publishedMu.Lock()
+		defer ts.publishedMu.Unlock()
+		return len(ts.affected[mainURI]) == 3
+	}, 2*time.Second, 10*time.Millisecond)
+
+	for range 2 {
+		_, err := ts.replaceAndWait(mainURI, "include a.journal\n")
+		require.NoError(t, err)
+	}
+	require.Eventually(t, func() bool {
+		ts.publishedMu.Lock()
+		defer ts.publishedMu.Unlock()
+		return len(ts.affected[mainURI]) == 2 && !ts.affected[mainURI][bURI]
+	}, 2*time.Second, 10*time.Millisecond)
 }
