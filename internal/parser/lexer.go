@@ -25,28 +25,33 @@ type Lexer struct {
 	virtualCloser  rune
 	insideBraces   int
 	prevType       TokenType
+	// firstLineShift is the number of columns a skipped byte order mark takes on
+	// line 1. Columns count runes of the original text, and the client counts the
+	// mark as a character, so tokens on line 1 start after it.
+	firstLineShift int
 }
 
-// NewLexer skips a leading UTF-8 byte order mark: hledger accepts one at the
-// start of a file. Token offsets still count the mark's bytes, so they stay
-// valid against the string the caller passed in.
+// NewLexer skips one leading UTF-8 byte order mark: hledger accepts exactly one
+// at the start of a file. Token offsets and line-1 columns still count the
+// mark, so they stay valid against the string the caller passed in.
 func NewLexer(input string) *Lexer {
-	start := 0
+	start, shift := 0, 0
 	if strings.HasPrefix(input, textutil.BOM) {
-		start = len(textutil.BOM)
+		start, shift = len(textutil.BOM), 1
 	}
 	return &Lexer{
-		input:         input,
-		pos:           start,
-		line:          1,
-		column:        1,
-		atStart:       true,
-		afterIndent:   false,
-		inTransaction: false,
-		inDirective:   false,
-		onPostingLine: false,
-		afterSign:     false,
-		afterNumber:   false,
+		input:          input,
+		firstLineShift: shift,
+		pos:            start,
+		line:           1,
+		column:         1 + shift,
+		atStart:        true,
+		afterIndent:    false,
+		inTransaction:  false,
+		inDirective:    false,
+		onPostingLine:  false,
+		afterSign:      false,
+		afterNumber:    false,
 	}
 }
 
@@ -61,7 +66,7 @@ func (l *Lexer) scan() Token {
 		return l.makeToken(TokenEOF, "")
 	}
 
-	if l.atStart && l.column == 1 {
+	if l.atStart && l.isFirstColumn(l.line, l.column) {
 		return l.scanLineStart()
 	}
 
@@ -285,7 +290,7 @@ func (l *Lexer) scanDate() Token {
 
 	value := l.input[start:l.pos]
 	// Only set inTransaction if date is at column 1 (transaction header, not directive)
-	if startPos.Column == 1 {
+	if l.isFirstColumn(startPos.Line, startPos.Column) {
 		l.inTransaction = true
 	}
 	return Token{Type: TokenDate, Value: value, Pos: startPos, End: l.position()}
@@ -851,6 +856,15 @@ func (l *Lexer) position() Position {
 func (l *Lexer) makeToken(typ TokenType, value string) Token {
 	pos := l.position()
 	return Token{Type: typ, Value: value, Pos: pos, End: pos}
+}
+
+// isFirstColumn reports whether column is where a line starts, which is one
+// column further on line 1 of a text that begins with a byte order mark.
+func (l *Lexer) isFirstColumn(line, column int) bool {
+	if line == 1 {
+		return column == 1+l.firstLineShift
+	}
+	return column == 1
 }
 
 func (l *Lexer) isWhitespace(ch byte) bool {

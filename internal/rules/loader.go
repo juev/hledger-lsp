@@ -137,7 +137,7 @@ func (l *Loader) LoadWithOptions(path string, options LoadOptions) (*ResolvedRul
 	if rootErr != nil {
 		return nil, []LoadError{*rootErr}
 	}
-	rootContent = textutil.NormalizeLineEndings(textutil.StripBOM(rootContent))
+	rootContent = textutil.NormalizeLineEndings(rootContent)
 
 	// Expand textually.
 	expander := &textExpander{
@@ -334,6 +334,9 @@ func (e *textExpander) expand(
 
 	for lineIdx, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if depth == 0 && lineIdx == 0 {
+			trimmed = strings.TrimSpace(strings.TrimPrefix(line, textutil.BOM))
+		}
 		if !strings.HasPrefix(trimmed, "include ") && trimmed != "include" {
 			startOffset := out.Len()
 			out.WriteString(line)

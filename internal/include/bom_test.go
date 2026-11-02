@@ -59,3 +59,41 @@ func TestLoader_BOMInRootAndIncludedFile(t *testing.T) {
 	assert.Len(t, result.AllTransactions(), 1)
 	assert.Len(t, result.AllDirectives(), 1)
 }
+
+// Disk and buffer must agree: exactly one mark is accepted whether the text is
+// read from disk or handed over by an editor, and the result is the same.
+func TestLoader_DoubleBOMIsRejectedFromDiskAndFromOverlay(t *testing.T) {
+	content := textutil.BOM + textutil.BOM + "2024-01-01 x\n    a  5 RUB\n    b\n"
+	dir := t.TempDir()
+	root := filepath.Join(dir, "main.journal")
+	writeBOMFile(t, root, content)
+
+	fromDisk, diskErrs := NewLoader().Load(root)
+	require.NotNil(t, fromDisk)
+	assert.NotEmpty(t, diskErrs, "a second mark is a syntax error")
+	assert.Empty(t, fromDisk.AllTransactions())
+
+	overlay, overlayErrs := NewLoader().LoadWithOptions(root, LoadOptions{Overlays: map[string]OverlayEntry{
+		root: {Content: content},
+	}})
+	require.NotNil(t, overlay)
+	assert.Equal(t, len(diskErrs), len(overlayErrs))
+	assert.Empty(t, overlay.AllTransactions())
+}
+
+// The loader keeps the mark in the text it parses, so offsets in a file read
+// from disk equal offsets in the same text held by an editor.
+func TestLoader_OffsetsOfBOMFileEqualThoseOfTheOverlay(t *testing.T) {
+	content := textutil.BOM + "2024-01-01 кафе\n    a  1\n    b\n"
+	dir := t.TempDir()
+	root := filepath.Join(dir, "main.journal")
+	writeBOMFile(t, root, content)
+
+	fromDisk, errs := NewLoader().Load(root)
+	require.Empty(t, errs)
+	overlay, errs := NewLoader().LoadWithOptions(root, LoadOptions{Overlays: map[string]OverlayEntry{
+		root: {Content: content},
+	}})
+	require.Empty(t, errs)
+	assert.Equal(t, overlay.AllTransactions()[0].Range, fromDisk.AllTransactions()[0].Range)
+}

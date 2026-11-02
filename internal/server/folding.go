@@ -9,6 +9,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/rules"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 func (s *Server) FoldingRanges(ctx context.Context, params *protocol.FoldingRangeParams) ([]protocol.FoldingRange, error) {
@@ -34,9 +35,12 @@ func (s *Server) FoldingRanges(ctx context.Context, params *protocol.FoldingRang
 	var ranges []protocol.FoldingRange
 
 	ranges = append(ranges, findTransactionFolds(journal)...)
-	ranges = append(ranges, findDirectiveFolds(doc)...)
-	ranges = append(ranges, findCommentBlockFolds(doc)...)
-	ranges = append(ranges, findCommentDirectiveFolds(doc)...)
+	// The line scanners match keywords at the start of a line, and folds carry
+	// line numbers only, so the mark that may start line 1 is dropped first.
+	lineText := strings.TrimPrefix(doc, textutil.BOM)
+	ranges = append(ranges, findDirectiveFolds(lineText)...)
+	ranges = append(ranges, findCommentBlockFolds(lineText)...)
+	ranges = append(ranges, findCommentDirectiveFolds(lineText)...)
 
 	return ranges, nil
 }

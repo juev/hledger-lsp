@@ -15,6 +15,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/rules"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 type CompletionContextType int
@@ -102,7 +103,10 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 	}
 
 	settings := s.getSettings()
-	completionCtx := determineCompletionContext(doc, params.Position)
+	// Context detection reads the text of a line, where the byte order mark that
+	// may start line 1 is noise; edit ranges are shifted back before returning.
+	text, position, shift := withoutLeadingBOM(doc, params.Position)
+	completionCtx := determineCompletionContext(text, position)
 	displayCounts := getCountsForContext(completionCtx, result, settings.Completion)
 
 	// Ranking counts may be boosted by the payee on the line; the counts shown in
@@ -110,13 +114,13 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 	rankCounts := displayCounts
 	var recency map[string]string
 	if completionCtx == ContextAccount {
-		if payee := extractPayeeForCompletion(doc, cursorLine); payee != "" {
+		if payee := extractPayeeForCompletion(text, cursorLine); payee != "" {
 			rankCounts = payeeBoostedCounts(result, payee, displayCounts)
 			recency = payeeRecency(result, payee)
 		}
 	}
 
-	items := s.generateCompletionItems(completionCtx, result, doc, params.Position, displayCounts, settings.Completion)
+	items := s.generateCompletionItems(completionCtx, result, text, position, displayCounts, settings.Completion)
 	isAccount := completionCtx == ContextAccount || completionCtx == ContextUnknown
 	var balances analyzer.AccountBalances
 	if isAccount {
@@ -129,7 +133,17 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 	}
 	attachResolveData(items, completionCtx, params.TextDocument.URI)
 
-	editRange := calculateTextEditRange(doc, params.Position, completionCtx)
+	editRange := calculateTextEditRange(text, position, completionCtx)
+	if editRange != nil && shift > 0 {
+		shifted := *editRange
+		if shifted.Start.Line == 0 {
+			shifted.Start.Character += shift
+		}
+		if shifted.End.Line == 0 {
+			shifted.End.Character += shift
+		}
+		editRange = &shifted
+	}
 	if isAccount {
 		response.AccountRange = editRange
 	}
@@ -146,7 +160,7 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 		}
 	}
 
-	query := extractQueryText(doc, params.Position, completionCtx)
+	query := extractQueryText(text, position, completionCtx)
 	scored := filterAndScoreFuzzyMatch(items, query, settings.Completion.FuzzyMatching)
 	items = rankCompletionItemsByScore(scored, rankCounts, query, recency)
 	if isAccount && allAccounts {
@@ -168,6 +182,24 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 		Items:        items,
 	}
 	return response, nil
+}
+
+// withoutLeadingBOM drops a byte order mark from the start of doc and moves a
+// position on line 1 to match. shift is the number of columns removed from line
+// 1, to be added back to any range computed on the trimmed text.
+func withoutLeadingBOM(doc string, pos protocol.Position) (string, protocol.Position, uint32) {
+	if !strings.HasPrefix(doc, textutil.BOM) {
+		return doc, pos, 0
+	}
+	const shift = 1
+	if pos.Line == 0 {
+		if pos.Character >= shift {
+			pos.Character -= shift
+		} else {
+			pos.Character = 0
+		}
+	}
+	return doc[len(textutil.BOM):], pos, shift
 }
 
 func getCountsForContext(ctxType CompletionContextType, result *analyzer.AnalysisResult, settings completionSettings) map[string]int {

@@ -54,3 +54,22 @@ func TestParse_BOMOnlyInput(t *testing.T) {
 	require.Empty(t, errs)
 	assert.Empty(t, journal.Transactions)
 }
+
+// Columns count the mark like the client does, so line 1 starts one column in
+// and offsets keep the mark's three bytes.
+func TestParse_LeadingBOMColumnsMatchTheText(t *testing.T) {
+	input := textutil.BOM + "2024-01-01 кафе\n    a  1\n    b\n"
+	journal, errs := Parse(input)
+	require.Empty(t, errs)
+	tx := journal.Transactions[0]
+	assert.Equal(t, 2, tx.Range.Start.Column)
+	assert.Equal(t, len(textutil.BOM), tx.Range.Start.Offset)
+	assert.Equal(t, 1, tx.Postings[0].Range.Start.Column-4, "later lines are not shifted")
+	assert.Equal(t, 2, tx.Postings[0].Range.Start.Line)
+}
+
+// hledger accepts exactly one mark, so a second one is content.
+func TestParse_DoubleBOMIsAnError(t *testing.T) {
+	_, errs := Parse(textutil.BOM + textutil.BOM + "2024-01-01 x\n    a  5 RUB\n    b\n")
+	assert.NotEmpty(t, errs)
+}
