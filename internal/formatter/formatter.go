@@ -268,7 +268,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
-	alignment.CommentColumn = commentColumn(lines, postings)
+	alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
 	return alignment
 }
 
@@ -301,22 +301,70 @@ func AllPostings(journal *ast.Journal) []ast.Posting {
 // default two-space gap, so a one-off comment does not end up detached from its
 // posting.
 //
+// The column is chosen so that formatting the output again picks the same one.
+// Rewriting moves comments: two that did not share a column can land on the same
+// one, and the next pass would then pull every other comment to it. The column
+// is therefore taken from where the comments end up, not only from where they
+// were written, and the choice is repeated until it no longer changes.
+//
 // The writer still enforces a two-space minimum, so a preserved column can never
 // make a comment collide with the amount, assertion or cost text.
-func commentColumn(lines []string, postings []ast.Posting) int {
-	var columns []int
+func commentColumn(lines []string, postings []ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) int {
+	type commented struct {
+		posting *ast.Posting
+		written int
+	}
+	var all []commented
+	var written []int
 	for i := range postings {
 		if postings[i].Comment == "" {
 			continue
 		}
-		if column := displayColumn(lines, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column); column > 0 {
-			columns = append(columns, column)
+		column := displayColumn(lines, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column)
+		if column > 0 {
+			written = append(written, column)
 		}
+		all = append(all, commented{posting: &postings[i], written: column})
 	}
+
+	column := sharedColumn(written)
+	if len(all) < 2 {
+		return column
+	}
+
+	indent := strings.Repeat(" ", opts.IndentSize)
+	bodyWidths := make([]int, len(all))
+	for i, c := range all {
+		bodyWidths[i] = displayWidth(formatPostingBody(c.posting, alignment, commodityFormats, indent, opts.AlignAmounts, target))
+	}
+
+	const maxRounds = 8
+	for range maxRounds {
+		landed := make([]int, 0, len(all))
+		for i, c := range all {
+			if c.posting.UnparsedTail.End.Offset > c.posting.UnparsedTail.Start.Offset {
+				if c.written > 0 {
+					landed = append(landed, c.written)
+				}
+				continue
+			}
+			landed = append(landed, bodyWidths[i]+max(column-bodyWidths[i], minSpaces))
+		}
+		next := sharedColumn(landed)
+		if next == column {
+			break
+		}
+		column = next
+	}
+	return column
+}
+
+// sharedColumn returns the most common column among those that at least two
+// comments use, or 0 when no column is shared.
+func sharedColumn(columns []int) int {
 	if len(columns) < 2 {
 		return 0
 	}
-
 	detected := selectModalColumn(columns)
 	if columnCount(columns, detected) < 2 {
 		return 0
