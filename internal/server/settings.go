@@ -276,9 +276,16 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 		return
 	}
 
-	settings, issues := parseSettingsFromLSPAnyWithIssues(s.getSettings(), result[0])
+	previous := s.getSettings()
+	settings, issues := parseSettingsFromLSPAnyWithIssues(previous, result[0])
 	s.reportSettingsIssues(issues)
 	s.setSettings(settings)
+
+	// The client asks for the hints of the buffers it opened before the
+	// configuration arrived, and shows those until it has a reason to ask again.
+	if s.clientCapabilities.supportsInlayHintRefresh && s.getSettings().InlayHints != previous.InlayHints {
+		_ = s.client.InlayHintRefresh(ctx)
+	}
 }
 
 // reportSettingsIssues tells the user about settings values the server rejected.

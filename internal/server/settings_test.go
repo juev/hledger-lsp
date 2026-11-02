@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.lsp.dev/protocol"
 
 	"github.com/juev/hledger-lsp/internal/include"
 )
@@ -707,4 +711,62 @@ func TestSettings_LegacyUndeclaredAccountsFalseDisablesTheCheck(t *testing.T) {
 		"diagnostics": map[string]interface{}{"undeclaredAccounts": true},
 	})
 	assert.Equal(t, accountCheckLint, enabled.Diagnostics.AccountCheck)
+}
+
+// configClient answers workspace/configuration with fixed settings and counts
+// workspace/inlayHint/refresh requests.
+type configClient struct {
+	protocol.UnimplementedClient
+	settings  protocol.LSPAny
+	refreshes atomic.Int32
+}
+
+func (c *configClient) Configuration(context.Context, *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+	return []protocol.LSPAny{c.settings}, nil
+}
+
+func (c *configClient) InlayHintRefresh(context.Context) error {
+	c.refreshes.Add(1)
+	return nil
+}
+
+// The client asks for the hints of the first buffer before the server has
+// fetched its configuration, so a setting that changes the hints must make the
+// client ask again, or they stay as the defaults made them until another
+// request comes along.
+func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *testing.T) {
+	enabled := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"runningBalances": true}})
+	refreshSupport := &protocol.ClientCapabilities{Workspace: &protocol.WorkspaceClientCapabilities{
+		Configuration: boolPtr(true),
+		InlayHint:     &protocol.InlayHintWorkspaceClientCapabilities{RefreshSupport: boolPtr(true)},
+	}}
+
+	t.Run("changed", func(t *testing.T) {
+		srv := NewServer()
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: *refreshSupport})
+		require.NoError(t, err)
+		client := &configClient{settings: enabled}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background())
+		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Equal(t, int32(1), client.refreshes.Load())
+
+		srv.refreshConfiguration(context.Background())
+		assert.Equal(t, int32(1), client.refreshes.Load(), "unchanged hint settings need no refresh")
+	})
+
+	t.Run("client without refresh support", func(t *testing.T) {
+		srv := NewServer()
+		capabilities := *refreshSupport
+		capabilities.Workspace = &protocol.WorkspaceClientCapabilities{Configuration: boolPtr(true)}
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: capabilities})
+		require.NoError(t, err)
+		client := &configClient{settings: enabled}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background())
+		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Zero(t, client.refreshes.Load())
+	})
 }
