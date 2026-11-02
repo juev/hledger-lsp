@@ -677,17 +677,13 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 		}
 	}
 
-	offset := 0
-	for _, part := range strings.Split(comment, ",") {
-		if colon := strings.IndexByte(part, ':'); colon > 0 {
-			nameStart := strings.LastIndexAny(part[:colon], " \t") + 1
-			if part[nameStart:colon] == "date" {
-				if date, ok := parsePostingDateValue(leadingDateText(part[colon+1:]), transactionYear); ok {
-					consider(date, offset+nameStart)
-				}
-			}
+	for _, tag := range parser.ScanPostingCommentTags(comment) {
+		if tag.Name != "date" {
+			continue
 		}
-		offset += len(part) + 1
+		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transactionYear); ok {
+			consider(date, tag.NameStart)
+		}
 	}
 
 	for start := 0; start < len(comment); start++ {

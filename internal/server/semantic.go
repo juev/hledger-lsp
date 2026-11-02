@@ -366,6 +366,12 @@ func tokenizeForSemantics(content string) []semanticToken {
 	isTransactionHeader := false
 	inCommentBlock := false
 	pendingNegative := false
+	// inTransaction is set from a transaction's date line to the next line that
+	// starts at the first column or is empty, as the parser ends a transaction
+	// there; belowPosting once a posting of it has been read,
+	// so that a ; comment on or below a posting line is read as a posting comment.
+	inTransaction := false
+	belowPosting := false
 
 	for {
 		tok := lexer.Next()
@@ -438,6 +444,10 @@ func tokenizeForSemantics(content string) []semanticToken {
 			isTransactionHeader = false
 			inSubdirective = false
 			pendingNegative = false
+			if tok.Type != parser.TokenIndent {
+				inTransaction = tok.Type == parser.TokenDate
+				belowPosting = false
+			}
 			if tok.Type == parser.TokenDirective {
 				inDirective = true
 				directiveType = tok.Value
@@ -579,9 +589,14 @@ func tokenizeForSemantics(content string) []semanticToken {
 			}
 		}
 
+		if tok.Type == parser.TokenAccount && inTransaction {
+			belowPosting = true
+		}
+
 		// Handle comments with tags - extract tag tokens
 		if tok.Type == parser.TokenComment {
-			tagTokens := extractTagTokensFromComment(mapper, tok)
+			posting := belowPosting && tok.Pos.Offset < len(content) && content[tok.Pos.Offset] == ';'
+			tagTokens := extractTagTokensFromComment(mapper, tok, posting)
 			if len(tagTokens) > 0 {
 				tokens = append(tokens, tagTokens...)
 				continue
@@ -611,12 +626,8 @@ func tokenizeForSemantics(content string) []semanticToken {
 	return tokens
 }
 
-func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Token) []semanticToken {
+func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Token, posting bool) []semanticToken {
 	commentText := tok.Value
-	if !strings.Contains(commentText, ":") {
-		return nil
-	}
-
 	baseLine := uint32(tok.Pos.Line - 1)
 	baseCol := semanticCol(mapper, tok.Pos)
 
@@ -629,59 +640,24 @@ func extractTagTokensFromComment(mapper *lsputil.PositionMapper, tok parser.Toke
 	}
 	var spans []span
 
-	parts := strings.Split(commentText, ",")
-	searchStart := 0
-
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		colonIdx := strings.Index(trimmed, ":")
-		if colonIdx == -1 {
-			continue
-		}
-
-		name := strings.TrimSpace(trimmed[:colonIdx])
-		if !parser.IsValidTagName(name) {
-			continue
-		}
-
-		// Find the position of this tag in the original comment text
-		tagStart := strings.Index(commentText[searchStart:], name+":")
-		if tagStart == -1 {
-			continue
-		}
-		tagStart += searchStart
-
-		tagNameWithColonLen := uint32(lsputil.UTF16Len(name) + 1)
-		tagColUTF16 := uint32(lsputil.UTF16Len(commentText[:tagStart]))
-
+	scan := parser.ScanCommentTags
+	if posting {
+		scan = parser.ScanPostingCommentTags
+	}
+	for _, tag := range scan(commentText) {
 		// +1 accounts for the semicolon that starts the comment
 		spans = append(spans, span{
-			start:     1 + tagColUTF16,
-			length:    tagNameWithColonLen,
+			start:     1 + uint32(lsputil.UTF16Len(commentText[:tag.NameStart])),
+			length:    uint32(lsputil.UTF16Len(tag.Name) + 1),
 			tokenType: TokenTypeTag,
 		})
-
-		// Tag value (if present)
-		if colonIdx+1 < len(trimmed) {
-			value := parser.ExtractTagValue(trimmed[colonIdx+1:])
-			if value != "" {
-				// Find where the value starts in the original text
-				tagNameEnd := tagStart + len(name) + 1
-				valueStart := strings.Index(commentText[tagNameEnd:], value)
-				if valueStart != -1 {
-					valueColUTF16 := uint32(lsputil.UTF16Len(commentText[:tagNameEnd+valueStart]))
-					spans = append(spans, span{
-						start:     1 + valueColUTF16,
-						length:    uint32(lsputil.UTF16Len(value)),
-						tokenType: TokenTypeTagValue,
-					})
-					searchStart = tagNameEnd + valueStart + len(value)
-					continue
-				}
-			}
+		if tag.Value != "" {
+			spans = append(spans, span{
+				start:     1 + uint32(lsputil.UTF16Len(commentText[:tag.ValueStart])),
+				length:    uint32(lsputil.UTF16Len(tag.Value)),
+				tokenType: TokenTypeTagValue,
+			})
 		}
-
-		searchStart = tagStart + len(name) + 1
 	}
 
 	// If no valid tags found, return nil (comment will be handled normally)
