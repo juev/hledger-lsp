@@ -100,3 +100,61 @@ func ourReadFile(root string) testutil.HledgerAmount {
 	}
 	return testutil.HledgerAmount{}
 }
+
+// TestOracle_CommodityAndDefaultCommodityInSeparateFilesMatchHledger compares a
+// commodity style and a D directive that declare different decimal marks when
+// they sit in different files, in either order, for bare and for symbol-written
+// numbers.
+func TestOracle_CommodityAndDefaultCommodityInSeparateFilesMatchHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	pairs := [][2]string{
+		{"commodity 1.000,00 X\n", "D 1000. X\n"},
+		{"commodity 1,000.00 X\n", "D 1000, X\n"},
+		{"commodity 1.000,00 X\n", "D 1000.00 Y\n"},
+		{"commodity 1.000,00 Y\n", "D 1000. X\n"},
+		{"commodity 1.000,00\n", "D 1000. X\n"},
+		{"commodity 1.000,00\n", "D 1000.00 X\n"},
+		{"commodity 1000, X\n", "D 1000. X\n"},
+		{"decimal-mark ,\n", "D 1000. X\n"},
+	}
+	spellings := []string{"15,000", "1.500", "1,5", "15,000 X", "1.500 X", "15,000 Y"}
+	tx := func(spelling string) string { return "2024-01-01 x\n    a  " + spelling + "\n    b\n" }
+	layouts := []struct {
+		name  string
+		files func(commodity, defaultCommodity, spelling string) map[string]string
+	}{
+		{"commodity file then D file", func(c, d, s string) map[string]string {
+			return map[string]string{"main.journal": "include c.journal\ninclude d.journal\n" + tx(s), "c.journal": c, "d.journal": d}
+		}},
+		{"D file then commodity file", func(c, d, s string) map[string]string {
+			return map[string]string{"main.journal": "include d.journal\ninclude c.journal\n" + tx(s), "c.journal": c, "d.journal": d}
+		}},
+		{"D in the parent, commodity in the child", func(c, d, s string) map[string]string {
+			return map[string]string{"main.journal": d + "include c.journal\n" + tx(s), "c.journal": c}
+		}},
+		{"commodity in the parent, D in the child", func(c, d, s string) map[string]string {
+			return map[string]string{"main.journal": c + "include d.journal\n" + tx(s), "d.journal": d}
+		}},
+		{"transaction in a sibling after both", func(c, d, s string) map[string]string {
+			return map[string]string{"main.journal": "include c.journal\ninclude d.journal\ninclude t.journal\n", "c.journal": c, "d.journal": d, "t.journal": tx(s)}
+		}},
+	}
+
+	for _, layout := range layouts {
+		for _, pair := range pairs {
+			for _, spelling := range spellings {
+				t.Run(fmt.Sprintf("%s %q %q reads %q", layout.name, pair[0], pair[1], spelling), func(t *testing.T) {
+					dir := t.TempDir()
+					for name, content := range layout.files(pair[0], pair[1], spelling) {
+						require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+					}
+					root := filepath.Join(dir, "main.journal")
+
+					want := testutil.HledgerReadFile(t, hledgerPath, root)
+					assert.Equal(t, want, ourReadFile(root), "layout %s", layout.name)
+				})
+			}
+		}
+	}
+}

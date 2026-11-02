@@ -106,7 +106,9 @@ func TestParse_DefaultCommodityPositionFollowsDirective(t *testing.T) {
 	}
 }
 
-func TestParse_DefaultCommodityWithoutSymbolClearsIt(t *testing.T) {
+// hledger 1.52.4 reads the number of a symbol-less D as an amount of the D
+// commodity already in force, so the second D keeps RUB.
+func TestParse_DefaultCommodityWithoutSymbolKeepsTheOneInForce(t *testing.T) {
 	input := `D 1.000,00 RUB
 
 2024-01-15 with default
@@ -125,8 +127,8 @@ D 1.000,00
 	require.Len(t, journal.Transactions, 2)
 
 	assert.Equal(t, "RUB", journal.Transactions[0].Postings[0].Amount.Commodity.Symbol)
-	assert.Equal(t, "", journal.Transactions[1].Postings[0].Amount.Commodity.Symbol,
-		"a D directive without a symbol clears the default commodity")
+	assert.Equal(t, "RUB", journal.Transactions[1].Postings[0].Amount.Commodity.Symbol,
+		"a D directive without a symbol keeps the default commodity in force")
 }
 
 // A D directive in the parent journal reaches amounts in files included after

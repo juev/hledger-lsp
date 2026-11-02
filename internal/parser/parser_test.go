@@ -3329,21 +3329,29 @@ func Test_numberInFormat(t *testing.T) {
 	tests := []struct {
 		name     string
 		format   string
-		symbol   string
 		expected string
 	}{
-		{"european format with commodity", "1.000,00 RUB", "RUB", "1.000,00"},
-		{"us format with commodity", "1,000.00 USD", "USD", "1,000.00"},
-		{"currency symbol prefix", "$1,000.00", "$", "1,000.00"},
-		{"symbol containing a digit", "1000.00 X2", "X2", "1000.00"},
-		{"space grouped", "1 000,00 EUR", "EUR", "1 000,00"},
-		{"trailing decimal mark", "1000. EUR", "EUR", "1000."},
-		{"no number", "EUR", "EUR", ""},
+		{"european format with commodity", "1.000,00 RUB", "1.000,00"},
+		{"us format with commodity", "1,000.00 USD", "1,000.00"},
+		{"currency symbol prefix", "$1,000.00", "1,000.00"},
+		{"symbol containing a digit", "1000.00 X2", "1000.00"},
+		{"space grouped", "1 000,00 EUR", "1 000,00"},
+		{"trailing decimal mark", "1000. EUR", "1000."},
+		{"no number", "EUR", ""},
+		{"comma symbol after", "1,000.00 ,", "1,000.00"},
+		{"comma symbol before", ", 1.000,00", "1.000,00"},
+		{"sign before a prefix symbol", "-$1,000.00", "1,000.00"},
+		{"comma symbol before a number ending in a comma", ", 1.000,", "1.000,"},
+		{"comma symbol glued before a number ending in a comma", ",1.000,", "1.000,"},
+		{"comma symbol glued before a number ending in a dot", ",1,000.", "1,000."},
+		{"comma symbol after a number ending in a comma", "1.000, ,", "1.000,"},
+		{"quoted symbol after", `1000.00 "A B"`, "1000.00"},
+		{"Cyrillic symbol before", "руб 1.000,", "1.000,"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.expected, numberInFormat(tt.format, tt.symbol))
+			assert.Equal(t, tt.expected, numberInFormat(tt.format))
 		})
 	}
 }
