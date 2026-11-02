@@ -4,6 +4,7 @@ import (
 	"maps"
 	"sync"
 
+	"github.com/shopspring/decimal"
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
@@ -42,6 +43,43 @@ type cachedDoc struct {
 	analysisMu       sync.Mutex
 	analysis         *analyzer.AnalysisResult
 	analysisExternal analyzer.ExternalDeclarations
+
+	// running holds the running balances of this version under the include tree
+	// they were replayed from. The workspace replaces the tree's pointer when any
+	// file in it changes, so the pointer stands for the whole tree's content;
+	// runningMu serialises the replay so concurrent requests share one.
+	runningMu sync.Mutex
+	running   *runningBalanceEntry
+}
+
+// runningBalanceEntry is one replay together with the inputs that produced it.
+// tree is nil for a document outside any include tree.
+type runningBalanceEntry struct {
+	tree     *include.ResolvedJournal
+	id       include.OccurrenceID
+	balances map[analyzer.PostingRef]map[string]decimal.Decimal
+}
+
+// cachedRunningBalances returns the running balances of the document's postings,
+// replaying the journal only when this version has not been replayed under the
+// same include tree and occurrence. A lone document (tree == nil) is replayed
+// from journal. The result is shared between callers and must not be modified.
+func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *include.ResolvedJournal, id include.OccurrenceID) map[analyzer.PostingRef]map[string]decimal.Decimal {
+	doc := s.cachedParse(docURI, content)
+
+	doc.runningMu.Lock()
+	defer doc.runningMu.Unlock()
+	if r := doc.running; r != nil && r.tree == tree && r.id == id {
+		return r.balances
+	}
+	var balances map[analyzer.PostingRef]map[string]decimal.Decimal
+	if tree != nil {
+		balances = analyzer.RunningBalances(tree.TransactionsWithSource(), id)
+	} else {
+		balances = analyzer.RunningBalances(journalTransactions(doc.journal), 0)
+	}
+	doc.running = &runningBalanceEntry{tree: tree, id: id, balances: balances}
+	return balances
 }
 
 // cachedAnalysis returns the analysis of the document's journal, reusing the
