@@ -459,8 +459,9 @@ func TestTestClientPublishDiagnostics(t *testing.T) {
 }
 
 // publishingServer publishes one diagnostics notification per URI before it
-// answers initialize. The client reads frames in wire order, so every
-// publishDiagnostics handler has started by the time Initialize returns.
+// answers initialize. The client reads frames in wire order, so the preceding
+// notifications are registered in flight when Initialize returns; their
+// asynchronous callbacks may not yet have entered the sink select.
 type publishingServer struct {
 	protocol.UnimplementedServer
 	uris []uri.URI
@@ -535,8 +536,8 @@ func TestLSPWire_ConfiguredDiagnosticsSinkDeliversAndUnblocksOnCancel(t *testing
 		t.Fatal("timed out waiting for publishDiagnostics")
 	}
 
-	// The other notification still waits on the unread sink; canceling the
-	// connection context must release it so teardown completes.
+	// The other notification remains in flight with no receiver. Canceling
+	// the connection context must let its callback finish before teardown.
 	cancel()
 	requireWireClosed(t, clientConn, serverConn)
 }
