@@ -287,6 +287,9 @@ func startLSPProcess(t *testing.T, cmd *exec.Cmd) *lspProcess {
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	cmd.Stderr = &c.stderr
+	// Bounds how long Wait copies stderr after the process exits, in case a
+	// child process still holds it.
+	cmd.WaitDelay = time.Second
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil {
@@ -306,7 +309,7 @@ func (c *lspProcess) readLoop(stdout io.Reader) {
 	r := bufio.NewReader(stdout)
 	for {
 		body, err := readFrame(r)
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, errStreamEnd) {
 			return
 		}
 		if err != nil {
@@ -357,13 +360,17 @@ func (c *lspProcess) readLoop(stdout io.Reader) {
 	}
 }
 
+// errStreamEnd reports that stdout ended between frames. A stream that ends
+// inside a frame is a framing error, even though it also wraps io.EOF.
+var errStreamEnd = errors.New("stdout ended between frames")
+
 func readFrame(r *bufio.Reader) ([]byte, error) {
 	length := -1
 	for first := true; ; first = false {
 		line, err := r.ReadString('\n')
 		if err != nil {
 			if first && line == "" && errors.Is(err, io.EOF) {
-				return nil, io.EOF
+				return nil, errStreamEnd
 			}
 			return nil, fmt.Errorf("truncated header %q: %w", line, err)
 		}
@@ -510,25 +517,43 @@ func (c *lspProcess) waitFor(what string, timeout time.Duration, done func() boo
 	}
 }
 
-// finish closes stdin and waits for the server to exit. Stdout is read to
-// EOF before Wait, which closes the pipe.
+// finish closes stdin and waits for the server to exit.
 func (c *lspProcess) finish(t *testing.T) wasiSession {
 	t.Helper()
 	require.NoError(t, c.stdin.Close())
-	select {
-	case <-c.readerDone:
-	case <-time.After(wasiStepTimeout):
-		t.Fatalf("server did not close stdout within %s", wasiStepTimeout)
-	}
-	err := c.cmd.Wait()
-	var exitErr *exec.ExitError
-	if err != nil && !errors.As(err, &exitErr) {
-		require.NoError(t, err)
-	}
+	require.NoError(t, c.waitExit(wasiStepTimeout))
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	require.NoError(t, c.framingErr, "stdout framing")
 	return wasiSession{exitCode: c.cmd.ProcessState.ExitCode(), stderr: c.stderr.String()}
+}
+
+// waitExit waits, within one timeout, for stdout to reach EOF and then for
+// the process to exit. Stdout is read to EOF before Wait, which closes the
+// pipe. On timeout the process is killed and reaped.
+func (c *lspProcess) waitExit(timeout time.Duration) error {
+	deadline := time.After(timeout)
+	select {
+	case <-c.readerDone:
+	case <-deadline:
+		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
+		return fmt.Errorf("server did not close stdout within %s", timeout)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- c.cmd.Wait() }()
+	select {
+	case err := <-exited:
+		var exitErr *exec.ExitError
+		if err != nil && !errors.As(err, &exitErr) {
+			return err
+		}
+		return nil
+	case <-deadline:
+		_ = c.cmd.Process.Kill()
+		<-exited
+		return fmt.Errorf("server did not exit within %s", timeout)
+	}
 }
 
 func fileURI(path string) string {
