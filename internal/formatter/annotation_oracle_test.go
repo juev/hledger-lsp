@@ -9,6 +9,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/testutil"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 // acceptedAnnotations are posting amounts hledger accepts: costs, lot costs,
@@ -36,6 +37,17 @@ var acceptedAnnotations = []string{
 	`"A B" 1 = "A B" 1`,
 	`1 "A B" = 1 "A B"`,
 	`1 Q = 1 Q @ "A B" 5`,
+	`1 Q {}`,
+	`1 Q {{}}`,
+	`1 Q {=}`,
+	`1 Q ()`,
+	`1 Q @ 3 Y(n)`,
+	`1 Q @ 3 Y(n) [2024-01-01]`,
+	`1 Q(n)`,
+	`1 Q {5 X}(n)`,
+	`1 "A B"(n)`,
+	`1 Q (n)[2024-01-01]`,
+	`1 Q {5 X}[2024-01-01](n)`,
 	`"Ж Ы" 1 = "Ж Ы" 1`,
 	`1 "漢 字" = 1 "漢 字" @@ 5 "Ж Ы"`,
 }
@@ -51,6 +63,32 @@ var rejectedAnnotations = []string{
 	`1 Q {5 X`,
 	`1 Q {{5 X}`,
 	`1 Q {5 X}}`,
+	`1 Q {5 X} @`,
+	`1 Q @ (n)`,
+	`1 Q {"lbl", 5 X}`,
+	`1 Q {"lbl",5 X}`,
+	`1 Q {2026-01-15, 5 X}`,
+	`1 Q {2026-01-15, "lbl", 5 X}`,
+	`1 Q {"A;B" 5}`,
+	`1 "A;B"`,
+	`1 Q = 1 Q {5 X}`,
+	`1 Q = 1 Q [2024-01-01]`,
+	`1 Q = 1 Q (n)`,
+	`1 Q = 1 Q {5 X} @ 3 Y`,
+	`$`,
+	`1 Q []`,
+	`1 Q @ 3 Y[2024-01-01]`,
+	`1 Q (n`,
+	`1 Q [2024-01-01`,
+	`1 Q {5 X} (n`,
+	`{5 X}`,
+	`@ 5 X`,
+	`[2024-01-01]`,
+	`(n)`,
+	`{"A B"`,
+	`1 Q {$`,
+	`1 Q {X`,
+	`1 Q {-`,
 }
 
 func annotationJournal(amount string) string {
@@ -101,6 +139,12 @@ func TestFormatDocument_AnnotationsKeepTheirQuotedCommodity(t *testing.T) {
 		`1 Q @ "A B" 5`:                    `1 Q @ "A B" 5`,
 		`1 Q (n) [2024-01-01] {{5 "A B"}}`: `1 Q {{5 "A B"}} [2024-01-01] (n)`,
 		`1 Q = 1 Q @@ 5 "漢 字"`:             `1 Q = 1 Q @@ 5 "漢 字"`,
+		`1 Q {}`:                           `1 Q {}`,
+		`1 Q {{}}`:                         `1 Q {{}}`,
+		`1 Q {=}`:                          `1 Q {}`,
+		`1 Q ()`:                           `1 Q ()`,
+		`1 Q @ 3 Y(n)`:                     `1 Q @ 3 Y(n)`,
+		`1 Q {5 X}(n)`:                     `1 Q {5 X} (n)`,
 	}
 
 	for amount, want := range cases {
@@ -110,8 +154,8 @@ func TestFormatDocument_AnnotationsKeepTheirQuotedCommodity(t *testing.T) {
 			assert.Equal(t, "2024-01-01 x\n    a  "+want+"\n    b\n", once)
 			assert.Equal(t, once, formatForOracle(t, once), "formatting must be idempotent")
 
-			crlf := strings.ReplaceAll(strings.ReplaceAll(input, "\n", "\r\n"), "\r\n", "\n")
-			assert.Equal(t, once, formatForOracle(t, crlf))
+			crlf := strings.ReplaceAll(input, "\n", "\r\n")
+			assert.Equal(t, once, formatForOracle(t, textutil.NormalizeLineEndings(crlf)))
 		})
 	}
 }

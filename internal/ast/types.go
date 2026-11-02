@@ -174,15 +174,19 @@ type LotPrice struct {
 	// Fixed marks the `{=PRICE}` / `{{=PRICE}}` form, which states the lot cost
 	// outright instead of the per-unit price.
 	Fixed bool
-	Date  string
-	Label string
+	// Braces marks a written `{...}` or `{{...}}`, which hledger reads even
+	// when it is empty: `{}` is a lot annotation without a cost, not no lot.
+	Braces bool
+	Date   string
+	Label  string
+	// Noted marks a written `(...)` note; an empty `()` is still a note.
+	Noted bool
 	Range Range
 }
 
 type BalanceAssertion struct {
 	Amount      Amount
 	Cost        *Cost
-	LotPrice    *LotPrice
 	IsStrict    bool
 	IsInclusive bool
 	Range       Range
