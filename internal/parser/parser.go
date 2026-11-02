@@ -1136,60 +1136,20 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	var number string
 	formatPos, formatEnd := startPos, startPos
 
-	// Handle inline format: "commodity $1000.00" (symbol first, then number)
-	switch p.current.Type {
-	case TokenCommodity, TokenQuotedCommodity:
-		symbol := p.current.Value
+	spec := p.readCommoditySpec()
+	if spec.hasSymbol {
 		dir.Commodity = ast.Commodity{
-			Symbol: symbol,
-			Quoted: p.current.Type == TokenQuotedCommodity,
+			Symbol: spec.symbol,
+			Quoted: spec.quoted,
 			Range: ast.Range{
-				Start: toASTPosition(p.current.Pos),
-				End:   toASTPosition(p.current.End),
+				Start: toASTPosition(spec.symbolPos),
+				End:   toASTPosition(spec.symbolEnd),
 			},
 		}
-		p.advance()
-
-		// Collect number part for format (no space for currency symbols)
-		if p.current.Type == TokenNumber {
-			number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
-			dir.Format = symbol + number
-			p.advance()
-		}
-	case TokenNumber:
-		// Handle inline format: "commodity 1.000,00 USD" (number first, then symbol)
-		number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
-		p.advance()
-
-		if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
-			dir.Commodity = ast.Commodity{
-				Symbol: p.current.Value,
-				Quoted: p.current.Type == TokenQuotedCommodity,
-				Range: ast.Range{
-					Start: toASTPosition(p.current.Pos),
-					End:   toASTPosition(p.current.End),
-				},
-			}
-			dir.Format = number + " " + p.current.Value
-			p.advance()
-		}
-	case TokenText:
-		dir.Commodity = ast.Commodity{
-			Symbol: p.current.Value,
-			Range: ast.Range{
-				Start: toASTPosition(p.current.Pos),
-				End:   toASTPosition(p.current.End),
-			},
-		}
-		symbol := p.current.Value
-		p.advance()
-
-		// Word commodity before the number: "commodity USD 1000.00"
-		if p.current.Type == TokenNumber {
-			number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
-			dir.Format = symbol + " " + number
-			p.advance()
-		}
+	}
+	if spec.hasNumber {
+		number, formatPos, formatEnd = spec.number, spec.numberPos, spec.numberEnd
+		dir.Format = spec.format()
 	}
 
 	for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
@@ -1205,7 +1165,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	for _, line := range lines {
 		dir.Subdirs[line.name] = line.value
 	}
-	p.checkCommodityFormats(dir.Commodity.Symbol, hasInlineFormat, lines)
+	p.checkCommodityFormats(dir.Commodity.Symbol, spec.hasSymbol, hasInlineFormat, lines)
 
 	if format, ok := dir.Subdirs["format"]; ok {
 		dir.Format = format
@@ -1233,11 +1193,125 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	return dir
 }
 
+// commoditySpec is a commodity symbol and number as written after the
+// commodity keyword or in a format subdirective.
+type commoditySpec struct {
+	symbol               string
+	quoted               bool
+	hasSymbol            bool
+	symbolPos, symbolEnd Position
+	symbolFirst          bool
+	symbolBare           bool
+	trailing             bool
+	number               string
+	hasNumber            bool
+	numberPos, numberEnd Position
+}
+
+// format renders the spec the way the directive's Format field spells it.
+func (c commoditySpec) format() string {
+	switch {
+	case !c.hasSymbol:
+		return c.number
+	case c.symbolFirst && c.symbolBare:
+		return c.symbol + c.number
+	case c.symbolFirst:
+		return c.symbol + " " + c.number
+	}
+	return c.number + " " + c.symbol
+}
+
+// readCommoditySpec reads the symbol and number that follow a commodity keyword
+// or a format subdirective, in either order and with the symbol before or after
+// the number. A symbol glued from several adjacent tokens, such as "US$", is read
+// whole, which is how an amount in a posting reads it too. Anything after the
+// symbol and number is left unread.
+func (p *Parser) readCommoditySpec() commoditySpec {
+	var spec commoditySpec
+	for p.current.Type == TokenSign {
+		p.advance()
+	}
+
+	if isSymbolToken(p.current.Type) {
+		spec.symbolFirst = true
+		spec.symbolBare = isCommodityToken(p.current.Type)
+		p.readSymbolRun(&spec)
+		splitNumberFromSymbol(&spec)
+		for !spec.hasNumber && p.current.Type == TokenSign {
+			p.advance()
+		}
+		if !spec.hasNumber && p.current.Type == TokenNumber {
+			spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = p.current.Value, p.current.Pos, p.current.End, true
+			p.advance()
+		}
+	} else if p.current.Type == TokenNumber {
+		spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = p.current.Value, p.current.Pos, p.current.End, true
+		p.advance()
+		if isSymbolToken(p.current.Type) {
+			p.readSymbolRun(&spec)
+		}
+	}
+	spec.trailing = isSymbolToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign
+	return spec
+}
+
+// splitNumberFromSymbol separates a number that the lexer glued onto a word
+// symbol ("Rp1.000,00"). A commodity symbol never contains a digit.
+func splitNumberFromSymbol(spec *commoditySpec) {
+	if spec.quoted {
+		return
+	}
+	idx := strings.IndexFunc(spec.symbol, unicode.IsDigit)
+	if idx <= 0 {
+		return
+	}
+	spec.number = spec.symbol[idx:]
+	spec.numberPos = advancePosition(spec.symbolPos, spec.symbol[:idx])
+	spec.numberEnd = spec.symbolEnd
+	spec.hasNumber = true
+	spec.symbol = spec.symbol[:idx]
+	spec.symbolEnd = spec.numberPos
+}
+
+func isSymbolToken(t TokenType) bool {
+	return isCommodityToken(t) || t == TokenText
+}
+
+// readSymbolRun reads a commodity symbol, joining tokens that touch each other.
+func (p *Parser) readSymbolRun(spec *commoditySpec) {
+	spec.hasSymbol = true
+	spec.quoted = p.current.Type == TokenQuotedCommodity
+	spec.symbol = p.current.Value
+	spec.symbolPos, spec.symbolEnd = p.current.Pos, p.current.End
+	p.advance()
+	for !spec.quoted && p.current.Pos == spec.symbolEnd && (p.current.Type == TokenCommodity || p.current.Type == TokenText) {
+		spec.symbol += p.current.Value
+		spec.symbolEnd = p.current.End
+		p.advance()
+	}
+}
+
+// formatSpec reads the commodity symbol written in the value of a format
+// subdirective with the same rules as the commodity directive line. A digit group
+// separated by a Unicode space is read as one number, as hledger does.
+func formatSpec(value string) commoditySpec {
+	value = strings.Map(func(r rune) rune {
+		if r > unicode.MaxASCII && unicode.Is(unicode.Zs, r) && r != '\u3000' {
+			return ' '
+		}
+		return r
+	}, value)
+	sub := &Parser{lexer: NewLexer("commodity " + value + "\n")}
+	sub.advance()
+	sub.advance()
+	return sub.readCommoditySpec()
+}
+
 // checkCommodityFormats reports the subdirectives hledger refuses below a
 // commodity directive. A directive that already carries a format on its own
 // line takes no subdirectives at all, and the symbol of a format subdirective
 // must be the directive's symbol.
-func (p *Parser) checkCommodityFormats(symbol string, hasInlineFormat bool, lines []subdirectiveLine) {
+func (p *Parser) checkCommodityFormats(symbol string, hasSymbol, hasInlineFormat bool, lines []subdirectiveLine) {
 	if hasInlineFormat {
 		if len(lines) > 0 {
 			first := lines[0]
@@ -1247,62 +1321,30 @@ func (p *Parser) checkCommodityFormats(symbol string, hasInlineFormat bool, line
 		}
 		return
 	}
-	if symbol == "" {
+	if !hasSymbol {
 		return
 	}
 	for _, line := range lines {
 		if line.name != "format" {
 			continue
 		}
-		formatSymbol := symbolInFormat(line.value)
-		if formatSymbol == symbol {
+		spec := formatSpec(line.value)
+		if spec.trailing {
+			p.errorAt(line.valuePos, line.valueEnd,
+				"invalid format %q: expected a number and one commodity symbol", line.value)
 			continue
 		}
-		if formatSymbol == "" {
+		if spec.symbol == symbol {
+			continue
+		}
+		if !spec.hasSymbol {
 			p.errorAt(line.valuePos, line.valueEnd,
 				"format for commodity %q has no commodity symbol; it must use %q", symbol, symbol)
 			continue
 		}
 		p.errorAt(line.valuePos, line.valueEnd,
-			"commodity directive symbol %q and format directive symbol %q should be the same", symbol, formatSymbol)
+			"commodity directive symbol %q and format directive symbol %q should be the same", symbol, spec.symbol)
 	}
-}
-
-// symbolInFormat returns the commodity symbol written in a format such as
-// "1,000.00 EUR", "EUR 1,000.00", "$1000.00" or `1000.00 "A B"`, or "" when the
-// format has none.
-func symbolInFormat(format string) string {
-	format = strings.TrimLeft(strings.TrimSpace(format), "+-")
-	if strings.HasPrefix(format, `"`) {
-		if end := strings.Index(format[1:], `"`); end >= 0 {
-			return format[1 : 1+end]
-		}
-		return ""
-	}
-	if strings.HasSuffix(format, `"`) {
-		if start := strings.LastIndex(format[:len(format)-1], `"`); start >= 0 {
-			return format[start+1 : len(format)-1]
-		}
-		return ""
-	}
-	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' || r == '+' || r == '-' }
-	start := strings.IndexFunc(format, isNumberRune)
-	switch {
-	case start < 0:
-		return strings.TrimSpace(format)
-	case start > 0:
-		return strings.TrimSpace(format[:start])
-	}
-	end := 0
-	for end < len(format) {
-		r, size := utf8.DecodeRuneInString(format[end:])
-		spaceInNumber := r == ' ' && end+1 < len(format) && format[end+1] >= '0' && format[end+1] <= '9'
-		if !unicode.IsDigit(r) && r != '.' && r != ',' && !spaceInNumber {
-			break
-		}
-		end += size
-	}
-	return strings.TrimSpace(format[end:])
 }
 
 func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {

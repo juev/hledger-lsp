@@ -92,6 +92,23 @@ func TestParser_CommodityFormatSymbolAccepted(t *testing.T) {
 		"commodity X\n    ; comment\n    format 1000.00 X ; comment\n",
 		"commodity 1000.00 X\n    ; only a comment\n",
 		"commodity 1000.00 X\n",
+		"commodity US$\n    format US$1,000.00\n",
+		"commodity US$\n    format US$ 1,000.00\n",
+		"commodity US$\n    format 1,000.00 US$\n",
+		"commodity HK$\n    format HK$1,000.00\n",
+		"commodity GB£\n    format GB£1000.00\n",
+		"commodity €X\n    format €X1,000.00\n",
+		"commodity X€\n    format X€ 1000.00\n",
+		"commodity $X\n    format $X 1000.00\n",
+		"commodity R$\n    format R$ 1.000,00\n",
+		"commodity Rp\n    format Rp1.000,00\n",
+		"commodity EUR\n    format 1 000,00 EUR\n",
+		"commodity EUR\n    format 1\u202f000,00 EUR\n",
+		"commodity EUR\n    format 1\u00a0000,00 EUR\n",
+		"commodity лв\n    format 1 000,00 лв\n",
+		"commodity EUR\n    format - 1000.00 EUR\n",
+		"commodity EUR\n    format 1000.00 EUR @ 2 USD\n",
+		"commodity \"\"\n    format 1000.00 \"\"\n",
 	} {
 		_, errs := Parse(input)
 		assert.Empty(t, errs, input)
@@ -139,4 +156,19 @@ func TestParser_CommodityFormatDiagnosticsDoNotBreakFollowingDirectives(t *testi
 	journal, errs := Parse("commodity X\n    format 1000.00 Y\n\n2024-01-01 x\n    a  1 X\n    b\n")
 	require.Len(t, errs, 1)
 	assert.Len(t, journal.Transactions, 1)
+}
+
+func TestParser_CommodityFormatGluedSymbolMismatch(t *testing.T) {
+	tests := []struct{ input, message string }{
+		{"commodity US$\n    format US 1,000.00\n", `commodity directive symbol "US$" and format directive symbol "US" should be the same`},
+		{"commodity US$\n    format $1,000.00\n", `commodity directive symbol "US$" and format directive symbol "$" should be the same`},
+		{"commodity US\n    format US$1,000.00\n", `commodity directive symbol "US" and format directive symbol "US$" should be the same`},
+		{"commodity \"\"\n    format 1000.00 X\n", `commodity directive symbol "" and format directive symbol "X" should be the same`},
+		{"commodity X\n    format 1000.00 X Y\n", `invalid format "1000.00 X Y": expected a number and one commodity symbol`},
+	}
+	for _, tt := range tests {
+		_, errs := Parse(tt.input)
+		require.Len(t, errs, 1, tt.input)
+		assert.Equal(t, tt.message, errs[0].Message)
+	}
 }
