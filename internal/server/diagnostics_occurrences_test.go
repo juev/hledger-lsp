@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -358,4 +359,92 @@ func TestIncludeLabel_NamesTheDirectiveAndNothingForTheRoot(t *testing.T) {
 	occurrences := trees[0].Resolved.OccurrencesForPath(filepath.Join(dir, "child.journal"))
 	require.Len(t, occurrences, 1)
 	assert.Equal(t, "main.journal:2", includeLabel(occurrences[0]))
+}
+
+// An edit of an open included file that nobody saved is part of the journal the
+// root is checked against, as it is for hledger reading the file.
+func TestPublishDiagnostics_RootSeesUnsavedEditOfOpenIncludedFile(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	mainText := "include shared.journal\n\n2024-12-31 check\n    assets:cash   0 EUR = 100 EUR\n    equity\n"
+	shared := "2024-01-01 seed\n    assets:cash   100 EUR\n    equity\n"
+	edited := "2024-01-01 seed\n    assets:cash   50 EUR\n    equity\n"
+
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"main.journal": mainText, "shared.journal": shared})
+	ts := initWorkspaceTestServer(t, dir)
+	mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+	require.NoError(t, ts.openDocument(mainURI, mainText))
+	require.NoError(t, ts.openDocument(sharedURI, shared))
+	require.Eventually(t, func() bool { return len(lastSet(ts, mainURI)) == 0 && len(publishedSets(ts, mainURI)) > 0 }, 2*time.Second, 10*time.Millisecond)
+
+	_, err := ts.replaceAndWait(sharedURI, edited)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return len(lastSet(ts, mainURI)) == 1 }, 2*time.Second, 10*time.Millisecond,
+		"main.journal shows %v", lastSet(ts, mainURI))
+	assert.Contains(t, lastSet(ts, mainURI)[0], "asserted 100 EUR, calculated 50 EUR")
+}
+
+// A closed file keeps the problem another root still has when the first root is
+// fixed: its set is computed from all the trees that contain it.
+func TestPublishDiagnostics_ClosedFileKeepsTheProblemOfTheOtherRoot(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-02 x\n    expenses:food   10 EUR\n    assets:cash   -10 EUR = -10 EUR\n"
+	root := func(opening string) string {
+		return "2024-01-01 open\n    assets:cash   " + opening + " EUR\n    equity\n\ninclude shared.journal\n"
+	}
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{"a-root.journal": root("100"), "b-root.journal": root("50"), "shared.journal": shared})
+	ts := initWorkspaceTestServer(t, dir)
+	aURI, sharedURI := uri.File(filepath.Join(dir, "a-root.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+
+	require.NoError(t, ts.openDocument(aURI, root("100")))
+	require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 2 }, 2*time.Second, 10*time.Millisecond,
+		"shared.journal shows %v", lastSet(ts, sharedURI))
+
+	_, err := ts.replaceAndWait(aURI, root("0"))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		set := lastSet(ts, sharedURI)
+		return len(set) == 1 && strings.Contains(set[0], "b-root.journal")
+	}, 2*time.Second, 10*time.Millisecond, "shared.journal shows %v", lastSet(ts, sharedURI))
+}
+
+// Without a workspace every publish loads the document on its own; the verdicts
+// of the loads before it must not pile up.
+func TestPublishDiagnostics_VerdictsDoNotAccumulateWithoutAWorkspace(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///lone.journal")
+	text := func(n int) string {
+		return fmt.Sprintf("2024-01-01 x\n    expenses:food   %d EUR\n    assets:cash\n", n)
+	}
+	require.NoError(t, ts.openDocument(docURI, text(0)))
+	for n := 1; n <= 30; n++ {
+		_, err := ts.replaceAndWait(docURI, text(n))
+		require.NoError(t, err)
+	}
+	require.Eventually(t, func() bool { return len(publishedSets(ts, docURI)) >= 30 }, 2*time.Second, 10*time.Millisecond)
+
+	ts.journalDiagMu.Lock()
+	defer ts.journalDiagMu.Unlock()
+	assert.LessOrEqual(t, len(ts.journalDiag), 1)
+}
+
+// Closing a file drops what the server remembers about its publishes.
+func TestDidClose_ForgetsWhatWasPublishedForTheDocument(t *testing.T) {
+	ts := newTestServer()
+	docURI := uri.URI("file:///lone.journal")
+	text := "2024-01-01 x\n    expenses:food   10 EUR\n    assets:cash   -5 EUR\n"
+	_, err := ts.openAndWait(docURI, text)
+	require.NoError(t, err)
+	require.NotEmpty(t, lastSet(ts, docURI), "the unbalanced transaction is reported")
+
+	require.NoError(t, ts.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{TextDocument: protocol.TextDocumentIdentifier{URI: docURI}}))
+
+	assert.Empty(t, lastSet(ts, docURI))
+	ts.publishedMu.Lock()
+	defer ts.publishedMu.Unlock()
+	assert.NotContains(t, ts.published, docURI)
+	assert.NotContains(t, ts.affected, docURI)
 }
