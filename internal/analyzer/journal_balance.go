@@ -76,13 +76,16 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 	return total
 }
 
-// otherCommodities returns the balances held by an account (and, for inclusive
-// assertions, its subaccounts) in commodities other than the asserted one, in a
-// stable order. hledger's `==` form requires these to be empty, and any non-zero
-// balance counts, however small: assertions are exact.
+// otherCommodities returns what an account holds in commodities other than the
+// asserted one, in a stable order, as hledger's `==` form checks it. The
+// commodities checked are those the account itself has an entry in, even one that
+// has netted to zero; for an inclusive assertion each is totalled with the
+// subaccounts, so a subaccount can offset the account's own balance but a
+// commodity only a subaccount holds is not looked at. Any non-zero balance
+// counts, however small: assertions are exact.
 func (b accountBalances) otherCommodities(account, except string, inclusive bool) []string {
 	var result []string
-	for commodity := range b.heldCommodities(account, inclusive) {
+	for commodity := range b[account] {
 		quantity := b.amount(account, commodity, inclusive)
 		if commodity == except || quantity.IsZero() {
 			continue
@@ -107,6 +110,38 @@ func (b accountBalances) heldCommodities(account string, inclusive bool) map[str
 		}
 	}
 	return held
+}
+
+// settleAssignment leaves an account with the commodity entries hledger gives it
+// after a balance assignment, once the assigned amount has been added. hledger
+// replaces the account's own balance rather than adding to it: an inclusive
+// assignment computes it from what the subaccounts hold, so the account gets an
+// entry, possibly zero, in each of their commodities, and a strict one keeps no
+// other entry, the assigned amount having emptied it. A strict assertion checks
+// the commodities the account has an entry in, so these entries decide what a
+// later one looks at.
+func (b accountBalances) settleAssignment(account string, assertion *ast.BalanceAssertion) {
+	keep := map[string]bool{assertion.Amount.Commodity.Symbol: true}
+	if assertion.IsInclusive {
+		prefix := account + ":"
+		for name, byCommodity := range b {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			for commodity := range byCommodity {
+				keep[commodity] = true
+				b.add(account, commodity, decimal.Zero)
+			}
+		}
+	}
+	if !assertion.IsStrict {
+		return
+	}
+	for commodity := range b[account] {
+		if !keep[commodity] {
+			delete(b[account], commodity)
+		}
+	}
 }
 
 // pricedKey identifies an amount that was written with a cost the way hledger
@@ -598,6 +633,9 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 		step := func(postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
+			if posting.Amount == nil && posting.BalanceAssertion != nil {
+				e.balances.settleAssignment(posting.Account.GetResolvedName(), posting.BalanceAssertion)
+			}
 			if e.observe != nil {
 				e.observe(event.sourceOrder, postingIndex, contribution, priced)
 			}
