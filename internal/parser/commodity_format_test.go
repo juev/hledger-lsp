@@ -1,10 +1,13 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/juev/hledger-lsp/internal/ast"
 )
 
 func TestParser_CommodityFormatSymbolMustMatchCommodity(t *testing.T) {
@@ -109,6 +112,28 @@ func TestParser_CommodityFormatSymbolAccepted(t *testing.T) {
 		"commodity EUR\n    format - 1000.00 EUR\n",
 		"commodity EUR\n    format 1000.00 EUR @ 2 USD\n",
 		"commodity \"\"\n    format 1000.00 \"\"\n",
+		"commodity EUR\n    format -EUR 1000.00\n",
+		"commodity US$\n    format -US$1,000.00\n",
+		"commodity US$\n    format - US$1,000.00\n",
+		"commodity $\n    format - $1,000.00\n",
+		"commodity $\n    format + $1,000.00\n",
+		"commodity €\n    format - €1.000,00\n",
+		"commodity Rp\n    format Rp-1.000,00\n",
+		"commodity €X\n    format €X-1000.00\n",
+		"commodity $\n    format $.50\n",
+		"commodity $\n    format -$.50\n",
+		"commodity EUR\n    format .50 EUR\n",
+		"commodity EUR\n    format EUR.50\n",
+		"commodity EUR\n    format EUR .50\n",
+		"commodity $\n    format $ .50\n",
+		"commodity US$\n    format US$.50\n",
+		"commodity Rp\n    format Rp.50\n",
+		"commodity \"10 Year Bond\"\n    format -\"10 Year Bond\" 1000.00\n",
+		"commodity \"A B\"\n    format -\"A B\"1000.00\n",
+		"commodity EUR\n    format 1.5E3 EUR\n",
+		"commodity EUR\n    format 1\u2009000,00 EUR\n",
+		"commodity EUR\n    format 1000,00\u00a0EUR\n",
+		"commodity EUR\n    format 1000,00\u2007EUR\n",
 	} {
 		_, errs := Parse(input)
 		assert.Empty(t, errs, input)
@@ -170,5 +195,65 @@ func TestParser_CommodityFormatGluedSymbolMismatch(t *testing.T) {
 		_, errs := Parse(tt.input)
 		require.Len(t, errs, 1, tt.input)
 		assert.Equal(t, tt.message, errs[0].Message)
+	}
+}
+
+func TestParser_CommodityFormatUnicodeSpaces(t *testing.T) {
+	// Accepted and rejected sets were read off hledger 1.52.4: a digit group
+	// takes a fixed set of spaces, a symbol written before the number takes none.
+	for _, sp := range []string{"\u00a0", "\u2002", "\u2003", "\u2008", "\u2009", "\u202f", "\u205f"} {
+		_, errs := Parse("commodity EUR\n    format 1" + sp + "000,00 EUR\n")
+		assert.Empty(t, errs, "digit group space %U", []rune(sp)[0])
+	}
+	for _, sp := range []string{"\u1680", "\u2000", "\u2001", "\u2004", "\u2005", "\u2006", "\u2007", "\u200a", "\u3000"} {
+		_, errs := Parse("commodity EUR\n    format 1" + sp + "000,00 EUR\n")
+		assert.NotEmpty(t, errs, "digit group space %U", []rune(sp)[0])
+	}
+	for _, sp := range []string{"\u00a0", "\u2007", "\u3000"} {
+		_, errs := Parse("commodity EUR\n    format EUR" + sp + "1000,00\n")
+		assert.NotEmpty(t, errs, "space after the symbol %U", []rune(sp)[0])
+		_, errs = Parse("commodity EUR\n    format 1000,00" + sp + "EUR\n")
+		assert.Empty(t, errs, "space before the symbol %U", []rune(sp)[0])
+	}
+}
+
+func TestParser_CommodityDirectiveLineReadsLeadingDecimalMark(t *testing.T) {
+	tests := []struct {
+		directive string
+		qty       string
+	}{
+		{"commodity $1.000,00\ncommodity $.50\n", "1.234"},
+		{"commodity 1.000,00 EUR\ncommodity EUR.50\n", "1.234"},
+		{"commodity $1.000,00\ncommodity .50 $\n", "1.234"},
+		{"commodity $1.000,00\ncommodity $ .50\n", "1.234"},
+		{"commodity $1.000,00\n", "1234"},
+	}
+	for _, tt := range tests {
+		sym := "$"
+		if strings.Contains(tt.directive, "EUR") {
+			sym = "EUR"
+		}
+		journal, errs := Parse(tt.directive + "2024-01-02 t\n    a  " + sym + "1.234\n    c\n")
+		require.Empty(t, errs, tt.directive)
+		assert.Equal(t, tt.qty, journal.Transactions[0].Postings[0].Amount.Quantity.String(), tt.directive)
+	}
+}
+
+func TestParser_CommodityDirectiveFormatKeepsWrittenSpacing(t *testing.T) {
+	tests := []struct{ directive, format string }{
+		{"commodity US$1.000,00\n", "US$1.000,00"},
+		{"commodity US$ 1.000,00\n", "US$ 1.000,00"},
+		{"commodity $1,000.00\n", "$1,000.00"},
+		{"commodity 1.000,00 US$\n", "1.000,00 US$"},
+		{"commodity EUR 1.000,00\n", "EUR 1.000,00"},
+		{"commodity \"A B\" 1.000,00\n", "A B 1.000,00"},
+	}
+	for _, tt := range tests {
+		journal, errs := Parse(tt.directive)
+		require.Empty(t, errs, tt.directive)
+		require.Len(t, journal.Directives, 1)
+		dir, ok := journal.Directives[0].(ast.CommodityDirective)
+		require.True(t, ok)
+		assert.Equal(t, tt.format, dir.Format, tt.directive)
 	}
 }

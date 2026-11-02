@@ -1136,7 +1136,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	var number string
 	formatPos, formatEnd := startPos, startPos
 
-	spec := p.readCommoditySpec()
+	spec := parseCommodityText(p.directiveLineText(), p.current.Pos)
 	if spec.hasSymbol {
 		dir.Commodity = ast.Commodity{
 			Symbol: spec.symbol,
@@ -1201,19 +1201,21 @@ type commoditySpec struct {
 	hasSymbol            bool
 	symbolPos, symbolEnd Position
 	symbolFirst          bool
-	symbolBare           bool
-	trailing             bool
 	number               string
 	hasNumber            bool
 	numberPos, numberEnd Position
+	// trailing is set when something other than a price, an assertion or a
+	// comment follows the symbol and number.
+	trailing bool
 }
 
-// format renders the spec the way the directive's Format field spells it.
+// format renders the spec the way the directive's Format field spells it: the
+// symbol keeps the distance from the number it was written with.
 func (c commoditySpec) format() string {
 	switch {
 	case !c.hasSymbol:
 		return c.number
-	case c.symbolFirst && c.symbolBare:
+	case c.symbolFirst && c.numberPos == c.symbolEnd:
 		return c.symbol + c.number
 	case c.symbolFirst:
 		return c.symbol + " " + c.number
@@ -1221,90 +1223,157 @@ func (c commoditySpec) format() string {
 	return c.number + " " + c.symbol
 }
 
-// readCommoditySpec reads the symbol and number that follow a commodity keyword
-// or a format subdirective, in either order and with the symbol before or after
-// the number. A symbol glued from several adjacent tokens, such as "US$", is read
-// whole, which is how an amount in a posting reads it too. Anything after the
-// symbol and number is left unread.
-func (p *Parser) readCommoditySpec() commoditySpec {
+// directiveLineText returns the text of the current directive line from the
+// current token, up to a comment or the end of the line.
+func (p *Parser) directiveLineText() string {
+	if p.current.Type == TokenNewline || p.current.Type == TokenEOF || p.current.Type == TokenComment {
+		return ""
+	}
+	rest := p.lexer.input[p.current.Pos.Offset:]
+	if end := strings.IndexAny(rest, ";\n"); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+// isNumberStart reports whether a number begins at text[i]: a digit, or a
+// decimal point followed by a digit.
+func isNumberStart(text string, i int) bool {
+	if i >= len(text) {
+		return false
+	}
+	if text[i] >= '0' && text[i] <= '9' {
+		return true
+	}
+	return text[i] == '.' && i+1 < len(text) && text[i+1] >= '0' && text[i+1] <= '9'
+}
+
+// isSymbolRune reports whether r can be part of an unquoted commodity symbol.
+// Only ASCII whitespace ends a symbol: hledger reads a symbol such as "EUR" and a
+// non-breaking space after it as one symbol.
+func isSymbolRune(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\r', '-', '+', '.', '@', '*', ';', '"', '{', '}', '=':
+		return false
+	}
+	return r < '0' || r > '9'
+}
+
+// digitGroupSpace reports whether r separates digit groups inside a number. The
+// set is the one hledger accepts, found by probing it: ASCII space, no-break
+// space, en space, em space, punctuation space, thin space, narrow no-break
+// space and medium mathematical space.
+func digitGroupSpace(r rune) bool {
+	switch r {
+	case ' ', '\u00a0', '\u2002', '\u2003', '\u2008', '\u2009', '\u202f', '\u205f':
+		return true
+	}
+	return false
+}
+
+// parseCommodityText reads the symbol and number of a commodity directive line
+// or of a format subdirective: the symbol before or after the number, an
+// optional sign, a quoted or unquoted symbol and a number that may omit its
+// integer part. Anything after the symbol and number is left unread. start is
+// the position of text[0].
+func parseCommodityText(text string, start Position) commoditySpec {
 	var spec commoditySpec
-	for p.current.Type == TokenSign {
-		p.advance()
+	at := func(i int) Position { return advancePosition(start, text[:i]) }
+	skipSpaces := func(i int) int {
+		for i < len(text) && text[i] == ' ' {
+			i++
+		}
+		return i
+	}
+	// hledger allows any Unicode space around a number but only ASCII space
+	// next to a symbol written before it.
+	skipGap := func(i int) int {
+		for i < len(text) {
+			r, size := utf8.DecodeRuneInString(text[i:])
+			if r != ' ' && !unicode.Is(unicode.Zs, r) {
+				break
+			}
+			i += size
+		}
+		return i
+	}
+	skipSign := func(i int) int {
+		if i < len(text) && (text[i] == '-' || text[i] == '+') {
+			return skipSpaces(i + 1)
+		}
+		return i
+	}
+	readNumber := func(i int) int {
+		for i < len(text) {
+			r, size := utf8.DecodeRuneInString(text[i:])
+			next, _ := utf8.DecodeRuneInString(text[min(i+size, len(text)):])
+			switch {
+			case r >= '0' && r <= '9', r == '.', r == ',':
+			case digitGroupSpace(r) && next >= '0' && next <= '9':
+			case (r == 'e' || r == 'E') && i > 0 && (next >= '0' && next <= '9' || ((next == '-' || next == '+') && i+size+1 < len(text) && text[i+size+1] >= '0' && text[i+size+1] <= '9')):
+				i += size
+				if next == '-' || next == '+' {
+					i++
+				}
+				continue
+			default:
+				return i
+			}
+			i += size
+		}
+		return i
+	}
+	readSymbol := func(i int) int {
+		begin := i
+		if i < len(text) && text[i] == '"' {
+			end := strings.IndexByte(text[i+1:], '"')
+			if end < 0 {
+				return begin
+			}
+			spec.hasSymbol, spec.quoted = true, true
+			spec.symbol = text[i+1 : i+1+end]
+			spec.symbolPos, spec.symbolEnd = at(i), at(i+end+2)
+			return i + end + 2
+		}
+		for i < len(text) {
+			r, size := utf8.DecodeRuneInString(text[i:])
+			if !isSymbolRune(r) {
+				break
+			}
+			i += size
+		}
+		if i > begin {
+			spec.hasSymbol = true
+			spec.symbol = text[begin:i]
+			spec.symbolPos, spec.symbolEnd = at(begin), at(i)
+		}
+		return i
 	}
 
-	if isSymbolToken(p.current.Type) {
+	i := skipSign(skipGap(0))
+	if isNumberStart(text, i) {
+		end := readNumber(i)
+		spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = text[i:end], at(i), at(end), true
+		i = readSymbol(skipGap(end))
+	} else {
 		spec.symbolFirst = true
-		spec.symbolBare = isCommodityToken(p.current.Type)
-		p.readSymbolRun(&spec)
-		splitNumberFromSymbol(&spec)
-		for !spec.hasNumber && p.current.Type == TokenSign {
-			p.advance()
-		}
-		if !spec.hasNumber && p.current.Type == TokenNumber {
-			spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = p.current.Value, p.current.Pos, p.current.End, true
-			p.advance()
-		}
-	} else if p.current.Type == TokenNumber {
-		spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = p.current.Value, p.current.Pos, p.current.End, true
-		p.advance()
-		if isSymbolToken(p.current.Type) {
-			p.readSymbolRun(&spec)
+		i = readSymbol(i)
+		if spec.hasSymbol {
+			i = skipSign(skipSpaces(i))
+			if isNumberStart(text, i) {
+				end := readNumber(i)
+				spec.number, spec.numberPos, spec.numberEnd, spec.hasNumber = text[i:end], at(i), at(end), true
+				i = end
+			}
 		}
 	}
-	spec.trailing = isSymbolToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign
+
+	rest := strings.TrimLeft(text[i:], " ")
+	spec.trailing = rest != "" && !strings.ContainsRune("@={([", rune(rest[0]))
+	if spec.hasNumber && strings.HasPrefix(spec.number, ".") && !isLeadingDecimalNumber(spec.number) {
+		spec.trailing = true
+	}
 	return spec
-}
-
-// splitNumberFromSymbol separates a number that the lexer glued onto a word
-// symbol ("Rp1.000,00"). A commodity symbol never contains a digit.
-func splitNumberFromSymbol(spec *commoditySpec) {
-	if spec.quoted {
-		return
-	}
-	idx := strings.IndexFunc(spec.symbol, unicode.IsDigit)
-	if idx <= 0 {
-		return
-	}
-	spec.number = spec.symbol[idx:]
-	spec.numberPos = advancePosition(spec.symbolPos, spec.symbol[:idx])
-	spec.numberEnd = spec.symbolEnd
-	spec.hasNumber = true
-	spec.symbol = spec.symbol[:idx]
-	spec.symbolEnd = spec.numberPos
-}
-
-func isSymbolToken(t TokenType) bool {
-	return isCommodityToken(t) || t == TokenText
-}
-
-// readSymbolRun reads a commodity symbol, joining tokens that touch each other.
-func (p *Parser) readSymbolRun(spec *commoditySpec) {
-	spec.hasSymbol = true
-	spec.quoted = p.current.Type == TokenQuotedCommodity
-	spec.symbol = p.current.Value
-	spec.symbolPos, spec.symbolEnd = p.current.Pos, p.current.End
-	p.advance()
-	for !spec.quoted && p.current.Pos == spec.symbolEnd && (p.current.Type == TokenCommodity || p.current.Type == TokenText) {
-		spec.symbol += p.current.Value
-		spec.symbolEnd = p.current.End
-		p.advance()
-	}
-}
-
-// formatSpec reads the commodity symbol written in the value of a format
-// subdirective with the same rules as the commodity directive line. A digit group
-// separated by a Unicode space is read as one number, as hledger does.
-func formatSpec(value string) commoditySpec {
-	value = strings.Map(func(r rune) rune {
-		if r > unicode.MaxASCII && unicode.Is(unicode.Zs, r) && r != '\u3000' {
-			return ' '
-		}
-		return r
-	}, value)
-	sub := &Parser{lexer: NewLexer("commodity " + value + "\n")}
-	sub.advance()
-	sub.advance()
-	return sub.readCommoditySpec()
 }
 
 // checkCommodityFormats reports the subdirectives hledger refuses below a
@@ -1328,7 +1397,7 @@ func (p *Parser) checkCommodityFormats(symbol string, hasSymbol, hasInlineFormat
 		if line.name != "format" {
 			continue
 		}
-		spec := formatSpec(line.value)
+		spec := parseCommodityText(line.value, line.valuePos)
 		if spec.trailing {
 			p.errorAt(line.valuePos, line.valueEnd,
 				"invalid format %q: expected a number and one commodity symbol", line.value)
@@ -2227,6 +2296,10 @@ func numberDecimalMark(number, inForce string) string {
 	last := strings.LastIndexAny(number, ".,")
 	if last < 0 {
 		return ""
+	}
+	if strings.HasPrefix(number, ".") {
+		// A number without an integer part always uses "." as its mark.
+		return "."
 	}
 	mark := number[last : last+1]
 	if isAmbiguousNumber(number) {
