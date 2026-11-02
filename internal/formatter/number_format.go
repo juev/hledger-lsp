@@ -161,7 +161,9 @@ func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 			}
 		}
 	} else {
-		str = qty.Round(0).String()
+		// A format without a decimal mark must not round: hledger keeps every
+		// digit written in the journal, and formatting cannot change a value.
+		str = qty.String()
 	}
 
 	parts := strings.Split(str, ".")
@@ -177,6 +179,7 @@ func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 		intPart = intPart[1:]
 	}
 
+	loneGroupMark := false
 	if format.ThousandsSep != "" && len(intPart) > 3 {
 		var groups []string
 		for len(intPart) > 3 {
@@ -187,6 +190,7 @@ func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 			groups = append([]string{intPart}, groups...)
 		}
 		intPart = strings.Join(groups, format.ThousandsSep)
+		loneGroupMark = len(groups) == 2 && format.ThousandsSep != " "
 	}
 
 	var result strings.Builder
@@ -195,9 +199,14 @@ func FormatNumber(qty decimal.Decimal, format NumberFormat) string {
 	}
 	result.WriteString(intPart)
 
-	if format.HasDecimal && (format.DecimalPlaces > 0 || len(decPart) > 0) {
+	switch {
+	case len(decPart) > 0 || format.HasDecimal && format.DecimalPlaces > 0:
 		result.WriteRune(format.DecimalMark)
 		result.WriteString(decPart)
+	case loneGroupMark:
+		// `1,234` alone could be read as a decimal number, so hledger prints
+		// `1,234.` to keep the digit group a digit group.
+		result.WriteRune(format.DecimalMark)
 	}
 
 	return result.String()

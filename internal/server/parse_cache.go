@@ -8,6 +8,7 @@ import (
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/parser"
 )
 
@@ -19,7 +20,11 @@ import (
 // while the content does not, so it is guarded by its own mutex and replaced
 // when they change.
 type cachedDoc struct {
-	content      string
+	content string
+	// resolved is the include tree the content was read under. The tree decides
+	// what an ambiguous number means, so it is part of the key: editing an
+	// included file changes the parse of a document whose text did not move.
+	resolved     *include.ResolvedJournal
 	journal      *ast.Journal
 	parseErrs    []parser.ParseError
 	balancesOnce sync.Once
@@ -86,23 +91,38 @@ func (s *Server) cachedPostingEffects(docURI uri.URI, content string) []analyzer
 }
 
 // cachedParse returns the parse result for content, reparsing only when the
-// document's cached content differs. The cache is keyed by URI and validated by
-// content identity, so a caller always receives a journal parsed from exactly
-// the content it passed; invalidation is automatic on content change.
-//
-// The parse itself comes from the loader's content-keyed cache, which the
-// workspace index reads too: a version of a document is parsed once, not once
-// per consumer.
+// document's cached content or include tree differs. The cache is keyed by URI
+// and validated by identity, so a caller always receives a journal parsed from
+// exactly the content it passed; invalidation is automatic on either change.
 func (s *Server) cachedParse(docURI uri.URI, content string) *cachedDoc {
+	resolved := s.getWorkspaceResolved(docURI)
 	if v, ok := s.parseCache.Load(docURI); ok {
-		if doc, ok := v.(*cachedDoc); ok && doc.content == content {
+		if doc, ok := v.(*cachedDoc); ok && doc.content == content && doc.resolved == resolved {
 			return doc
 		}
 	}
-	journal, parseErrs := s.loader.ParseCached(content)
-	doc := &cachedDoc{content: content, journal: journal, parseErrs: parseErrs}
+	journal, parseErrs := s.parseDocument(docURI, content, resolved)
+	doc := &cachedDoc{content: content, resolved: resolved, journal: journal, parseErrs: parseErrs}
 	s.parseCache.Store(docURI, doc)
 	return doc
+}
+
+// parseDocument reads content the way hledger reads the file: with the include
+// context of its first occurrence, the same occurrence
+// commodityFormatsForDocument takes its formats from. Read without that context
+// `15,000` is 15 even when an include declares `.` as the decimal mark, and every
+// balance, hint and rewritten number built on it is wrong.
+//
+// A document outside any include tree has no context to apply. Its parse comes
+// from the loader's content-keyed cache, which the workspace index reads too.
+func (s *Server) parseDocument(docURI uri.URI, content string, resolved *include.ResolvedJournal) (*ast.Journal, []parser.ParseError) {
+	if resolved != nil {
+		occurrenceID := firstOccurrenceIDForPath(resolved, uriToPath(docURI))
+		if journal, parseErrs, ok := resolved.ParseOccurrence(occurrenceID, content); ok {
+			return journal, parseErrs
+		}
+	}
+	return s.loader.ParseCached(content)
 }
 
 // cachedJournal returns the cached parsed journal and parse errors for content.

@@ -26,6 +26,8 @@ const (
 	CodeExpectedAccount   = "EXPECTED_ACCOUNT"
 	CodeUnknownDirective  = "UNKNOWN_DIRECTIVE"
 	CodeMalformedInclude  = "MALFORMED_INCLUDE"
+
+	missingDecimalMarkMessage = "commodity format needs a decimal mark, such as 1000.00 or 1.000,00 (1000. and 1000, also work)"
 )
 
 // defaultYearForPartialDates supplies the year hledger assumes when a date is
@@ -812,7 +814,15 @@ func (p *Parser) parseAmount() *ast.Amount {
 	// style of the commodity it inherits: `D 1.000,00 RUB` makes `1.234` mean
 	// 1234 even when `commodity 1,000.00 RUB` declares a different style for
 	// explicitly written RUB amounts (hledger 1.52.4).
-	mark := p.resolveDecimalMark(amount.Commodity.WrittenSymbol())
+	//
+	// A declared decimal mark only settles a number that could be read either
+	// way. `1.234,50` and `1 500,50` say which mark they use, and hledger takes
+	// them at their word whatever the commodity declares.
+	amount.DecimalMark = p.resolveDecimalMark(amount.Commodity.WrittenSymbol())
+	mark := ""
+	if isAmbiguousNumber(rawTokenValue) {
+		mark = amount.DecimalMark
+	}
 	numberStr = normalizeNumber(numberStr, mark)
 
 	qty, err := decimal.NewFromString(numberStr)
@@ -1100,6 +1110,11 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
 
+	// The written number decides the decimal mark. A `format` subdirective
+	// replaces it below, and has no token of its own to report against.
+	var number string
+	formatPos, formatEnd := startPos, startPos
+
 	// Handle inline format: "commodity $1000.00" (symbol first, then number)
 	switch p.current.Type {
 	case TokenCommodity, TokenQuotedCommodity:
@@ -1116,12 +1131,13 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 		// Collect number part for format (no space for currency symbols)
 		if p.current.Type == TokenNumber {
-			dir.Format = symbol + p.current.Value
+			number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
+			dir.Format = symbol + number
 			p.advance()
 		}
 	case TokenNumber:
 		// Handle inline format: "commodity 1.000,00 USD" (number first, then symbol)
-		number := p.current.Value
+		number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
 		p.advance()
 
 		if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
@@ -1144,7 +1160,15 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 				End:   toASTPosition(p.current.End),
 			},
 		}
+		symbol := p.current.Value
 		p.advance()
+
+		// Word commodity before the number: "commodity USD 1000.00"
+		if p.current.Type == TokenNumber {
+			number, formatPos, formatEnd = p.current.Value, p.current.Pos, p.current.End
+			dir.Format = symbol + " " + number
+			p.advance()
+		}
 	}
 
 	for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
@@ -1158,15 +1182,24 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 	if format, ok := dir.Subdirs["format"]; ok {
 		dir.Format = format
+		number = numberInFormat(format, dir.Commodity.Symbol)
+		formatEnd = p.current.Pos
 	}
 	if note, ok := dir.Subdirs["note"]; ok {
 		dir.Note = note
 	}
 
-	if dir.Format != "" && dir.Commodity.Symbol != "" {
-		if mark := inferDecimalMarkFromFormat(dir.Format); mark != "" {
+	if number != "" {
+		mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol))
+		if mark == "" {
+			p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
+		} else {
 			p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
 		}
+	} else if dir.Commodity.Symbol != "" {
+		// A declaration without a format resets the style. The empty mark, rather
+		// than a deleted entry, is what lets the reset leave an included file.
+		p.commodityDecimalMarks[dir.Commodity.Symbol] = ""
 	}
 
 	dir.Range.End = toASTPosition(p.current.Pos)
@@ -1308,6 +1341,7 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 	}
 
 	var numberStr string
+	numberPos, numberEnd := startPos, startPos
 
 	switch p.current.Type {
 	case TokenCommodity, TokenQuotedCommodity:
@@ -1316,7 +1350,7 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		p.advance()
 
 		if p.current.Type == TokenNumber {
-			numberStr = p.current.Value
+			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
 			dir.Format = symbol + numberStr
 			p.advance()
 		}
@@ -1327,13 +1361,13 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		p.advance()
 
 		if p.current.Type == TokenNumber {
-			numberStr = p.current.Value
+			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
 			dir.Symbol = symbol
 			dir.Format = symbol + " " + numberStr
 			p.advance()
 		}
 	case TokenNumber:
-		numberStr = p.current.Value
+		numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
 		p.advance()
 
 		if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
@@ -1353,10 +1387,10 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		p.defaultCommoditySymbol = dir.Symbol
 		p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
 
-		if !p.decimalMarkExplicit {
-			if mark := inferDecimalMark(numberStr); mark != "" {
-				p.defaultCommodityDecimalMark = mark
-			}
+		if mark := numberDecimalMark(numberStr, p.resolveDecimalMark(dir.Symbol)); mark == "" {
+			p.errorAt(numberPos, numberEnd, missingDecimalMarkMessage)
+		} else {
+			p.defaultCommodityDecimalMark = mark
 		}
 	}
 
@@ -1957,44 +1991,65 @@ func toASTPosition(pos Position) ast.Position {
 	}
 }
 
+// resolveDecimalMark returns the decimal mark in force for a commodity, the way
+// hledger picks one: a decimal-mark directive wins, then the commodity's own
+// style, then the style of the D directive, which is the fallback for every
+// commodity and not only the one it names. "" means nothing is declared.
 func (p *Parser) resolveDecimalMark(commodity string) string {
 	if p.decimalMarkExplicit {
 		return p.decimalMark
 	}
-	if commodity != "" {
-		if mark, ok := p.commodityDecimalMarks[commodity]; ok {
-			return mark
-		}
-		if commodity == p.defaultCommoditySymbol {
-			return p.defaultCommodityDecimalMark
-		}
-		return ""
+	if mark := p.commodityDecimalMarks[commodity]; mark != "" {
+		return mark
 	}
 	return p.defaultCommodityDecimalMark
 }
 
-func inferDecimalMarkFromFormat(format string) string {
-	var numberPart strings.Builder
-	for _, r := range format {
-		if r >= '0' && r <= '9' || r == '.' || r == ',' {
-			numberPart.WriteRune(r)
-		}
-	}
-	return inferDecimalMark(numberPart.String())
-}
-
-func inferDecimalMark(numberStr string) string {
-	lastDot := strings.LastIndex(numberStr, ".")
-	lastComma := strings.LastIndex(numberStr, ",")
-
-	if lastDot < 0 || lastComma < 0 {
+// numberInFormat returns the number written in a commodity format string.
+func numberInFormat(format, symbol string) string {
+	format = strings.Replace(format, symbol, "", 1)
+	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' }
+	start := strings.IndexFunc(format, isNumberRune)
+	end := strings.LastIndexFunc(format, isNumberRune)
+	if start < 0 {
 		return ""
 	}
+	return format[start : end+1]
+}
 
-	if lastComma > lastDot {
+// isAmbiguousNumber reports whether a written number could be read with either
+// decimal mark: it has one separator, and nothing else to tell its role.
+func isAmbiguousNumber(number string) bool {
+	return !strings.Contains(number, " ") && strings.Count(number, ".")+strings.Count(number, ",") == 1
+}
+
+// numberDecimalMark returns the decimal mark of a number written in a commodity
+// or D directive, or "" when it has none. hledger reads these numbers like any
+// amount, so a lone separator that is not the mark already in force is a digit
+// group separator and the number has no decimal mark.
+func numberDecimalMark(number, inForce string) string {
+	last := strings.LastIndexAny(number, ".,")
+	if last < 0 {
+		return ""
+	}
+	mark := number[last : last+1]
+	if isAmbiguousNumber(number) {
+		if inForce != "" && inForce != mark {
+			return ""
+		}
+		return mark
+	}
+	if strings.ContainsAny(number[:last], ".,") && !strings.ContainsAny(number[:last], otherDecimalMark(mark)) {
+		// Only one separator kind, used repeatedly: digit groups.
+		return ""
+	}
+	return mark
+}
+
+func otherDecimalMark(mark string) string {
+	if mark == "." {
 		return ","
 	}
-
 	return "."
 }
 

@@ -819,13 +819,32 @@ func resolveDecimalMark(amount *ast.Amount, commodityFormats map[string]Commodit
 		// that format also decides where its decimal mark sits; see
 		// formatAmountQuantity.
 		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok && !amount.Commodity.Inferred {
-			return cf.DecimalMark
+			return numberFormatFor(amount, cf.NumberFormat).DecimalMark
 		}
 		if cf, ok := commodityFormats[""]; ok {
-			return cf.DecimalMark
+			return numberFormatFor(amount, cf.NumberFormat).DecimalMark
 		}
 	}
 	return '.'
+}
+
+// numberFormatFor adapts format to the decimal mark in force where amount is
+// written. The two differ under a decimal-mark directive, and whenever the
+// format was declared further down than the amount: writing the declared mark
+// at this position would make hledger read a different number.
+func numberFormatFor(amount *ast.Amount, format NumberFormat) NumberFormat {
+	if amount.DecimalMark == "" {
+		return format
+	}
+	mark, _ := utf8.DecodeRuneInString(amount.DecimalMark)
+	if format.DecimalMark == mark {
+		return format
+	}
+	if format.ThousandsSep == amount.DecimalMark {
+		format.ThousandsSep = string(format.DecimalMark)
+	}
+	format.DecimalMark = mark
+	return format
 }
 
 func calculateSingleAmountLen(amount *ast.Amount, commodityFormats map[string]CommodityFormat) int {
@@ -1155,13 +1174,13 @@ func formatAmountQuantity(amount *ast.Amount, commodityFormats map[string]Commod
 		// format. Writing a bare number in the style of the commodity it
 		// inherits would change what the text means when it is read again.
 		if cf, ok := commodityFormats[amount.Commodity.Symbol]; ok && !amount.Commodity.Inferred {
-			return FormatNumber(amount.Quantity, cf.NumberFormat)
+			return FormatNumber(amount.Quantity, numberFormatFor(amount, cf.NumberFormat))
 		}
 		if cf, ok := commodityFormats[""]; ok {
 			if cf.DecimalPlaces == 0 && amount.RawQuantity != "" {
 				return amount.RawQuantity
 			}
-			return FormatNumber(amount.Quantity, cf.NumberFormat)
+			return FormatNumber(amount.Quantity, numberFormatFor(amount, cf.NumberFormat))
 		}
 	}
 	if amount.RawQuantity != "" {

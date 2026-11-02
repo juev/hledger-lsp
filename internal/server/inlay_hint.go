@@ -7,6 +7,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -136,6 +137,17 @@ func positionInProtocolRange(position protocol.Position, rng protocol.Range) boo
 		return false
 	}
 	return position.Line != rng.End.Line || position.Character < rng.End.Character
+}
+
+// commodityFormatsAt returns the formats in effect at offset in the document:
+// those of its include tree, or its own directives when it has none.
+func (s *Server) commodityFormatsAt(docURI uri.URI, journal *ast.Journal, offset int) map[string]formatter.CommodityFormat {
+	if resolved := s.getWorkspaceResolved(docURI); resolved != nil {
+		if id := firstOccurrenceIDForPath(resolved, uriToPath(docURI)); id != 0 {
+			return resolved.FormatsAt(id, offset)
+		}
+	}
+	return localCommodityFormatsAt(journal, offset)
 }
 
 func localCommodityFormatsAt(journal *ast.Journal, offset int) map[string]formatter.CommodityFormat {

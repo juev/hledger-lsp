@@ -113,6 +113,7 @@ type JournalOccurrence struct {
 	Journal        *ast.Journal
 	InitialContext parser.Context
 	Checkpoints    []parser.ContextCheckpoint
+	Exports        parser.ContextExports
 	Via            IncludeProvenance
 	Items          []ResolvedItem
 }
@@ -222,6 +223,31 @@ func (r *ResolvedJournal) Occurrence(id OccurrenceID) *JournalOccurrence {
 		}
 	}
 	return nil
+}
+
+// ParseOccurrence parses content as the text of occurrence id: with the context
+// the occurrence inherited, and with what its includes export at each include.
+// Unlike the occurrence's own journal it reflects content, so a buffer with
+// unsaved edits reads its amounts the way the tree would. An include added since
+// the tree was resolved has no occurrence yet and contributes nothing.
+//
+// The bool reports whether the occurrence exists.
+func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast.Journal, []parser.ParseError, bool) {
+	occurrence := r.Occurrence(id)
+	if occurrence == nil {
+		return nil, nil, false
+	}
+	result, errs := parser.ParseWithContext(content, occurrence.InitialContext, func(site parser.IncludeSite) parser.ContextExports {
+		var exports []parser.ContextExports
+		for index := range r.Occurrences {
+			child := &r.Occurrences[index]
+			if child.Via.ParentID == id && child.Via.RawPattern == site.Include.Path {
+				exports = append(exports, child.Exports)
+			}
+		}
+		return parser.MergeContextExports(exports...)
+	})
+	return result.Journal, errs, true
 }
 
 // OccurrencesForPath returns all occurrences for an exact source path.

@@ -1120,14 +1120,14 @@ func TestEnrichCommodityFormatsFromTransactions_DecimalPlaces(t *testing.T) {
 			Postings: []ast.Posting{
 				{
 					Amount: &ast.Amount{
-						Quantity:    decimal.NewFromFloat(25.70),
+						Quantity:    decimal.RequireFromString("25.70"),
 						RawQuantity: "25.70",
 						Commodity:   ast.Commodity{Symbol: "USD", Position: ast.CommodityRight},
 					},
 				},
 				{
 					Amount: &ast.Amount{
-						Quantity:    decimal.NewFromFloat(9.00),
+						Quantity:    decimal.RequireFromString("9.00"),
 						RawQuantity: "9.00",
 						Commodity:   ast.Commodity{Symbol: "USD", Position: ast.CommodityRight},
 					},
@@ -1173,7 +1173,7 @@ func TestHover_AccountBalanceDefaultFormatRoundsOtherCommodityAggregate(t *testi
 	content := `D 1.000,00 RUB
 
 2024-01-15 grocery
-    expenses:food  1000.123 EUR
+    expenses:food  1000,123 EUR
     assets:cash`
 
 	srv.documents.Store(uri.URI("file:///test.journal"), content)

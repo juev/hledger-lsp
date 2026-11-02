@@ -287,7 +287,7 @@ func buildUnbalancedFix(
 	posting := &tx.Postings[postingIndex]
 	newAmount := *posting.Amount
 	newAmount.Quantity = newAmount.Quantity.Sub(signedSum)
-	newAmount.RawQuantity = adjustedRawQuantity(posting.Amount.RawQuantity, newAmount.Quantity)
+	newAmount.RawQuantity = adjustedRawQuantity(posting.Amount, newAmount.Quantity)
 
 	lineEdit, ok := buildQuickFixEdit(doc, mapper, tx, postingIndex, &newAmount, commodityFormats)
 	if !ok {
@@ -653,12 +653,19 @@ func findLastFixableRealPosting(tx *ast.Transaction, commodity string) int {
 	return lastReal
 }
 
-func adjustedRawQuantity(raw string, quantity decimal.Decimal) string {
-	if raw == "" {
+// adjustedRawQuantity writes quantity in the number style of original. The parsed
+// quantity says whether the written separators held a decimal mark: `1,234` looks
+// like one, but may be a digit group, and copying that style would change what
+// the new number means.
+func adjustedRawQuantity(original *ast.Amount, quantity decimal.Decimal) string {
+	if original.RawQuantity == "" {
 		return quantity.String()
 	}
 
-	format := formatter.ParseNumberFormat(raw)
+	format := formatter.ParseNumberFormat(original.RawQuantity)
+	if original.Quantity.Exponent() >= 0 {
+		format.HasDecimal = false
+	}
 	if !format.HasDecimal && !quantity.Equal(quantity.Round(0)) {
 		return quantity.String()
 	}
