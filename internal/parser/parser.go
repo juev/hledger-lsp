@@ -1616,7 +1616,7 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 				End:   toASTPosition(p.current.End),
 			},
 		}
-		valid := p.current.Type == TokenQuotedCommodity || isSymbolText(p.current.Value)
+		valid := p.current.Type == TokenQuotedCommodity || (p.current.Value != "" && isSymbolText(p.current.Value))
 		p.advance()
 		// hledger reads the price after at least one space, and a symbol holds
 		// no digit, sign, decimal mark or other syntax character.
@@ -2596,20 +2596,6 @@ func removeSeparator(s string, sep byte) string {
 		}
 	}
 	return b.String()
-}
-
-// isSymbolText reports whether value is made of characters hledger allows in an
-// unquoted commodity symbol.
-func isSymbolText(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if !isSymbolRune(r) {
-			return false
-		}
-	}
-	return true
 }
 
 func isCommodityToken(t TokenType) bool {
