@@ -266,3 +266,41 @@ func TestRunningBalances_HiddenAssignmentStillCountsTowardsLaterBalances(t *test
 	assert.False(t, hasRunningBalance(balances, 1, 0))
 	assert.Equal(t, "70", runningBalanceAt(t, balances, 2, 0, "₽"))
 }
+
+func TestRunningBalances_AssignmentWithCostIsListedByTheRegister(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-01 seed
+    assets:cash  100 USD
+    equity:opening
+
+2024-01-02 cost
+    assets:cash  = 100 USD @ 2 EUR
+    equity:opening
+
+2024-01-03 total cost
+    assets:cash  = 100 USD @@ 5 EUR
+    equity:opening
+`)
+	for _, tx := range []int{1, 2} {
+		assert.True(t, hasRunningBalance(balances, tx, 0), "transaction %d assignment", tx)
+		assert.True(t, hasRunningBalance(balances, tx, 1), "transaction %d elided posting", tx)
+	}
+}
+
+func TestRunningBalances_ElidedPostingAloneInItsGroupIsHidden(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-01 seed
+    assets:cash  100 USD
+    equity:opening
+
+2024-01-02 bracketed elided
+    assets:cash  1 USD
+    equity:opening
+    [virtual:b]
+
+2024-01-03 только elided
+    единственная
+`)
+	assert.True(t, hasRunningBalance(balances, 1, 0))
+	assert.True(t, hasRunningBalance(balances, 1, 1))
+	assert.False(t, hasRunningBalance(balances, 1, 2))
+	assert.False(t, hasRunningBalance(balances, 2, 0))
+}

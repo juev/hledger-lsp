@@ -54,6 +54,32 @@ func TestOracle_RunningBalancesCoverTheRegisterRows(t *testing.T) {
 2024-01-07 касса
     活动:现金  = 0 ₽
     капитал
+
+2024-01-10 lone elided in its group
+    assets:cash  1 USD
+    equity:opening
+    [virtual:b]
+
+2024-01-11 no-op assignment beside a lone elided virtual
+    assets:cash  = 151 USD
+    equity:opening
+    [virtual:b]
+
+2024-01-12 only an elided posting
+    solo
+
+2024-01-13 elided real posting with balanced virtuals
+    other
+    [virtual:a]  1 USD
+    [virtual:c]  -1 USD
+
+2024-01-14 assignment with cost
+    assets:cash  = 151 USD @ 2 EUR
+    equity:opening
+
+2024-01-15 assignment with total cost
+    assets:cash  = 151 USD @@ 5 EUR
+    equity:opening
 `
 	cmd := exec.Command(hledgerPath, "-f", "-", "reg", "-O", "csv")
 	cmd.Stdin = strings.NewReader(journal)
@@ -65,7 +91,7 @@ func TestOracle_RunningBalancesCoverTheRegisterRows(t *testing.T) {
 
 	listed := map[[2]string]bool{}
 	for _, row := range rows[1:] {
-		listed[[2]string{row[0], row[4]}] = true
+		listed[[2]string{row[0], strings.Trim(row[4], "[]()")}] = true
 	}
 
 	balances := primaryRunningBalances(t, journal)
