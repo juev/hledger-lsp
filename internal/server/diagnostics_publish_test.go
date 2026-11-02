@@ -197,6 +197,58 @@ func TestPublishDiagnostics_PassingAssertionsStaySilent(t *testing.T) {
 	assert.Nil(t, diagnosticWithCode(diagnostics, "UNBALANCED"), "got %v", codesIn(diagnostics))
 }
 
+// An inclusive strict assertion checks the commodities the account has an entry
+// in, and an assignment decides those entries, as in hledger.
+func TestPublishDiagnostics_InclusiveStrictAssertionChecksOwnEntriesCRLF(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantLine int // -1 when no assertion may fail
+	}{
+		{
+			name: "another commodity only a subaccount holds is not checked",
+			content: "2024-01-01 a\r\n    касса:現金  1 EUR\r\n    касса:счёт  1 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  0 EUR ==* 1 EUR\r\n    капитал\r\n",
+			wantLine: -1,
+		},
+		{
+			name: "strict assignment drops the account's other commodities",
+			content: "2024-01-01 a\r\n    касса  1 USD\r\n    касса:現金  1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  ==* 1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-03 c\r\n    касса:счёт  5 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-04 d\r\n    касса  0 EUR ==* 1 EUR\r\n",
+			wantLine: -1,
+		},
+		{
+			name: "inclusive assignment gives the account a subaccount's commodity",
+			content: "2024-01-01 a\r\n    касса:現金  1 EUR\r\n    касса:счёт  0 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  =* 1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-03 c\r\n    касса:счёт  5 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-04 d\r\n    касса  0 EUR ==* 1 EUR\r\n",
+			wantLine: 14,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer()
+			ts.enableOptInDiagnostics(accountCheckOff)
+			docURI := uri.URI("file:///inclusive-strict.journal")
+
+			diagnostics, err := ts.openAndWait(docURI, tt.content)
+			require.NoError(t, err)
+
+			assertion := diagnosticWithCode(diagnostics, "BALANCE_ASSERTION_FAILED")
+			if tt.wantLine < 0 {
+				assert.Nil(t, assertion, "got %v", diagnostics)
+				return
+			}
+			require.NotNil(t, assertion, "got %v", codesIn(diagnostics))
+			assert.Contains(t, assertion.Message, "EUR also holds 5 USD")
+			assert.Equal(t, uint32(tt.wantLine), assertion.Range.Start.Line)
+		})
+	}
+}
+
 func TestPublishDiagnostics_HledgerConversionIsNotFlagged(t *testing.T) {
 	ts := newTestServer()
 	docURI := uri.URI("file:///conversion.journal")
@@ -551,6 +603,28 @@ func TestPublishDiagnostics_StrictModeStillOffersDeclareAccount(t *testing.T) {
 		"the declaration fix must also work in strict mode")
 }
 
+func TestPublishDiagnostics_AssignmentWithPostingDateIsAnError(t *testing.T) {
+	content := "2024-01-01 касса\n    現金:口座  = -4 GBP  ; date:2024-01-19\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///assignment-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			refused := diagnosticWithCode(diagnostics, "ASSIGNMENT_POSTING_DATE")
+			require.NotNil(t, refused, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, refused.Severity)
+			assert.Equal(t, uint32(1), refused.Range.Start.Line)
+		})
+	}
+}
+
 func TestPublishDiagnostics_ImpossibleBracketedPostingDateIsAnError(t *testing.T) {
 	content := "2024-01-01 касса\n    現金  5 USD  ; заметка [2024-13-05]\n    капитал\n"
 	for _, tc := range []struct {
@@ -571,5 +645,106 @@ func TestPublishDiagnostics_ImpossibleBracketedPostingDateIsAnError(t *testing.T
 			assert.Equal(t, uint32(1), invalid.Range.Start.Line)
 			assert.Equal(t, uint32(26), invalid.Range.Start.Character)
 		})
+	}
+}
+
+func TestPublishDiagnostics_BracketedSecondaryDateTakesThePrimaryYear(t *testing.T) {
+	content := "2024-01-01 касса\n    現金  5 USD\n    ; заметка [2023-01-05=02-29]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///bracket-secondary.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, uint32(2), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(26), invalid.Range.Start.Character)
+			assert.Equal(t, uint32(31), invalid.Range.End.Character)
+		})
+	}
+}
+
+func TestPublishDiagnostics_AssignmentWithTextBracketIsNotDated(t *testing.T) {
+	// hledger reads [2024-01-05=заметка] as text, so the assignment carries no
+	// posting date and the journal loads.
+	content := "2024-01-01 касса\n    現金:口座  = -4 GBP  ; [2024-01-05=заметка]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///assignment-text-bracket.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			for _, d := range diagnostics {
+				assert.NotEqual(t, protocol.DiagnosticSeverityError, d.Severity, "got %v", codesIn(diagnostics))
+			}
+		})
+	}
+}
+
+func TestPublishDiagnostics_ImpossibleBracketedDateInAPeriodicTransaction(t *testing.T) {
+	content := "~ monthly  ; бюджет\n    расход:еда  5 USD\n    ; заметка [2024-13-05]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///periodic-bracket-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+			assert.Equal(t, uint32(2), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(15), invalid.Range.Start.Character)
+			assert.Equal(t, uint32(25), invalid.Range.End.Character)
+		})
+	}
+}
+
+func TestPublishDiagnostics_PeriodicBracketedDateFollowsTheYDirective(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+		invalid bool
+		line    uint32
+	}{
+		{name: "inline, common year", content: "Y 2023\n~ monthly\n    расход  5 USD  ; заметка [02-29]\n    капитал\n", invalid: true, line: 2},
+		{name: "inline, leap year", content: "Y 2024\n~ monthly\n    расход  5 USD  ; заметка [02-29]\n    капитал\n"},
+		{name: "below the posting, common year", content: "Y 2023\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n", invalid: true, line: 3},
+		{name: "below the posting, leap year", content: "Y 2024\n~ monthly\n    расход  5 USD\n    ; заметка [02-29]\n    капитал\n"},
+	} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(tc.name+fmt.Sprintf(" %q", newline), func(t *testing.T) {
+				ts := newTestServer()
+				diagnostics, err := ts.openAndWait(uri.URI("file:///periodic-year.journal"), strings.ReplaceAll(tc.content, "\n", newline))
+				require.NoError(t, err)
+
+				invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+				if !tc.invalid {
+					assert.Nil(t, invalid, "got %v", codesIn(diagnostics))
+					return
+				}
+				require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+				assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+				assert.Equal(t, tc.line, invalid.Range.Start.Line)
+			})
+		}
 	}
 }

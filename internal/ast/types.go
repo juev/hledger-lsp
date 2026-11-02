@@ -38,6 +38,9 @@ type Transaction struct {
 }
 
 type PeriodicTransaction struct {
+	// Year is the year its postings read a date without one in: the Y directive
+	// in force where the transaction is written, else the current year.
+	Year             int
 	Period           string
 	Status           Status
 	Code             string
@@ -130,6 +133,11 @@ type Amount struct {
 	// or "" when nothing is declared. A number rewritten at this position has to
 	// use it, whatever style the commodity declares elsewhere.
 	DecimalMark string
+	// SymbolDecimalMark is, for an amount that inherited its symbol from the
+	// D directive, the mark in force at this position for amounts written with
+	// that symbol. It can differ from DecimalMark, so text that names the symbol
+	// has to use it to read back as the same value.
+	SymbolDecimalMark string
 }
 
 type Commodity struct {
@@ -290,9 +298,12 @@ func (AliasDirective) directive()        {}
 func (d AliasDirective) GetRange() Range { return d.Range }
 
 type Comment struct {
-	Text  string
-	Tags  []Tag
-	Range Range
+	Text string
+	Tags []Tag
+	// Marker is the character that opened the comment: ';', or '#' on an indented
+	// line. hledger reads only ';' lines as comments of the posting above them.
+	Marker byte
+	Range  Range
 }
 
 type Tag struct {

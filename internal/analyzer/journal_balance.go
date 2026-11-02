@@ -76,13 +76,16 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 	return total
 }
 
-// otherCommodities returns the balances held by an account (and, for inclusive
-// assertions, its subaccounts) in commodities other than the asserted one, in a
-// stable order. hledger's `==` form requires these to be empty, and any non-zero
-// balance counts, however small: assertions are exact.
+// otherCommodities returns what an account holds in commodities other than the
+// asserted one, in a stable order, as hledger's `==` form checks it. The
+// commodities checked are those the account itself has an entry in, even one that
+// has netted to zero; for an inclusive assertion each is totalled with the
+// subaccounts, so a subaccount can offset the account's own balance but a
+// commodity only a subaccount holds is not looked at. Any non-zero balance
+// counts, however small: assertions are exact.
 func (b accountBalances) otherCommodities(account, except string, inclusive bool) []string {
 	var result []string
-	for commodity := range b.heldCommodities(account, inclusive) {
+	for commodity := range b[account] {
 		quantity := b.amount(account, commodity, inclusive)
 		if commodity == except || quantity.IsZero() {
 			continue
@@ -107,6 +110,38 @@ func (b accountBalances) heldCommodities(account string, inclusive bool) map[str
 		}
 	}
 	return held
+}
+
+// settleAssignment leaves an account with the commodity entries hledger gives it
+// after a balance assignment, once the assigned amount has been added. hledger
+// replaces the account's own balance rather than adding to it: an inclusive
+// assignment computes it from what the subaccounts hold, so the account gets an
+// entry, possibly zero, in each of their commodities, and a strict one keeps no
+// other entry, the assigned amount having emptied it. A strict assertion checks
+// the commodities the account has an entry in, so these entries decide what a
+// later one looks at.
+func (b accountBalances) settleAssignment(account string, assertion *ast.BalanceAssertion) {
+	keep := map[string]bool{assertion.Amount.Commodity.Symbol: true}
+	if assertion.IsInclusive {
+		prefix := account + ":"
+		for name, byCommodity := range b {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			for commodity := range byCommodity {
+				keep[commodity] = true
+				b.add(account, commodity, decimal.Zero)
+			}
+		}
+	}
+	if !assertion.IsStrict {
+		return
+	}
+	for commodity := range b[account] {
+		if !keep[commodity] {
+			delete(b[account], commodity)
+		}
+	}
 }
 
 // pricedKey identifies an amount that was written with a cost the way hledger
@@ -598,6 +633,9 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 		step := func(postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
+			if posting.Amount == nil && posting.BalanceAssertion != nil {
+				e.balances.settleAssignment(posting.Account.GetResolvedName(), posting.BalanceAssertion)
+			}
 			if e.observe != nil {
 				e.observe(event.sourceOrder, postingIndex, contribution, priced)
 			}
@@ -642,32 +680,113 @@ func registerDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 // yearless value inherits the transaction year. Invalid date: values have their
 // own diagnostic and fall back to the transaction date here.
 func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
-	for _, tag := range posting.Tags {
-		if tag.Name == "date" {
-			if date, ok := parsePostingDateValue(tag.Value, tx.Date.Year); ok {
-				return date
-			}
+	if date, ok := postingDateOverride(tx, posting); ok {
+		return date
+	}
+	return tx.Date
+}
+
+// postingDateOverride returns the date a posting carries of its own. hledger
+// reads the comment of the posting line and then the comment lines below it, each
+// on its own, and takes the first date it meets: a date: tag, or the primary date
+// of a bracketed date. A date: value is read up to its first character that
+// cannot belong to a date, while a bracketed date must be the whole bracket, so
+// [ 2024-01-20 ] is not one. Names are case sensitive, so Date: is an ordinary
+// tag.
+func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, bool) {
+	if date, ok := commentDate(posting.Comment, tx.Date.Year); ok {
+		return date, true
+	}
+	for _, line := range continuationComments(tx, posting) {
+		if date, ok := commentDate(line.Text, tx.Date.Year); ok {
+			return date, true
+		}
+	}
+	return ast.Date{}, false
+}
+
+// commentDate returns the first date written in one comment line: the earlier of
+// its date: tag and its first bracketed date.
+func commentDate(comment string, transactionYear int) (ast.Date, bool) {
+	best, bestAt, found := ast.Date{}, 0, false
+	consider := func(date ast.Date, at int) {
+		if !found || at < bestAt {
+			best, bestAt, found = date, at, true
 		}
 	}
 
-	comment := posting.Comment
-	for {
-		start := strings.IndexByte(comment, '[')
-		if start < 0 {
-			break
+	for _, tag := range parser.ScanPostingCommentTags(comment) {
+		if tag.Name != "date" {
+			continue
 		}
-		comment = comment[start+1:]
-		end := strings.IndexByte(comment, ']')
+		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transactionYear); ok {
+			consider(date, tag.NameStart)
+		}
+	}
+
+	for start := 0; start < len(comment); start++ {
+		if comment[start] != '[' {
+			continue
+		}
+		end := strings.IndexByte(comment[start+1:], ']')
 		if end < 0 {
 			break
 		}
-		primary, _, _ := strings.Cut(comment[:end], "=")
-		if date, ok := parsePostingDateValue(primary, tx.Date.Year); ok {
-			return date
+		// hledger reads a bracket as a date only by the grammar validateBracketDates
+		// checks; any other bracket, such as [2024-01-05=garbage], is text.
+		content := comment[start+1 : start+1+end]
+		if !isBracketedDate(content) {
+			continue
 		}
-		comment = comment[end+1:]
+		primary, _, _ := strings.Cut(content, "=")
+		if _, ok := bracketDateYear(primary, transactionYear); !ok {
+			continue
+		}
+		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
+			consider(date, start)
+			break
+		}
 	}
-	return tx.Date
+	return best, found
+}
+
+// continuationComments returns the comment lines written under a posting, which
+// belong to that posting: the parser keeps them with the transaction.
+func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comment {
+	return postingCommentLines(tx.Postings, tx.Comments, posting)
+}
+
+// postingCommentLines returns the ; lines among comments that are written under
+// the posting, before the next one of postings.
+func postingCommentLines(postings []ast.Posting, comments []ast.Comment, posting *ast.Posting) []ast.Comment {
+	if len(comments) == 0 {
+		return nil
+	}
+	next := int(^uint(0) >> 1)
+	for i := range postings {
+		if &postings[i] == posting && i+1 < len(postings) {
+			next = postingRange(&postings[i+1]).Start.Line
+		}
+	}
+	first := postingRange(posting).Start.Line
+	var lines []ast.Comment
+	for _, line := range comments {
+		if line.Marker == ';' && line.Range.Start.Line > first && line.Range.Start.Line < next {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// leadingDateText returns the part of a tag value that reads as a date: digits
+// joined by -, / or ., after any leading spaces.
+func leadingDateText(value string) string {
+	value = strings.TrimLeft(value, " \t")
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '-' || value[end] == '/' || value[end] == '.') {
+		end++
+	}
+	return strings.TrimRight(value[:end], "-/.")
 }
 
 func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {

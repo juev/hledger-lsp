@@ -1,0 +1,7 @@
+; Root of the multi-file journal used by the WASI smoke test.
+include accounts.journal
+include 2024/*.journal
+
+2024-03-01 * Магазин | 食料品
+    расходы:продукты  1500.00 RUB
+    資産:現金    -1500.00 RUB

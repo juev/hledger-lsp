@@ -146,3 +146,95 @@ func oursInSlot(t *testing.T, context string, journal *ast.Journal) testutil.Hle
 	}
 	return testutil.HledgerAmount{Accepted: true, Quantity: amount.Quantity.String(), Commodity: amount.Commodity.Symbol}
 }
+
+// leadingCommaNumber matches an amount whose number starts with a decimal comma
+// after a prefix commodity.
+var leadingCommaNumber = regexp.MustCompile(`^-?(?:\$|€|EUR|"[^"]*"|, ?) ?-? ?,[0-9]`)
+
+// TestOracle_CommoditySymbolSlotsMatchHledger compares how hledger and the
+// parser read symbols that hold punctuation in every slot that holds an amount.
+func TestOracle_CommoditySymbolSlotsMatchHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	var amounts []string
+	for _, tt := range punctuatedSymbolAmounts {
+		amounts = append(amounts, tt.amount)
+	}
+	amounts = append(amounts,
+		"$ -,5", "-$ ,5", "-EUR ,5", "-EUR -\t5", "-EUR\t- 5", "-EUR\t5", "EUR -\t5",
+		"-AU$ - 5", "-AU$ 5", "-AU$5", "$,", "5 $,x", "$ , 5", "$ ,5,5", "5 ,5",
+		"-$,5", "- $,5", "-€,5", "€ - ,5",
+	)
+	for context, template := range signedAmountContexts {
+		for _, amount := range amounts {
+			if context == "price directive" && leadingCommaNumber.MatchString(amount) {
+				// hledger prints a leading-comma price back with a comma mark, so
+				// its text cannot be read the way the other slots are.
+				continue
+			}
+			t.Run(context+"/"+amount, func(t *testing.T) {
+				input := fmt.Sprintf(template, amount)
+				want := hledgerSlotRead(t, hledgerPath, context, input)
+
+				got := testutil.HledgerAmount{}
+				if journal, errs := Parse(input); len(errs) == 0 {
+					got = oursInSlot(t, context, journal)
+				}
+				assert.Equal(t, want, got, "journal:\n%s", input)
+			})
+		}
+	}
+}
+
+// TestOracle_PricedCommodityMatchesHledger compares the commodity a P directive
+// prices, which hledger may refuse or read as a longer symbol than a letter run.
+func TestOracle_PricedCommodityMatchesHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	lines := []string{
+		"P 2024-01-01 , 5 USD", "P 2024-01-01 %% 5 USD", "P 2024-01-01 A! 5 USD", "P 2024-01-01 A:B 5 USD",
+		"P 2024-01-01 A :5", "P 2024-01-01 € 5 USD", "P 2024-01-01 руб, 5 USD", "P 2024-01-01 元! 5 USD",
+		"P 2024-01-01 $AB 5", "P 2024-01-01 €EUR 1.5", "P 2024-01-01 $X 1.5", "P 2024-01-01 AU$ 5",
+		"P 2024-01-01 руб€ 5", "P 2024-01-01 09:30 $AB 5", `P 2024-01-01 "A B" 5`,
+		"P 2024-01-01 A1 EUR 5", "P 2024-01-01 A.B EUR 5", "P 2024-01-01 A-B EUR 5", "P 2024-01-01 A+ $-5",
+		"P 2024-01-01 A+ $ 5", "P 2024-01-01 A5 5", `P 2024-01-01 "A B"5`, "P 2024-01-01 A@ 5", "P 2024-01-01 A= 5",
+		"P 2024-01-01 A\t5", "P 2024-01-01\tA 5", "P 2024-01-01 A 5 EUR junk",
+	}
+	for _, line := range lines {
+		t.Run(line, func(t *testing.T) {
+			input := line + "\n"
+			want := hledgerPriceRead(t, hledgerPath, input)
+			got := testutil.HledgerAmount{}
+			if journal, errs := Parse(input); len(errs) == 0 {
+				price := journal.Directives[0].(ast.PriceDirective)
+				got = testutil.HledgerAmount{Accepted: true, Quantity: price.Price.Quantity.String(), Commodity: price.Price.Commodity.Symbol}
+			}
+			assert.Equal(t, want.Accepted, got.Accepted, "journal:\n%s", input)
+		})
+	}
+}
+
+// TestOracle_CommoditySymbolInLotPriceMatchesHledger compares which lot prices
+// hledger accepts. It reads the lot and discards it, so the posting amount is
+// all it reports.
+func TestOracle_CommoditySymbolInLotPriceMatchesHledger(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	lots := []string{
+		"{$,5}", "{{$,5}}", "{#5}", "{!5}", "{{#5}}", "{{!5}}", "{=$,5}", "{= $,5}", "{=!5}", "{=#5}",
+		"{{=$,5}}", "{$ ,5}", "{5 $,}", "{5 !}", "{5 EUR!}", "{,5}", "{, 5}", "{-$,5}", "{-,5}", "{%5}",
+		"{(5}", "{x(y) 5}", "{5 x(y)}", "{{ !5 }}", "{ !5 }", "{ 5 руб, }", "{元,5}", "{$,5} @ $,5",
+		"{2024-01-01, $,5}", "{$,5, 2024-01-01}", `{"lbl", !5}`,
+	}
+	for _, prefix := range []string{"10 EUR ", "EUR10 "} {
+		for _, lot := range lots {
+			t.Run(prefix+lot, func(t *testing.T) {
+				input := "2024-01-01 x\n    a  " + prefix + lot + "\n    b\n"
+				want := hledgerSlotRead(t, hledgerPath, "posting", input)
+
+				_, errs := Parse(input)
+				assert.Equal(t, want.Accepted, len(errs) == 0, "journal:\n%s", input)
+			})
+		}
+	}
+}

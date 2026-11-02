@@ -25,6 +25,8 @@ type Lexer struct {
 	virtualCloser  rune
 	insideBraces   int
 	prevType       TokenType
+	prev2Type      TokenType
+	prev3Type      TokenType
 	// firstLineShift is the number of columns a skipped byte order mark takes on
 	// line 1. Columns count runes of the original text, and the client counts the
 	// mark as a character, so tokens on line 1 start after it.
@@ -57,7 +59,7 @@ func NewLexer(input string) *Lexer {
 
 func (l *Lexer) Next() Token {
 	tok := l.scan()
-	l.prevType = tok.Type
+	l.prev3Type, l.prev2Type, l.prevType = l.prev2Type, l.prevType, tok.Type
 	return tok
 }
 
@@ -111,7 +113,9 @@ func (l *Lexer) scanLineStart() Token {
 }
 
 func (l *Lexer) scanInLine() Token {
+	before := l.pos
 	l.skipSpaces()
+	glued := l.pos == before
 
 	if l.pos >= len(l.input) {
 		return l.makeToken(TokenEOF, "")
@@ -124,6 +128,10 @@ func (l *Lexer) scanInLine() Token {
 
 	ch := l.peek()
 	r := l.peekRune()
+
+	if l.punctuatedSymbolStarts(r, glued) {
+		return l.scanCommoditySymbol()
+	}
 
 	switch {
 	case ch == '\n':
@@ -197,11 +205,17 @@ func (l *Lexer) scanInLine() Token {
 		}
 		return l.scanQuotedCommodity()
 	case ch == '-' || ch == '+':
+		// Header line: a sign is part of the description
+		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
+			return l.scanText()
+		}
 		if l.nextIsCurrencySymbol() || l.nextIsLetterCommodity() || l.nextIsDigit() || l.signStartsPostingAmount() {
 			return l.scanSign()
 		}
 		return l.scanText()
 	case ch == '.' && l.startsLeadingDecimalNumber():
+		return l.scanNumber()
+	case ch == ',' && l.startsLeadingCommaNumber():
 		return l.scanNumber()
 	case l.isDigit(ch):
 		if l.looksLikeDate() {
@@ -259,7 +273,9 @@ func (l *Lexer) scanInLine() Token {
 			if l.directiveName == "account" || l.directiveName == "bucket" || l.directiveName == "A" {
 				return l.scanAccount()
 			}
-			if l.looksLikeAccount() {
+			// A P directive holds no account, and a colon in its price belongs
+			// to a commodity symbol.
+			if l.directiveName != "P" && l.looksLikeAccount() {
 				return l.scanAccount()
 			}
 			return l.scanDirectiveArg()
@@ -531,6 +547,144 @@ func (l *Lexer) scanCurrencySymbol() Token {
 	l.pos += size
 	l.column++
 	return Token{Type: TokenCommodity, Value: string(r), Pos: startPos, End: l.position()}
+}
+
+// scanCommoditySymbol scans the longest run of symbol characters as one
+// commodity, the way hledger reads an unquoted symbol: "$,", "EUR,", "(x)".
+func (l *Lexer) scanCommoditySymbol() Token {
+	start := l.pos
+	startPos := l.position()
+	for l.pos < len(l.input) {
+		r, _ := utf8.DecodeRuneInString(l.input[l.pos:])
+		if !isSymbolRune(r) {
+			break
+		}
+		l.advance()
+	}
+	l.afterSign = false
+	l.afterNumber = false
+	return Token{Type: TokenCommodity, Value: l.input[start:l.pos], Pos: startPos, End: l.position()}
+}
+
+// punctuatedSymbolStarts reports whether the run of symbol characters at the
+// current position is a commodity that the letter and currency-sign rules cannot
+// read whole: it holds a character that is not a letter, such as the comma in
+// "$,5" or the bang in "5 EUR!". A run of letters keeps its own rule, which also
+// lets a suffix symbol carry digits. glued is true when no space separates the
+// run from the previous token.
+func (l *Lexer) punctuatedSymbolStarts(r rune, glued bool) bool {
+	if !isSymbolRune(r) || unicode.Is(unicode.Zs, r) || !l.commodityExpected(r, glued) {
+		return false
+	}
+	punctuated := false
+	parens, brackets := 0, 0
+	for pos := l.pos; pos < len(l.input); {
+		r, size := utf8.DecodeRuneInString(l.input[pos:])
+		if !isSymbolRune(r) {
+			break
+		}
+		switch r {
+		case '(':
+			parens++
+		case ')':
+			parens--
+		case '[':
+			brackets++
+		case ']':
+			brackets--
+		}
+		punctuated = punctuated || !unicode.IsLetter(r)
+		pos += size
+	}
+	// After a number an unclosed "(" or "[" starts a lot annotation or a note
+	// that is cut short; the lot and note rules report that, with a message
+	// that names it.
+	if l.prevType == TokenNumber && (parens > 0 || brackets > 0) {
+		return false
+	}
+	return punctuated
+}
+
+// commodityExpected reports whether a commodity symbol may begin at the current
+// position: where an amount starts or right after its number, in a posting, in
+// a D directive, in a P directive for the priced commodity and for the price.
+// After a complete amount a bracket or parenthesis opens a lot annotation, so
+// it never starts a symbol there.
+func (l *Lexer) commodityExpected(r rune, glued bool) bool {
+	postingSlot := l.onPostingLine && !l.afterIndent
+	priceSlot := l.inPriceAmountSlot()
+	defaultSlot := l.inDirective && l.directiveName == "D"
+	pricedCommodity := l.inDirective && l.directiveName == "P" && (l.prevType == TokenDate || l.prevType == TokenTime)
+	if !postingSlot && !priceSlot && !defaultSlot && !pricedCommodity {
+		return false
+	}
+
+	switch l.prevType {
+	case TokenAccount:
+		// "(a)" and "[a]" close right after the account name.
+		return postingSlot && (!glued || (r != ')' && r != ']'))
+	case TokenRParen, TokenRBracket:
+		return postingSlot && l.prev2Type == TokenAccount
+	case TokenAt, TokenAtAt, TokenEquals, TokenDoubleEquals, TokenEqualsStar, TokenDoubleEqualsStar, TokenLBrace, TokenDoubleLBrace:
+		return postingSlot
+	case TokenSign:
+		return !isCommodityToken(l.prev2Type)
+	case TokenNumber:
+		// A prefix symbol already names the amount's commodity, so what follows
+		// its number is an annotation, not a second symbol.
+		if l.hasPrefixCommodity() {
+			return false
+		}
+		// "[2024-01-01]" and "(note)" end in a closer that belongs to an open
+		// annotation, not to a symbol.
+		return !l.closesOpenGroup(r)
+	case TokenDirective:
+		return defaultSlot
+	case TokenDate, TokenTime:
+		return pricedCommodity
+	case TokenText, TokenCommodity, TokenQuotedCommodity:
+		// The commodity just read is the one a P directive prices when the date
+		// or time came before it, and the price follows.
+		return priceSlot && (l.prev2Type == TokenDate || l.prev2Type == TokenTime)
+	}
+	return false
+}
+
+// hasPrefixCommodity reports whether the number just scanned follows a symbol
+// written before it, with or without a sign between them.
+func (l *Lexer) hasPrefixCommodity() bool {
+	switch {
+	case isCommodityToken(l.prev2Type):
+		return true
+	case l.prev2Type == TokenSign:
+		return isCommodityToken(l.prev3Type)
+	}
+	return false
+}
+
+// closesOpenGroup reports whether r closes a "[" or "(" that is still open on
+// the current line.
+func (l *Lexer) closesOpenGroup(r rune) bool {
+	var opener rune
+	switch r {
+	case ']':
+		opener = '['
+	case ')':
+		opener = '('
+	default:
+		return false
+	}
+	lineStart := strings.LastIndexByte(l.input[:l.pos], '\n') + 1
+	open := 0
+	for _, c := range l.input[lineStart:l.pos] {
+		switch c {
+		case opener:
+			open++
+		case r:
+			open--
+		}
+	}
+	return open > 0
 }
 
 func (l *Lexer) scanMultiCharCurrency() Token {
@@ -935,7 +1089,7 @@ func (l *Lexer) nextIsCurrencySymbol() bool {
 
 func (l *Lexer) nextIsDigit() bool {
 	pos := l.pos + 1
-	for pos < len(l.input) && l.input[pos] == ' ' {
+	for pos < len(l.input) && isSpaceOrTab(l.input[pos]) {
 		pos++
 	}
 	if pos >= len(l.input) {
@@ -990,7 +1144,7 @@ func (l *Lexer) signStartsPostingAmount() bool {
 		return false
 	}
 	pos := l.pos + 1
-	for pos < len(l.input) && l.input[pos] == ' ' {
+	for pos < len(l.input) && isSpaceOrTab(l.input[pos]) {
 		pos++
 	}
 	if pos >= len(l.input) {
@@ -1001,16 +1155,16 @@ func (l *Lexer) signStartsPostingAmount() bool {
 		return true
 	case r == '.':
 		return pos+1 < len(l.input) && l.isDigit(l.input[pos+1])
-	case unicode.IsLetter(r):
+	case isSymbolRune(r) && !unicode.Is(unicode.Zs, r):
 		pos += size
 		for pos < len(l.input) {
 			r, size = utf8.DecodeRuneInString(l.input[pos:])
-			if !unicode.IsLetter(r) {
+			if !isSymbolRune(r) {
 				break
 			}
 			pos += size
 		}
-		for pos < len(l.input) && l.input[pos] == ' ' {
+		for pos < len(l.input) && isSpaceOrTab(l.input[pos]) {
 			pos++
 		}
 		if pos >= len(l.input) {
@@ -1019,7 +1173,7 @@ func (l *Lexer) signStartsPostingAmount() bool {
 		next := l.input[pos]
 		if next == '-' || next == '+' {
 			pos++
-			for pos < len(l.input) && l.input[pos] == ' ' {
+			for pos < len(l.input) && isSpaceOrTab(l.input[pos]) {
 				pos++
 			}
 			next = 0
@@ -1027,7 +1181,7 @@ func (l *Lexer) signStartsPostingAmount() bool {
 				next = l.input[pos]
 			}
 		}
-		return l.isDigit(next) || (next == '.' && pos+1 < len(l.input) && l.isDigit(l.input[pos+1]))
+		return l.isDigit(next) || ((next == '.' || next == ',') && pos+1 < len(l.input) && l.isDigit(l.input[pos+1]))
 	}
 	return false
 }
@@ -1039,6 +1193,26 @@ func (l *Lexer) signStartsPostingAmount() bool {
 func (l *Lexer) startsLeadingDecimalNumber() bool {
 	inAmountSlot := (l.onPostingLine && !l.afterIndent) || (l.inDirective && l.directiveName == "P")
 	return inAmountSlot && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1])
+}
+
+// startsLeadingCommaNumber reports whether the "," at the current position
+// begins a number that omits its integer part, such as "$ ,5". hledger reads a
+// comma glued to a symbol, or at the start of an amount, as part of the symbol,
+// so only a number that follows a prefix commodity and a space qualifies.
+func (l *Lexer) startsLeadingCommaNumber() bool {
+	if l.pos+1 >= len(l.input) || !l.isDigit(l.input[l.pos+1]) {
+		return false
+	}
+	if (!l.onPostingLine || l.afterIndent) && !l.inPriceAmountSlot() {
+		return false
+	}
+	switch l.prevType {
+	case TokenCommodity, TokenQuotedCommodity:
+		return true
+	case TokenSign:
+		return isCommodityToken(l.prev2Type)
+	}
+	return false
 }
 
 func (l *Lexer) scanSign() Token {

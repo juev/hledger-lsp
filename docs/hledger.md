@@ -275,6 +275,18 @@ $100        ; Symbol before, no space
 10 "ACME Inc." @ $50
 ```
 
+**Unquoted symbols:** hledger 1.52.4 reads every character as part of an unquoted symbol except ASCII digits, space, tab and ``-+.@*;"{}=``. Punctuation, brackets and any other Unicode character belong to the symbol, and the symbol runs as far as such characters go:
+
+```
+,5          ; symbol ",", quantity 5
+$,5         ; symbol "$,", quantity 5
+5 EUR!      ; symbol "EUR!"
+5 (x)       ; symbol "(x)"
+5 😀        ; symbol "😀"
+```
+
+The same rule holds in postings, costs, balance assertions, the `D` directive and the `commodity` directive, and for the commodity a `P` directive prices. That commodity must be followed by a space and may not hold a digit or a character from the list above unless it is quoted. A comma glued to a symbol is part of it, so a number that starts with the decimal comma needs a prefix symbol and a space: `$ ,5` is `$ 0.5`. After the price, hledger ignores the rest of a `P` line. A `(` or `[` after a complete amount opens a lot annotation instead of a symbol.
+
 ### Decimal Mark Disambiguation
 
 When amounts contain only one period or comma (e.g., `1,000`), hledger assumes it's a decimal mark. Use `decimal-mark` directive to clarify:
@@ -287,11 +299,15 @@ decimal-mark ,    ; Comma is decimal
 **Rules verified against hledger 1.52** (`internal/testutil/hledger.go` holds the case matrix; run it with `nix shell nixpkgs#hledger -c env HLEDGER_ORACLE=1 go test ./... -run Oracle`):
 
 - Only a number with one separator and no space group is ambiguous. `1.234,50`, `1,234,567` and `1 500,50` state their own reading, whatever is declared.
-- An ambiguous number takes the first declared mark from: the `decimal-mark` directive, the commodity's own style, the `D` directive's style. `D` is the fallback for every commodity, not only the one it names. With nothing declared, the lone separator is the decimal mark.
+- An ambiguous number written with a symbol takes the first declared mark from: the `decimal-mark` directive, the symbol's own style, the `D` directive's style. `D` is the fallback for every commodity, not only the one it names. With nothing declared, the lone separator is the decimal mark.
+- A bare number takes the mark of the `decimal-mark` directive, else the one of the `D` directive, even when a `commodity` directive declares another mark for the commodity `D` names: with `commodity 1.000,00 X` and `D 1000. X`, `15,000` is 15000 and `15,000 X` is 15. A style written without a symbol (`commodity 1.000,00`) counts for bare numbers only when it comes before the `D` directive.
+- While a `D` directive is in force, hledger reads a `commodity` or `D` number written without a symbol as an amount of that `D`'s commodity in that `D`'s style. Such a line needs no decimal mark of its own (`commodity 1000` and `D 1000,00` after `D 1000.00 X` are accepted) and declares nothing new: a symbol-less `commodity` gives the commodity `D` names the `D` directive's mark, and that style crosses an `include` like any commodity style; a symbol-less `D` keeps the commodity, the mark and the symbol side of the `D` in force. After `D 1000.00` and `D 1000,`, `15,000` is 15000 and `1,5` is 15; after `D 1.000,00 RUB` and `D 1.000,00`, a bare `1.000,00` is still RUB.
+- A `commodity` or `D` number that ends in a separator takes it as its mark whatever mark the line's commodity has in force: `D 1000. X` after `commodity 1.000,00 X` declares `.`. A number that ends in a separator it already uses before, or in one after a space digit group and the other separator, is an error (`invalid use of separator`), even under a `D` in force: `D 1.000. X`, `D 1,000.00. X`, `D 1000.00.`, `commodity 1,000, X`, `D 1,000.00,`, `D 1 000.00, X`. `D 1 000. X` and `D 1.000.000, X` are accepted. A `D` number written with the other mark and digits after it (`D 1000.00 X` after `commodity 1.000,00 X`) is an error.
 - Under a declared mark, a lone separator of the other kind is a digit group: with `commodity 1000.00 X`, `15,000 X` is 15000.
 - Directives apply from their position onward, and commodity styles cross `include` in both directions.
 - `commodity` and `D` numbers are read by the same rules and must end up with a decimal mark: `commodity 1000 X` is an error, `commodity 1000. X` is not, and `commodity 1000,00 X` is an error when `.` is already in force. `commodity 1,000 X` declares a comma decimal mark.
 - `commodity X` with no format resets the style.
+- A `format` subdirective is read like a `commodity` line: the symbol is the one on the side it is written on. With the symbol `,` written first, `format , 1.000,` and `format ,1.000,` declare a comma mark (`15,000 ,` is 15); written last and glued, `format 1.000,,` is an invalid number.
 
 ### Digit Group Marks
 
@@ -436,11 +452,26 @@ Tags appear in comments (transaction or posting level).
 
 | Rule | Example |
 |------|---------|
-| Tag name | Letters, numbers, hyphens |
-| No spaces in name | `project-x:` not `project x:` |
+| Tag name is the last word before the colon | `paid on date:2024-01-19` is the tag `date` |
+| Any non-space characters form the name, in any script | `проект:`, `a.b:`, `[x]y:` |
+| A comma glued to the word belongs to the name | `x,date:2024-01-19` is the tag `x,date`, not a date |
+| A colon with no word before it names nothing | `; :x, y:1` has only the tag `y` |
 | Value is optional | `reviewed:` |
-| Value ends at comma or line end | `tag:value,` |
+| Value ends at comma or line end, spaces around it are trimmed | `tag: two words , next:1` |
+| A colon inside a value starts no tag | `foo:bar baz:qux` is `foo` = `bar baz:qux` |
 | Multiple tags | `tag1:val1, tag2:val2` |
+| Each comment line is read on its own | a name or value never spans lines |
+
+These rules were checked against hledger 1.52.4. They apply to every
+comment: the transaction line, the posting line, comment lines below them and
+directive comments such as `account`. A `date:` or `date2:` tag written after
+prose dates the posting like any other, and hledger refuses its invalid value.
+
+A posting comment (on the posting line or a `;` line below a posting, in a
+transaction, a periodic transaction or an auto posting rule) differs in one
+detail: after a colon that names nothing, hledger skips the spaces and
+one comma before the next name. So `; :,date:2024-01-19` dates a posting, while
+on a transaction the same text is the tag `,date`.
 
 ### Examples
 
