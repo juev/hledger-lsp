@@ -550,3 +550,25 @@ func TestPublishDiagnostics_StrictModeStillOffersDeclareAccount(t *testing.T) {
 	assert.Contains(t, titles, "Declare account food:snacks",
 		"the declaration fix must also work in strict mode")
 }
+
+func TestPublishDiagnostics_AssignmentWithPostingDateIsAnError(t *testing.T) {
+	content := "2024-01-01 касса\n    現金:口座  = -4 GBP  ; date:2024-01-19\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///assignment-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			refused := diagnosticWithCode(diagnostics, "ASSIGNMENT_POSTING_DATE")
+			require.NotNil(t, refused, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, refused.Severity)
+			assert.Equal(t, uint32(1), refused.Range.Start.Line)
+		})
+	}
+}

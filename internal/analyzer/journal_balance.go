@@ -642,15 +642,33 @@ func registerDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 // yearless value inherits the transaction year. Invalid date: values have their
 // own diagnostic and fall back to the transaction date here.
 func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
-	for _, tag := range posting.Tags {
+	if date, ok := postingDateOverride(tx, posting); ok {
+		return date
+	}
+	return tx.Date
+}
+
+// postingDateOverride returns the date a posting carries of its own: the first
+// valid date: tag, or the primary date of the first valid bracketed date in its
+// comment or on the comment lines below it. A date: value is read up to its first character that cannot belong to
+// a date, as hledger does, while a bracketed date must be the whole bracket.
+// Names are case sensitive, so Date: is an ordinary tag.
+func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, bool) {
+	tags := posting.Tags
+	comment := posting.Comment
+	for _, line := range continuationComments(tx, posting) {
+		tags = append(tags[:len(tags):len(tags)], line.Tags...)
+		comment += " " + line.Text
+	}
+
+	for _, tag := range tags {
 		if tag.Name == "date" {
-			if date, ok := parsePostingDateValue(tag.Value, tx.Date.Year); ok {
-				return date
+			if date, ok := parsePostingDateValue(leadingDateText(tag.Value), tx.Date.Year); ok {
+				return date, true
 			}
 		}
 	}
 
-	comment := posting.Comment
 	for {
 		start := strings.IndexByte(comment, '[')
 		if start < 0 {
@@ -663,11 +681,44 @@ func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 		}
 		primary, _, _ := strings.Cut(comment[:end], "=")
 		if date, ok := parsePostingDateValue(primary, tx.Date.Year); ok {
-			return date
+			return date, true
 		}
 		comment = comment[end+1:]
 	}
-	return tx.Date
+	return ast.Date{}, false
+}
+
+// continuationComments returns the comment lines written under a posting, which
+// belong to that posting: the parser keeps them with the transaction.
+func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comment {
+	if len(tx.Comments) == 0 {
+		return nil
+	}
+	next := int(^uint(0) >> 1)
+	for i := range tx.Postings {
+		if &tx.Postings[i] == posting && i+1 < len(tx.Postings) {
+			next = postingRange(&tx.Postings[i+1]).Start.Line
+		}
+	}
+	first := postingRange(posting).Start.Line
+	var lines []ast.Comment
+	for _, line := range tx.Comments {
+		if line.Range.Start.Line > first && line.Range.Start.Line < next {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// leadingDateText returns the part of a tag value that reads as a date: digits
+// joined by -, / or ., after any leading spaces.
+func leadingDateText(value string) string {
+	value = strings.TrimLeft(value, " \t")
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '-' || value[end] == '/' || value[end] == '.') {
+		end++
+	}
+	return strings.TrimRight(value[:end], "-/.")
 }
 
 func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
