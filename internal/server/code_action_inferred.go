@@ -2,12 +2,14 @@ package server
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/shopspring/decimal"
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
+	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -51,6 +53,27 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 		return alignment
 	}
 
+	// The occurrences are listed only once a posting qualifies, like the alignment.
+	var readings []occurrenceReading
+	readingsListed := false
+	listReadings := func() []occurrenceReading {
+		if !readingsListed {
+			readings = s.occurrenceReadings(params.TextDocument.URI, doc)
+			readingsListed = true
+		}
+		return readings
+	}
+	var readingEffects [][]analyzer.PostingEffect
+	effectsOf := func(index int) []analyzer.PostingEffect {
+		if readingEffects == nil {
+			readingEffects = make([][]analyzer.PostingEffect, len(readings))
+		}
+		if readingEffects[index] == nil {
+			readingEffects[index] = analyzer.CalculatePostingEffects(readings[index].journal)
+		}
+		return readingEffects[index]
+	}
+
 	actions := make([]protocol.CodeAction, 0, 1)
 	for _, effect := range s.cachedPostingEffects(params.TextDocument.URI, doc) {
 		// A single edit cannot express a balance spanning several commodities.
@@ -71,9 +94,18 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 
 		formats := s.commodityFormatsAt(params.TextDocument.URI, journal, posting.Range.Start.Offset)
 		amountText := formatInferredAmount(transaction, effect.InferredAmounts, formats)
-		edit, ok := buildInferredAmountEdit(lines, posting, amountText, computeAlignment(), settings.Formatting)
+		buildEdit := func(text string) (protocol.TextEdit, bool) {
+			return buildInferredAmountEdit(lines, posting, text, computeAlignment(), settings.Formatting)
+		}
+		edit, ok := buildEdit(amountText)
 		if !ok {
 			continue
+		}
+		if all := listReadings(); len(all) > 1 {
+			amountText, edit, ok = inferredAmountForReadings(all, doc, effect, posting.Range.Start.Offset, amountText, buildEdit, effectsOf, settings.Diagnostics.BalanceTolerance)
+			if !ok {
+				continue
+			}
 		}
 
 		actions = append(actions, protocol.CodeAction{
@@ -266,4 +298,68 @@ func buildInferredAmountEdit(
 		},
 		NewText: newText,
 	}, true
+}
+
+// inferredAmountForReadings picks the text to write for an inferred amount when
+// the document is read under several contexts. The amount is inferred at each
+// occurrence from what that occurrence reads, and the text is read back at each
+// one, so it is offered only when it balances the transaction at every
+// occurrence. Candidates are the text each occurrence's own formats produce and
+// the number as plain digits, which reads the same under any decimal mark.
+func inferredAmountForReadings(
+	readings []occurrenceReading,
+	doc string,
+	effect analyzer.PostingEffect,
+	offset int,
+	firstText string,
+	buildEdit func(text string) (protocol.TextEdit, bool),
+	effectsOf func(index int) []analyzer.PostingEffect,
+	tolerance float64,
+) (string, protocol.TextEdit, bool) {
+	candidates := []string{firstText}
+	var plain []string
+	addTo := func(list *[]string, text string) {
+		if text != "" && !slices.Contains(candidates, text) && !slices.Contains(*list, text) {
+			*list = append(*list, text)
+		}
+	}
+	var styled []string
+	for index := range readings {
+		reading := &readings[index]
+		if effect.TransactionIndex >= len(reading.journal.Transactions) {
+			return "", protocol.TextEdit{}, false
+		}
+		var inferred map[string]decimal.Decimal
+		for _, other := range effectsOf(index) {
+			if other.TransactionIndex == effect.TransactionIndex && other.PostingIndex == effect.PostingIndex {
+				inferred = other.InferredAmounts
+			}
+		}
+		// A reading that infers several commodities, or none, has no single
+		// amount that a single edit could write for it.
+		if len(inferred) != 1 {
+			return "", protocol.TextEdit{}, false
+		}
+		transaction := &reading.journal.Transactions[effect.TransactionIndex]
+		if index > 0 {
+			addTo(&styled, formatInferredAmount(transaction, inferred, reading.formatsAt(offset)))
+		}
+		addTo(&plain, formatInferredAmount(transaction, inferred, map[string]formatter.CommodityFormat{}))
+	}
+
+	candidates = append(append(candidates, styled...), plain...)
+	for _, text := range candidates {
+		edit, ok := buildEdit(text)
+		if !ok {
+			continue
+		}
+		balanced := everywhere(doc, readings, []protocol.TextEdit{edit}, func(edited *ast.Journal) bool {
+			return effect.TransactionIndex < len(edited.Transactions) &&
+				analyzer.CheckBalance(&edited.Transactions[effect.TransactionIndex], decimal.NewFromFloat(tolerance)).Balanced
+		})
+		if balanced {
+			return text, edit, true
+		}
+	}
+	return "", protocol.TextEdit{}, false
 }

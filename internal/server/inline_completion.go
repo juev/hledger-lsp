@@ -79,12 +79,17 @@ func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineComp
 
 	insertText := buildInlinePostingsText(postings, settings.Formatting, alignment)
 
+	insertRange := protocol.Range{
+		Start: protocol.Position{Line: params.Position.Line, Character: 0},
+		End:   protocol.Position{Line: params.Position.Line, Character: params.Position.Character},
+	}
+	if !s.insertionReadsAlike(params.TextDocument.URI, content, lineNum, protocol.TextEdit{Range: insertRange, NewText: insertText}) {
+		return emptyInlineCompletionList(), nil
+	}
+
 	item := protocol.InlineCompletionItem{
 		InsertText: protocol.String(insertText),
-		Range: &protocol.Range{
-			Start: protocol.Position{Line: params.Position.Line, Character: 0},
-			End:   protocol.Position{Line: params.Position.Line, Character: params.Position.Character},
-		},
+		Range:      &insertRange,
 	}
 
 	return &protocol.InlineCompletionList{Items: []protocol.InlineCompletionItem{item}}, nil
@@ -341,4 +346,59 @@ func preferTemplateKey(candidate, current string) bool {
 		return len(candidate) < len(current)
 	}
 	return candidate < current
+}
+
+// insertionReadsAlike reports whether the postings the edit writes on the
+// zero-based line, directly under a transaction header, read as the same amounts at every occurrence
+// of the document. The text is copied from another transaction, and a number
+// like `1,500` is a different value under a different decimal mark; the edit is
+// refused rather than writing an amount the occurrences disagree about. A
+// document read one way has nothing to disagree about.
+func (s *Server) insertionReadsAlike(docURI uri.URI, content string, line int, edit protocol.TextEdit) bool {
+	readings := s.occurrenceReadings(docURI, content)
+	if len(readings) < 2 {
+		return true
+	}
+
+	var want string
+	for index := range readings {
+		journal, ok := readings[index].parseEdited(content, []protocol.TextEdit{edit})
+		if !ok {
+			return false
+		}
+		got, ok := amountSignatureAfterHeader(journal, line)
+		if !ok {
+			return false
+		}
+		if index == 0 {
+			want = got
+		} else if got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// amountSignatureAfterHeader lists the quantity and commodity of every amount of
+// the transaction whose header sits directly above the zero-based line.
+func amountSignatureAfterHeader(journal *ast.Journal, line int) (string, bool) {
+	for i := range journal.Transactions {
+		// Transaction ranges are one-based, so the header's number is line.
+		if journal.Transactions[i].Range.Start.Line != line {
+			continue
+		}
+		var sb strings.Builder
+		for j := range journal.Transactions[i].Postings {
+			for _, amount := range postingAmounts(&journal.Transactions[i].Postings[j]) {
+				if amount == nil {
+					sb.WriteString("-;")
+					continue
+				}
+				sb.WriteString(amount.Quantity.String() + "|" + amount.Commodity.Symbol + ";")
+			}
+			sb.WriteString("/")
+		}
+		return sb.String(), true
+	}
+	return "", false
 }
