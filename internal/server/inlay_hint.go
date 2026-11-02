@@ -48,7 +48,7 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	emit := func(ref analyzer.PostingRef, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool)) {
+	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
 			var values []hintValue
@@ -78,8 +78,8 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 		}
 		var values []hintValue
-		for _, occurrence := range occurrences {
-			if amounts := occurrence.balances[ref]; len(amounts) > 0 {
+		for index, occurrence := range occurrences {
+			if amounts := balanceAt(index); len(amounts) > 0 {
 				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
@@ -99,44 +99,92 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 				continue
 			}
 			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
-			emit(ref, posting, func(int) (analyzer.PostingEffect, bool) { return effect, true })
+			emit(posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].balances[ref] })
 		}
 		return hints, nil
 	}
 
-	effectsByReading := make([]map[analyzer.PostingRef]analyzer.PostingEffect, len(readings))
-	var refs []analyzer.PostingRef
-	known := make(map[analyzer.PostingRef]bool)
+	// Several readings parse the same text, but a context can drop or keep a
+	// posting that another does not, so the postings of different readings are
+	// matched by where they are written, never by their position in the journal.
+	// The balances of an inclusion are matched the same way.
+	located := make([]map[int]locatedEffect, len(readings))
+	var offsets []int
+	known := make(map[int]*ast.Posting)
 	for index := range readings {
 		if readings[index].other == nil {
-			effectsByReading[index] = postingEffectIndex(primaryEffects)
+			located[index] = locateEffects(readings[index].journal, primaryEffects)
 		} else {
-			effectsByReading[index] = readings[index].other.postingEffectIndex()
+			located[index] = readings[index].other.locatedEffects()
 		}
-		for _, ref := range effectOrder(index, primaryEffects, readings) {
-			if !known[ref] {
-				known[ref] = true
-				refs = append(refs, ref)
+		for offset, entry := range located[index] {
+			if _, seen := known[offset]; !seen {
+				known[offset] = entry.posting
+				offsets = append(offsets, offset)
 			}
 		}
 	}
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].TransactionIndex != refs[j].TransactionIndex {
-			return refs[i].TransactionIndex < refs[j].TransactionIndex
-		}
-		return refs[i].PostingIndex < refs[j].PostingIndex
-	})
-	for _, ref := range refs {
-		posting, ok := postingOf(readings, effectsByReading, ref)
-		if !ok || !postingTouchesRange(mapper, posting, params.Range) {
+	slices.Sort(offsets)
+	balancesByOffset := make([]map[int]map[string]decimal.Decimal, len(occurrences))
+	for index, occurrence := range occurrences {
+		balancesByOffset[index] = s.balancesByOffset(params.TextDocument.URI, content, occurrence)
+	}
+	for _, offset := range offsets {
+		posting := known[offset]
+		if !postingTouchesRange(mapper, posting, params.Range) {
 			continue
 		}
-		emit(ref, posting, func(index int) (analyzer.PostingEffect, bool) {
-			effect, ok := effectsByReading[index][ref]
-			return effect, ok
-		})
+		emit(posting, func(index int) (analyzer.PostingEffect, bool) {
+			entry, ok := located[index][offset]
+			return entry.effect, ok
+		}, func(occurrence int) map[string]decimal.Decimal { return balancesByOffset[occurrence][offset] })
 	}
 	return hints, nil
+}
+
+// locatedEffect is a posting effect with the posting it belongs to.
+type locatedEffect struct {
+	posting *ast.Posting
+	effect  analyzer.PostingEffect
+}
+
+// locateEffects keys the effects of a journal by the offset their posting starts at.
+func locateEffects(journal *ast.Journal, effects []analyzer.PostingEffect) map[int]locatedEffect {
+	located := make(map[int]locatedEffect, len(effects))
+	for _, effect := range effects {
+		if posting := effectPosting(journal, effect); posting != nil {
+			located[posting.Range.Start.Offset] = locatedEffect{posting, effect}
+		}
+	}
+	return located
+}
+
+// balancesByOffset keys the running balances of an inclusion by the offset their
+// posting starts at in the inclusion's own journal, reusing the result until the
+// document or its tree moves.
+func (s *Server) balancesByOffset(docURI uri.URI, content string, occurrence balanceOccurrence) map[int]map[string]decimal.Decimal {
+	doc := s.cachedParse(docURI, content)
+	key := readingKey{tree: occurrence.ref.tree, id: occurrence.ref.occurrence.ID}
+
+	doc.runningMu.Lock()
+	defer doc.runningMu.Unlock()
+	if byOffset, ok := doc.runningOffsets[key]; ok {
+		return byOffset
+	}
+	byOffset := make(map[int]map[string]decimal.Decimal, len(occurrence.balances))
+	journal := occurrence.ref.occurrence.Journal
+	for ref, amounts := range occurrence.balances {
+		if journal == nil || ref.TransactionIndex >= len(journal.Transactions) || ref.PostingIndex >= len(journal.Transactions[ref.TransactionIndex].Postings) {
+			continue
+		}
+		byOffset[journal.Transactions[ref.TransactionIndex].Postings[ref.PostingIndex].Range.Start.Offset] = amounts
+	}
+	if doc.runningOffsets == nil {
+		doc.runningOffsets = make(map[readingKey]map[int]map[string]decimal.Decimal)
+	}
+	doc.runningOffsets[key] = byOffset
+	return byOffset
 }
 
 // effectPosting returns the posting an effect belongs to, or nil when the effect
@@ -150,43 +198,6 @@ func effectPosting(journal *ast.Journal, effect analyzer.PostingEffect) *ast.Pos
 		return nil
 	}
 	return &transaction.Postings[effect.PostingIndex]
-}
-
-func postingEffectIndex(effects []analyzer.PostingEffect) map[analyzer.PostingRef]analyzer.PostingEffect {
-	index := make(map[analyzer.PostingRef]analyzer.PostingEffect, len(effects))
-	for _, effect := range effects {
-		index[analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}] = effect
-	}
-	return index
-}
-
-// effectOrder lists the postings reading index has effects for.
-func effectOrder(index int, primaryEffects []analyzer.PostingEffect, readings []occurrenceReading) []analyzer.PostingRef {
-	effects := primaryEffects
-	if readings[index].other != nil {
-		effects = readings[index].other.postingEffects()
-	}
-	refs := make([]analyzer.PostingRef, 0, len(effects))
-	for _, effect := range effects {
-		refs = append(refs, analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex})
-	}
-	return refs
-}
-
-// postingOf returns the posting a ref names, from the first reading that has an
-// effect for it. The readings parse the same text, so the posting sits at the
-// same place in each.
-func postingOf(readings []occurrenceReading, effects []map[analyzer.PostingRef]analyzer.PostingEffect, ref analyzer.PostingRef) (*ast.Posting, bool) {
-	for index := range readings {
-		if _, ok := effects[index][ref]; !ok {
-			continue
-		}
-		journal := readings[index].journal
-		if ref.TransactionIndex < len(journal.Transactions) && ref.PostingIndex < len(journal.Transactions[ref.TransactionIndex].Postings) {
-			return &journal.Transactions[ref.TransactionIndex].Postings[ref.PostingIndex], true
-		}
-	}
-	return nil, false
 }
 
 // balanceOccurrence is one inclusion of the document with its replayed balances.
@@ -207,9 +218,11 @@ func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []bala
 		used[readingKey{}] = true
 		return []balanceOccurrence{{
 			balances: s.cachedRunningBalances(docURI, content, nil, 0),
+			// The same formats as the inferred amount of the line, so the two hints
+			// of one posting are written alike.
 			formatsAt: func(offset int) map[string]formatter.CommodityFormat {
 				journal, _ := s.cachedJournal(docURI, content)
-				return localCommodityFormatsAt(journal, offset)
+				return s.commodityFormatsAt(docURI, journal, offset)
 			},
 		}}
 	}
