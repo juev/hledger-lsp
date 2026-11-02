@@ -91,6 +91,48 @@ var bracketDateCases = []struct {
 	{name: "in the transaction comment", input: "2024-01-01 t ; [2024-13-05]\n    a  5 USD\n    b\n"},
 	{name: "on a comment line before the postings", input: "2024-01-01 t\n    ; [2024-13-05]\n    a  5 USD\n    b\n"},
 	{name: "in a comment of its own", input: "2024-01-01 t\n    a  5 USD\n    b\n\n; [2024-13-05]\n"},
+
+	// A bracket of date characters with a digit and a separator commits hledger
+	// to [date], [date=date] or [=date]; anything left over is refused.
+	{name: "date followed by a part after another separator", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05/06]\n    b\n", invalid: true},
+	{name: "date followed by a fourth part", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05-06]\n    b\n", invalid: true},
+	{name: "three dates", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05=2024-01-06=2024-01-07]\n    b\n", invalid: true},
+	{name: "secondary with mixed separators", input: "2024-01-01 t\n    a  5 USD  ; [=2024-01-05/06]\n    b\n", invalid: true},
+	{name: "date followed by a dash", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05-]\n    b\n", invalid: true},
+	{name: "date followed by a dot", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05.]\n    b\n", invalid: true},
+	{name: "yearless date followed by a dash", input: "2024-01-01 t\n    a  5 USD  ; [01-05-]\n    b\n", invalid: true},
+	{name: "date after a dash", input: "2024-01-01 t\n    a  5 USD  ; [-2024-01-05]\n    b\n", invalid: true},
+	{name: "empty month", input: "2024-01-01 t\n    a  5 USD  ; [2024--05]\n    b\n", invalid: true},
+	{name: "two equals signs between dates", input: "2024-01-01 t\n    a  5 USD  ; [2024-01-05==2024-01-06]\n    b\n", invalid: true},
+	{name: "two equals signs before a date", input: "2024-01-01 t\n    a  5 USD  ; [==2024-01-06]\n    b\n", invalid: true},
+	{name: "secondary followed by an equals sign", input: "2024-01-01 t\n    a  5 USD  ; [=2024-01-05=]\n    b\n", invalid: true},
+	{name: "number followed by a dash", input: "2024-01-01 t\n    a  5 USD  ; [5-]\n    b\n", invalid: true},
+	{name: "number after a dash", input: "2024-01-01 t\n    a  5 USD  ; [-5]\n    b\n", invalid: true},
+	{name: "number followed by a dot", input: "2024-01-01 t\n    a  5 USD  ; [5.]\n    b\n", invalid: true},
+	{name: "dashed number before a number", input: "2024-01-01 t\n    a  5 USD  ; [5-=6]\n    b\n", invalid: true},
+	{name: "number and a dashed number after =", input: "2024-01-01 t\n    a  5 USD  ; [5=-]\n    b\n", invalid: true},
+	{name: "dash before a number after =", input: "2024-01-01 t\n    a  5 USD  ; [-=5]\n    b\n", invalid: true},
+	{name: "secondary followed by a dash", input: "2024-01-01 t\n    a  5 USD  ; [=5-]\n    b\n", invalid: true},
+	{name: "four parts", input: "2024-01-01 t\n    a  5 USD  ; [1-1-1-1]\n    b\n", invalid: true},
+	{name: "year of four digits and a month", input: "2024-01-01 t\n    a  5 USD  ; [0002-05]\n    b\n", invalid: true},
+	{name: "no digit after =", input: "2024-01-01 t\n    a  5 USD  ; [=-]\n    b\n"},
+	{name: "yearless secondary only", input: "2024-01-01 t\n    a  5 USD  ; [=5-6]\n    b\n"},
+	{name: "dotted yearless date", input: "2024-01-01 t\n    a  5 USD  ; [1.5]\n    b\n"},
+	{name: "month with leading zeros", input: "2024-01-01 t\n    a  5 USD  ; [2024-001-05]\n    b\n"},
+
+	// A yearless secondary takes the year of the primary.
+	{name: "yearless secondary in the common year of the primary", input: "2024-01-01 t\n    a  5 USD  ; [2023-01-05=02-29]\n    b\n", invalid: true},
+	{name: "yearless secondary in the leap year of the primary", input: "2023-01-01 t\n    a  5 USD  ; [2024-01-05=02-29]\n    b\n"},
+	{name: "yearless secondary in year 0 of the primary", input: "2023-01-01 t\n    a  5 USD  ; [0000-01-05=02-29]\n    b\n"},
+	{name: "yearless secondary below the posting in the year of the primary", input: "2024-01-01 касса\n    現金  5 USD\n    ; заметка [2023-01-05=02-29]\n    капитал\n", invalid: true},
+
+	// The year is read whole, not cut to a machine integer.
+	{name: "February 29 in a century year that is not leap", input: "2024-01-01 t\n    a  5 USD  ; [99999999999999999700-02-29]\n    b\n", invalid: true},
+	{name: "February 29 in a leap century year", input: "2024-01-01 t\n    a  5 USD  ; [99999999999999999600-02-29]\n    b\n"},
+
+	// An indented # or * line is a posting of its own to hledger, not a comment.
+	{name: "on a # line below the posting", input: "2024-01-01 t\n    a  5 USD\n    # paid [2024-13-05]\n    b  -5 USD\n"},
+	{name: "on a * line below the posting", input: "2024-01-01 t\n    a  5 USD\n    * paid [2024-13-05]\n    b  -5 USD\n"},
 }
 
 func TestAnalyzer_BracketedPostingDate(t *testing.T) {
@@ -152,13 +194,54 @@ func TestAnalyzer_BracketedSecondaryDateRange(t *testing.T) {
 	assert.Equal(t, found.Range.Start.Column+10, found.Range.End.Column)
 }
 
+func TestAnalyzer_BracketedDateRangeOnACommentLineBelow(t *testing.T) {
+	// "    ; заметка [2023-01-05=02-29]": ";" is at column 5, so "[" is at 15, the
+	// primary starts at 16 and the secondary, read in 2023, at 27.
+	journal, errs := parser.Parse("2024-01-01 касса\n    現金  5 USD\n    ; заметка [2023-01-05=02-29]\n    капитал\n")
+	require.Empty(t, errs)
+
+	var reported []Diagnostic
+	for _, d := range New().Analyze(journal).Diagnostics {
+		if d.Code == "INVALID_POSTING_DATE" {
+			reported = append(reported, d)
+		}
+	}
+	require.Len(t, reported, 1)
+	assert.Equal(t, 3, reported[0].Range.Start.Line)
+	assert.Equal(t, 27, reported[0].Range.Start.Column)
+	assert.Equal(t, 32, reported[0].Range.End.Column)
+	assert.Equal(t, "02-29", reported[0].Data["value"])
+}
+
+func TestAnalyzer_BracketedDateWithALeftoverIsReportedOnItsHalf(t *testing.T) {
+	journal, errs := parser.Parse("2024-01-01 t\n    a  5 USD  ; [2024-01-05=2024-01-06/07]\n    b\n")
+	require.Empty(t, errs)
+
+	var reported []Diagnostic
+	for _, d := range New().Analyze(journal).Diagnostics {
+		if d.Code == "INVALID_POSTING_DATE" {
+			reported = append(reported, d)
+		}
+	}
+	require.Len(t, reported, 1)
+	assert.Equal(t, "2024-01-06/07", reported[0].Data["value"])
+	assert.Equal(t, 29, reported[0].Range.Start.Column)
+	assert.Equal(t, 42, reported[0].Range.End.Column)
+}
+
 func TestAnalyzer_YearlessDateTagUsesTheTransactionYear(t *testing.T) {
 	for name, tc := range map[string]struct {
 		input   string
 		invalid bool
 	}{
-		"February 29 in a common year": {"2023-01-01 t\n    a  5 USD  ; date:02-29\n    b\n", true},
-		"February 29 in a leap year":   {"2024-01-01 t\n    a  5 USD  ; date:02-29\n    b\n", false},
+		"February 29 in a common year":                    {"2023-01-01 t\n    a  5 USD  ; date:02-29\n    b\n", true},
+		"February 29 in a leap year":                      {"2024-01-01 t\n    a  5 USD  ; date:02-29\n    b\n", false},
+		"February 29 on a comment line below the posting": {"2023-01-01 t\n    a  5 USD\n    ; date2:02-29\n    b\n", true},
+		// A comment of the transaction holds no posting date, so its yearless
+		// value is not checked against the transaction year.
+		"February 29 in the transaction comment":            {"2023-01-01 t  ; date:02-29\n    a  5 USD\n    b\n", false},
+		"February 30 in the transaction comment":            {"2024-01-01 t  ; date:02-30\n    a  5 USD\n    b\n", false},
+		"February 29 on a comment line before the postings": {"2023-01-01 касса\n    ; заметка date:02-29\n    現金  5 USD\n    капитал\n", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			journal, errs := parser.Parse(tc.input)
@@ -210,4 +293,8 @@ func TestOracle_YearlessDateTagVerdictsMatchHledger(t *testing.T) {
 
 	assert.False(t, hledgerAccepts(t, hledgerPath, "2023-01-01 t\n    a  5 USD  ; date:02-29\n    b\n"))
 	assert.True(t, hledgerAccepts(t, hledgerPath, "2024-01-01 t\n    a  5 USD  ; date:02-29\n    b\n"))
+	assert.False(t, hledgerAccepts(t, hledgerPath, "2023-01-01 t\n    a  5 USD\n    ; date2:02-29\n    b\n"))
+	assert.True(t, hledgerAccepts(t, hledgerPath, "2023-01-01 t  ; date:02-29\n    a  5 USD\n    b\n"))
+	assert.True(t, hledgerAccepts(t, hledgerPath, "2024-01-01 t  ; date:02-30\n    a  5 USD\n    b\n"))
+	assert.True(t, hledgerAccepts(t, hledgerPath, "2023-01-01 касса\n    ; заметка date:02-29\n    現金  5 USD\n    капитал\n"))
 }

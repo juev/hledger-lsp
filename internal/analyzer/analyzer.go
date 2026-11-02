@@ -699,7 +699,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
 
-	checkTag := func(tag ast.Tag) {
+	checkTag := func(tag ast.Tag, year int) {
 		name := tag.Name
 		if name != "date" && name != "date2" {
 			return
@@ -716,7 +716,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 			return
 		}
 
-		if !isValidDateValueIn(leadingDateText(tag.Value), tx.Date.Year) {
+		if !isValidDateValueIn(leadingDateText(tag.Value), year) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
 				Severity: SeverityError,
@@ -727,17 +727,30 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		}
 	}
 
+	// A comment line below a posting belongs to that posting, and its dates are
+	// read in the transaction year; the other comment lines are the transaction's.
+	postingLines := make(map[int]bool)
+	for i := range tx.Postings {
+		for _, line := range continuationComments(tx, &tx.Postings[i]) {
+			postingLines[line.Range.Start.Line] = true
+		}
+	}
+
 	// Check transaction comments
 	for _, comment := range tx.Comments {
+		year := withoutYear
+		if postingLines[comment.Range.Start.Line] {
+			year = tx.Date.Year
+		}
 		for _, tag := range comment.Tags {
-			checkTag(tag)
+			checkTag(tag, year)
 		}
 	}
 
 	// Check posting tags
 	for _, posting := range tx.Postings {
 		for _, tag := range posting.Tags {
-			checkTag(tag)
+			checkTag(tag, tx.Date.Year)
 		}
 	}
 
@@ -770,40 +783,23 @@ func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 }
 
 // validateBracketDates reports the bracketed posting dates that hledger refuses
-// to load. A bracket is a date to hledger only when its whole content is one, so
-// [garbage], [ 2024-01-20 ] and [2024-13-05x] are text, while [2024-13-05],
-// [02-30] and [=2024-02-30] are dates that do not exist and make the journal fail.
-// The whole content must be [date], [date=date] or [=date]; both halves are
-// checked, in every bracket of the comment of a posting and of the comment lines
-// below it.
+// to load. hledger takes a bracket for a date when everything in it is a digit,
+// -, /, . or =, with at least one digit and one of -, / or .; [garbage], [5],
+// [ 2024-01-20 ] and [2024-13-05x] stay text. Such a bracket must then be exactly
+// [date], [date=date] or [=date] with dates that exist, so [2024-13-05],
+// [2024-01-05-] and [2024-01-05=2024-01-06=2024-01-07] make the journal fail.
+// Every bracket of the comment of a posting and of the comment lines below it is
+// checked.
 func validateBracketDates(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
 	for i := range tx.Postings {
 		posting := &tx.Postings[i]
 		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, tx.Date.Year)
-		for _, line := range commentLinesBelow(tx, i) {
+		for _, line := range continuationComments(tx, posting) {
 			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, tx.Date.Year)
 		}
 	}
 	return diags
-}
-
-// commentLinesBelow returns the comment lines written under the posting with the
-// given index, which belong to that posting although the parser keeps them with
-// the transaction.
-func commentLinesBelow(tx *ast.Transaction, index int) []ast.Comment {
-	first := postingRange(&tx.Postings[index]).Start.Line
-	next := int(^uint(0) >> 1)
-	if index+1 < len(tx.Postings) {
-		next = postingRange(&tx.Postings[index+1]).Start.Line
-	}
-	var lines []ast.Comment
-	for _, line := range tx.Comments {
-		if line.Range.Start.Line > first && line.Range.Start.Line < next {
-			lines = append(lines, line)
-		}
-	}
-	return lines
 }
 
 func appendBracketDateDiagnostics(diags []Diagnostic, comment string, base ast.Position, transactionYear int) []Diagnostic {
@@ -816,116 +812,115 @@ func appendBracketDateDiagnostics(diags []Diagnostic, comment string, base ast.P
 			break
 		}
 		content := comment[start+1 : start+1+length]
+		if !isBracketedDate(content) {
+			continue
+		}
+
+		// A yearless secondary date takes the year of the primary one.
 		primary, secondary, hasSecondary := strings.Cut(content, "=")
-		for half, value := range []string{primary, secondary} {
-			if half == 1 && !hasSecondary {
-				continue
+		secondaryYear := transactionYear
+		if primary != "" {
+			if year, ok := bracketDateYear(primary, transactionYear); ok {
+				secondaryYear = year
+			} else {
+				diags = append(diags, bracketDateDiagnostic(comment, base, start+1, primary))
 			}
-			if !isRefusedBracketDate(primary, secondary, hasSecondary, half, transactionYear) {
-				continue
+		}
+		if hasSecondary {
+			if _, ok := bracketDateYear(secondary, secondaryYear); !ok {
+				diags = append(diags, bracketDateDiagnostic(comment, base, start+1+len(primary)+1, secondary))
 			}
-			from := start + 1
-			if half == 1 {
-				from += len(primary) + 1
-			}
-			column := base.Column + 1 + utf8.RuneCountInString(comment[:from])
-			message := fmt.Sprintf("posting date has invalid date value: %s", value)
-			if value == "" {
-				message = "posting date has no date after ="
-			}
-			diags = append(diags, Diagnostic{
-				Range: ast.Range{
-					Start: ast.Position{Line: base.Line, Column: column, Offset: base.Offset + 1 + from},
-					End:   ast.Position{Line: base.Line, Column: column + utf8.RuneCountInString(value), Offset: base.Offset + 1 + from + len(value)},
-				},
-				Severity: SeverityError,
-				Code:     "INVALID_POSTING_DATE",
-				Message:  message,
-				Data:     map[string]any{"kind": "postingDate", "value": value},
-			})
 		}
 	}
 	return diags
 }
 
-// isRefusedBracketDate reports whether one half of a bracket makes hledger refuse
-// the journal. A bracket is read as a date only when what is in it is a date: a
-// half with a letter or a space in it, or a primary of a single number, leaves the
-// bracket as text. A date half is refused when it does not exist, when it mixes
-// separators, or when it has three parts and a year of fewer than four digits; a
-// secondary that stops short of a date (empty, a single number, separators only)
-// is refused after a primary that is one, and a date secondary after a primary of a
-// single number is refused.
-func isRefusedBracketDate(primary, secondary string, hasSecondary bool, half, transactionYear int) bool {
-	whole := []string{primary, secondary}
-	for i, value := range whole {
-		if i == 1 && !hasSecondary {
-			break
-		}
-		if value != "" && !onlyDateCharacters(value) {
+// bracketDateDiagnostic reports the half of a bracket that starts at byte from of
+// the comment, whose text begins just after the comment marker at base.
+func bracketDateDiagnostic(comment string, base ast.Position, from int, value string) Diagnostic {
+	column := base.Column + 1 + utf8.RuneCountInString(comment[:from])
+	message := fmt.Sprintf("posting date has invalid date value: %s", value)
+	if value == "" {
+		message = "posting date has no date after ="
+	}
+	return Diagnostic{
+		Range: ast.Range{
+			Start: ast.Position{Line: base.Line, Column: column, Offset: base.Offset + 1 + from},
+			End:   ast.Position{Line: base.Line, Column: column + utf8.RuneCountInString(value), Offset: base.Offset + 1 + from + len(value)},
+		},
+		Severity: SeverityError,
+		Code:     "INVALID_POSTING_DATE",
+		Message:  message,
+		Data:     map[string]any{"kind": "postingDate", "value": value},
+	}
+}
+
+// isBracketedDate reports whether hledger reads what is in a bracket as a date:
+// only digits, separators and =, with a digit and a separator among them.
+func isBracketedDate(content string) bool {
+	digit, separator := false, false
+	for i := 0; i < len(content); i++ {
+		switch c := content[i]; {
+		case c >= '0' && c <= '9':
+			digit = true
+		case c == '-' || c == '/' || c == '.':
+			separator = true
+		case c != '=':
 			return false
 		}
 	}
-	if hasSecondary && primary != "" && !looksLikeDate(primary) {
-		// A single number is no date, but written before = and followed by one
-		// it still stops hledger.
-		return half == 0 && looksLikeDate(secondary) && !strings.ContainsAny(primary, "-/.")
-	}
-
-	value := whole[half]
-	if looksLikeDate(value) {
-		return !isDateOfOneSeparator(value) || isShortYear(value) || !isValidDateValueIn(value, transactionYear)
-	}
-	return half == 1 && primary != ""
+	return digit && separator
 }
 
-func onlyDateCharacters(value string) bool {
-	for _, r := range value {
-		if (r < '0' || r > '9') && r != '-' && r != '/' && r != '.' {
-			return false
+// bracketDateYear reads one half of a bracketed date the way hledger does and
+// returns its year. The half is a year of four or more digits, a month and a day
+// joined by one separator, or a month and a day in the given year; nothing may
+// be left over.
+func bracketDateYear(value string, year int) (int, bool) {
+	var parts []string
+	var separators []byte
+	begin := 0
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; {
+		case c == '-' || c == '/' || c == '.':
+			parts = append(parts, value[begin:i])
+			separators = append(separators, c)
+			begin = i + 1
+		case c < '0' || c > '9':
+			return 0, false
 		}
 	}
-	return true
-}
-
-func isDateOfOneSeparator(value string) bool {
-	separator := rune(0)
-	for _, r := range value {
-		if r == '-' || r == '/' || r == '.' {
-			if separator != 0 && r != separator {
-				return false
-			}
-			separator = r
+	parts = append(parts, value[begin:])
+	for _, part := range parts {
+		if part == "" {
+			return 0, false
 		}
 	}
-	return true
-}
 
-// isShortYear reports whether a date of three parts starts with a year of fewer
-// than four digits.
-func isShortYear(value string) bool {
-	parts := strings.FieldsFunc(value, func(r rune) bool { return r == '-' || r == '/' || r == '.' })
-	return len(parts) == 3 && len(parts[0]) < 4
-}
-
-// looksLikeDate reports whether a whole string is made of numbers joined by -, /
-// or ., the shape hledger reads as a date and refuses when the date does not exist.
-func looksLikeDate(value string) bool {
-	groups := 0
-	digits := false
-	for _, r := range value {
-		switch {
-		case r >= '0' && r <= '9':
-			digits = true
-		case (r == '-' || r == '/' || r == '.') && digits:
-			groups++
-			digits = false
-		default:
-			return false
-		}
+	switch {
+	case len(parts) == 3 && len(parts[0]) >= 4 && separators[0] == separators[1]:
+		year = yearNumber(parts[0])
+	case len(parts) == 2 && len(parts[0]) < 4:
+	default:
+		return 0, false
 	}
-	return digits && (groups == 1 || groups == 2)
+	return year, isValidDateValueIn(value, year)
 }
+
+// yearNumber returns a year written in digits, reduced to the same place in the
+// 400-year Gregorian cycle so that a year of any length keeps its leap years.
+func yearNumber(digits string) int {
+	year := 0
+	for _, ch := range digits {
+		year = (year*10 + int(ch-'0')) % 400
+	}
+	return year
+}
+
+// withoutYear stands for the year of a date tag written outside a posting. hledger
+// reads no posting date there, so a value without a year is not checked against
+// the transaction year.
+const withoutYear = -1
 
 // isValidDateValueIn reports whether a date:/date2: tag value is one hledger
 // accepts. hledger requires a day: "; date:2024-01" fails to load while
@@ -964,7 +959,10 @@ func isValidDateValueIn(value string, transactionYear int) bool {
 
 	year, month, day := transactionYear, numbers[0], numbers[1]
 	if len(numbers) == 3 {
-		year, month, day = numbers[0], numbers[1], numbers[2]
+		year, month, day = yearNumber(parts[0]), numbers[1], numbers[2]
+	}
+	if year == withoutYear {
+		return parser.IsValidCalendarDate(0, month, day)
 	}
 	if year == 0 {
 		// Year 0 is a leap year, and a value without a year in a transaction
