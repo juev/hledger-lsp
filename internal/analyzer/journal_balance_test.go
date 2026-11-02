@@ -1238,6 +1238,381 @@ var assignmentOrderCases = []struct {
 `,
 	},
 	{
+		name: "assertion cost converts the inferred amount",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity  -4 USD
+`,
+	},
+	{
+		name: "assertion total cost converts the inferred amount",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @@ 6 USD
+    equity  -6 USD
+`,
+	},
+	{
+		name: "assertion cost leaves the asserted commodity unbalanced",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity  -2 EUR
+`,
+		wantMessages: []string{"EUR off by -2; USD off by 4"},
+	},
+	{
+		name: "assertion total cost with a negative quantity",
+		input: `2024-01-01 t
+    assets:cash  = -2 EUR @@ 6 USD
+    equity  6 USD
+`,
+	},
+	{
+		name: "assertion cost replaces the balance that was there before",
+		input: `2024-01-01 t1
+    assets:cash  1 EUR
+    equity
+
+2024-01-02 t2
+    assets:cash  = 3 EUR @ 2 USD
+    equity  1 EUR
+    equity  -6 USD
+`,
+	},
+	{
+		name: "assertion cost replaces the balance that was there before and misses one commodity",
+		input: `2024-01-01 t1
+    assets:cash  1 EUR
+    equity
+
+2024-01-02 t2
+    assets:cash  = 3 EUR @ 2 USD
+    equity  2 EUR
+    equity  -6 USD
+`,
+		wantMessages: []string{"EUR off by 1"},
+	},
+	{
+		name: "assertion cost restated later moves nothing",
+		input: `2024-01-01 t1
+    касса  = 2 EUR @ 2 USD
+    капитал
+
+2024-01-02 t2
+    касса  0 EUR = 2 EUR
+    капитал  0 EUR
+`,
+	},
+	{
+		name: "strict inclusive assertion with a cost covers the subaccounts",
+		input: `2024-01-01 t1
+    現金:a  1 EUR
+    現金:b  2 EUR
+    equity
+
+2024-01-02 t2
+    現金  ==* 5 EUR @@ 7 USD
+    equity  3 EUR
+    equity  -7 USD
+`,
+	},
+	{
+		name: "assertion cost at another price keeps the conversion price explicit",
+		input: `2024-01-01 t1
+    bank  = 7 GBP @ 1 EUR
+    c
+
+2024-01-02 t2
+    bank  4.5 GBP
+    c
+
+2024-01-03 t3
+    bank  = 3 GBP @ 3 EUR
+    b  1.5 GBP
+`,
+		wantMessages: []string{"EUR off by 2; GBP off by -3"},
+	},
+	{
+		name: "balanced virtual assertion cost at another price keeps the conversion price explicit",
+		input: `2024-01-12 t2
+    bank  4.5 GBP
+    c
+
+2024-01-14 t3
+    bank  7 GBP @ 1 EUR
+    [bank]  == 3 GBP @ 3 EUR
+    b
+`,
+		wantMessages: []string{"EUR off by 2; GBP off by -4.5"},
+	},
+	{
+		name: "assertion cost over prices that cancel in quantity keeps the conversion price explicit",
+		input: `2024-01-01 t1
+    b  -10 EUR @ 2 USD
+    b  10 EUR @ 3 USD
+    c  = 0 EUR
+    d
+
+2024-01-02 t2
+    b  = 2 EUR @ 5 USD
+    x  1 GBP
+    y  -3 EUR
+`,
+		wantMessages: []string{"EUR off by -3; GBP off by 1"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices",
+		input: `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b  3 GBP
+    b  -5 EUR
+`,
+		wantMessages: []string{"EUR off by -5; GBP off by 3"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices on Cyrillic and CJK accounts",
+		input: `2024-01-01 t1
+    банк:現金  1 GBP @ 1 EUR
+    банк:現金  1 GBP @ 3 EUR
+    касса  = 0 EUR
+    капитал
+
+2024-01-02 t2
+    банк:現金  = 2 GBP @ 2 EUR
+    資本  3 GBP
+    資本  -5 EUR
+`,
+		wantMessages: []string{"EUR off by -5; GBP off by 3"},
+	},
+	{
+		name: "assertion cost replaces balances held at two prices and balances",
+		input: `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	},
+	{
+		name: "assertion off by a half is rejected",
+		input: `2024-01-01 t
+    a  0.5 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1 EUR
+    b
+`,
+		wantMessages: []string{"asserted 1 EUR, calculated 0.5 EUR (difference -0.5)"},
+	},
+	{
+		name: "assertion off by 0.4 from zero is rejected",
+		input: `2024-01-01 t
+    a  0.4 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 0 EUR
+    b
+`,
+		wantMessages: []string{"asserted 0 EUR, calculated 0.4 EUR (difference 0.4)"},
+	},
+	{
+		name: "assertion off by less than its own precision is rejected",
+		input: `2024-01-01 t
+    a  1.004 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1.00 EUR
+    b
+`,
+		wantMessages: []string{"calculated 1.004 EUR (difference 0.004)"},
+	},
+	{
+		name: "assertion with more decimals than the balance is rejected",
+		input: `2024-01-01 t
+    a  1 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1.004 EUR
+    b
+`,
+		wantMessages: []string{"asserted 1.004 EUR, calculated 1 EUR (difference -0.004)"},
+	},
+	{
+		name: "assertion off by less than the commodity style is rejected",
+		input: `commodity 1,000.00 EUR
+
+2024-01-01 t
+    a  0.504 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 0.50 EUR
+    b
+`,
+		wantMessages: []string{"calculated 0.504 EUR (difference 0.004)"},
+	},
+	{
+		name: "assertion off by a millionth is rejected",
+		input: `2024-01-01 t
+    a  1.0000001 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1 EUR
+    b
+`,
+		wantMessages: []string{"difference 0.0000001"},
+	},
+	{
+		name: "assertion that adds a zero decimal is met",
+		input: `2024-01-01 t
+    a  0.5 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 0.50 EUR
+    b
+`,
+	},
+	{
+		name: "assertion that drops a zero decimal is met",
+		input: `2024-01-01 t
+    a  1.50 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1.5 EUR
+    b
+`,
+	},
+	{
+		name: "assertion over a sum of fractions is exact",
+		input: `2024-01-01 t
+    a  0.1 EUR
+    a  0.2 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 0.3 EUR
+    b
+`,
+	},
+	{
+		name: "assertion off by a fraction on Cyrillic and CJK accounts",
+		input: `2024-01-01 касса
+    касса:наличные  0.5 EUR
+    現金
+
+2024-01-02 проверка
+    касса:наличные  0 EUR = 1 EUR
+    現金  0 EUR
+`,
+		wantMessages: []string{"asserted 1 EUR, calculated 0.5 EUR"},
+	},
+	{
+		name: "inclusive assertion off by a fraction",
+		input: `2024-01-01 t
+    a:x  0.5 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR =* 1 EUR
+    b
+`,
+		wantMessages: []string{"asserted 1 EUR, calculated 0.5 EUR"},
+	},
+	{
+		name: "strict assertion off by a fraction",
+		input: `2024-01-01 t
+    a  0.5 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR == 1 EUR
+    b
+`,
+		wantMessages: []string{"asserted 1 EUR, calculated 0.5 EUR"},
+	},
+	{
+		name: "strict assertion with a small balance in another commodity",
+		input: `2024-01-01 t
+    a  1 EUR
+    a  0.004 USD
+    b
+
+2024-01-02 c
+    a  0 EUR == 1 EUR
+    b
+`,
+		wantMessages: []string{"EUR also holds 0.004 USD"},
+	},
+	{
+		name: "strict inclusive assertion with a small balance in another commodity",
+		input: `2024-01-01 t
+    a  1 EUR
+    a  0.004 USD
+    b
+
+2024-01-02 c
+    a  0 EUR ==* 1 EUR
+    b
+`,
+		wantMessages: []string{"EUR also holds 0.004 USD"},
+	},
+	{
+		name: "strict assertion with another commodity that nets to zero",
+		input: `2024-01-01 t
+    a  1 EUR
+    a  0.4 USD
+    a  -0.4 USD
+    b
+
+2024-01-02 c
+    a  0 EUR == 1 EUR
+    b
+`,
+	},
+	{
+		name: "assertion with a cost off by a fraction",
+		input: `2024-01-01 t
+    a  1 EUR
+    b
+
+2024-01-02 c
+    a  0 EUR = 1.004 EUR @ 5 USD
+    b
+`,
+		wantMessages: []string{"asserted 1.004 EUR, calculated 1 EUR"},
+	},
+	{
+		name: "assignment restated stays exact",
+		input: `2024-01-01 t
+    a  0.5 EUR
+    b
+
+2024-01-02 c
+    a  = 1 EUR
+    b  -0.5 EUR
+
+2024-01-03 d
+    a  0 EUR = 1 EUR
+    b
+`,
+	},
+	{
 		name: "inclusive strict assertion ignores another commodity held only by a subaccount",
 		input: `2024-01-01 a
     a:x  1 EUR
@@ -1435,6 +1810,105 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: []string{"EUR also holds 1 USD"},
 	},
+	{
+		name: "inclusive strict assignment gives the account an entry in a commodity a subaccount holds at zero",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  0 USD
+    e
+
+2024-01-02 b
+    a  ==* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
+	{
+		name: "inclusive assignment gives the account an entry in a commodity a subaccount holds at zero",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  0 USD
+    e
+
+2024-01-02 b
+    a  =* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
+	{
+		name: "strict assignment drops the account's entries in other commodities",
+		input: `2024-01-01 a
+    a  1 USD
+    a:x  1 EUR
+    e
+
+2024-01-02 b
+    a  == 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 2 EUR
+`,
+	},
+	{
+		name: "inclusive strict assignment drops the account's entries in commodities no subaccount holds",
+		input: `2024-01-01 a
+    a  1 USD
+    a:x  1 EUR
+    e
+
+2024-01-02 b
+    a  ==* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+	},
+	{
+		name: "inclusive strict assignment on Cyrillic and CJK accounts keeps a subaccount's commodity and drops the rest",
+		input: `2024-01-01 a
+    касса  1 GBP
+    касса:現金  0 USD
+    капитал
+
+2024-01-02 b
+    касса  ==* 1 EUR
+    капитал
+
+2024-01-03 c
+    касса:現金  5 GBP
+    касса:現金  5 USD
+    капитал
+
+2024-01-04 d
+    касса  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {
@@ -1531,4 +2005,41 @@ func TestCheckJournalBalance_AssertionSeesCostKeptByAssignment(t *testing.T) {
     y  0 USD
 `})
 	assert.Empty(t, CheckJournalBalance(resolved, decimal.Zero))
+}
+
+func TestCheckJournalBalance_AssertionsIgnoreTheUserTolerance(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 t
+    касса  0.5 EUR
+    現金
+
+2024-01-02 c
+    касса  0 EUR = 1 EUR
+    現金  0 EUR
+
+2024-01-03 d
+    касса  0.004 USD
+    現金  -0.004 USD
+
+2024-01-04 e
+    касса  0 EUR == 0.5 EUR
+    現金  0 EUR
+`})
+
+	diagnostics := CheckJournalBalance(resolved, decimal.RequireFromString("0.5"))
+
+	require.Len(t, diagnostics, 2)
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[0].Code)
+	assert.Contains(t, diagnostics[0].Message, "asserted 1 EUR, calculated 0.5 EUR")
+	assert.Equal(t, CodeBalanceAssertionFailed, diagnostics[1].Code)
+	assert.Contains(t, diagnostics[1].Message, "EUR also holds 0.004 USD")
+}
+
+func TestCheckJournalBalance_UserToleranceStillWidensTheTransactionBalance(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2024-01-01 t
+    a  1.4 EUR
+    b  -1 EUR
+`})
+
+	assert.Len(t, CheckJournalBalance(resolved, decimal.Zero), 1)
+	assert.Empty(t, CheckJournalBalance(resolved, decimal.RequireFromString("0.5")))
 }

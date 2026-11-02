@@ -144,6 +144,16 @@ type Parser struct {
 	// transaction being parsed: hledger applies their tags to the transaction and
 	// to all of its postings.
 	postingComments []ast.Comment
+	// prevEnd is where the token before the current one ends, prevPos where it starts.
+	prevEnd Position
+	prevPos Position
+	// glueSensitiveEnd is the end offset of the last amount whose text hledger
+	// extends over a `[` written right against it: a bare number or an unquoted
+	// commodity on the right. -1 when the last amount is not one.
+	glueSensitiveEnd int
+	// faulted is set while a posting is parsed when its rest cannot be read:
+	// abandonPostingOnFault then drops the remainder of the line.
+	faulted bool
 	// inAutoPostingRule is set while parsing the postings of an auto posting
 	// rule, the only place hledger accepts a `*` multiplier amount.
 	inAutoPostingRule bool
@@ -638,7 +648,34 @@ func (p *Parser) parseStatus() ast.Status {
 	return status
 }
 
+// parsePosting reads one posting line. A posting whose line produced an error
+// is recorded as unparsed, so the formatter leaves it as written: rebuilding it
+// from a partial reading could change what hledger reads.
 func (p *Parser) parsePosting() *ast.Posting {
+	errorsBefore := len(p.errors)
+	posting := p.parsePostingLine()
+	if posting != nil && len(p.errors) > errorsBefore && posting.UnparsedTail.End.Offset <= posting.UnparsedTail.Start.Offset {
+		posting.UnparsedTail = ast.Range{Start: posting.Range.Start, End: p.lineEnd(posting.Range.Start)}
+	}
+	return posting
+}
+
+// lineEnd returns the end of the line that holds pos, before its line break.
+func (p *Parser) lineEnd(pos ast.Position) ast.Position {
+	input := p.lexer.input
+	start := min(pos.Offset, len(input))
+	end := len(input)
+	if idx := strings.IndexByte(input[start:], '\n'); idx >= 0 {
+		end = start + idx
+	}
+	return ast.Position{
+		Line:   pos.Line,
+		Column: pos.Column + utf8.RuneCountInString(input[start:end]),
+		Offset: end,
+	}
+}
+
+func (p *Parser) parsePostingLine() *ast.Posting {
 	if p.current.Type != TokenIndent {
 		return nil
 	}
@@ -699,16 +736,31 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign {
 		amount := p.parseAmount()
-		if amount != nil {
+		if amount == nil {
+			p.faulted = true
+		} else {
 			posting.Amount = amount
+		}
+		if p.abandonPostingOnFault(posting) {
+			return posting
 		}
 	}
 
-	p.parseLotAnnotations(posting)
+	// Lot annotations and costs belong to an amount; without one hledger reads
+	// them as unexpected content.
+	if posting.Amount != nil {
+		p.parseLotAnnotations(posting)
+		if p.abandonPostingOnFault(posting) {
+			return posting
+		}
+	}
 
 	if p.current.Type == TokenEquals || p.current.Type == TokenDoubleEquals ||
 		p.current.Type == TokenEqualsStar || p.current.Type == TokenDoubleEqualsStar {
 		posting.BalanceAssertion = p.parseBalanceAssertion()
+		if p.abandonPostingOnFault(posting) {
+			return posting
+		}
 	}
 
 	if p.current.Type == TokenComment {
@@ -751,6 +803,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 
 	if isCommodityToken(p.current.Type) {
+		if p.unterminatedQuote() {
+			return p.failUnterminatedQuote()
+		}
 		amount.Commodity = ast.Commodity{
 			Symbol:   p.current.Value,
 			Quoted:   p.current.Type == TokenQuotedCommodity,
@@ -794,6 +849,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 		isCommodity := isCommodityToken(p.current.Type) ||
 			(p.current.Type == TokenText && isValidCommodityText(p.current.Value))
 		if isCommodity {
+			if p.unterminatedQuote() {
+				return p.failUnterminatedQuote()
+			}
 			amount.Commodity = ast.Commodity{
 				Symbol:   p.current.Value,
 				Quoted:   p.current.Type == TokenQuotedCommodity,
@@ -803,7 +861,22 @@ func (p *Parser) parseAmount() *ast.Amount {
 					End:   toASTPosition(p.current.End),
 				},
 			}
+			quoted := amount.Commodity.Quoted
+			end := p.current.End
 			p.advance()
+			// hledger reads a `(...)` written right against an unquoted commodity
+			// as part of its symbol, so `Y(n)` is one commodity, not `Y` and a note.
+			for !quoted && p.current.Type == TokenCode && p.current.Pos.Offset == end.Offset {
+				if !isSymbolText(p.current.Value) || p.unterminatedCode() {
+					p.error("a note must be separated from the commodity by a space")
+					p.skipToNextLine()
+					return nil
+				}
+				amount.Commodity.Symbol += p.lexer.input[p.current.Pos.Offset:p.current.End.Offset]
+				amount.Commodity.Range.End = toASTPosition(p.current.End)
+				end = p.current.End
+				p.advance()
+			}
 		} else if p.defaultCommoditySymbol != "" {
 			// hledger reads a bare number as the default commodity set by the
 			// D directive. Keep Inferred so the amount can still be rendered
@@ -830,14 +903,14 @@ func (p *Parser) parseAmount() *ast.Amount {
 	if isAmbiguousNumber(rawTokenValue) {
 		mark = amount.DecimalMark
 	}
-	if strings.HasPrefix(rawTokenValue, ".") {
-		// A number without an integer part always uses "." as its mark, even
-		// under a decimal-mark directive that names ",".
+	if strings.HasPrefix(rawTokenValue, ".") || strings.HasPrefix(rawTokenValue, ",") {
+		// A number without an integer part takes the mark it starts with, even
+		// under a decimal-mark directive that names the other one.
 		if !isLeadingDecimalNumber(rawTokenValue) {
 			p.errorAt(numberPos, numberEnd, "invalid number: %s", rawTokenValue)
 			return nil
 		}
-		mark = "."
+		mark = rawTokenValue[:1]
 	}
 	numberStr = normalizeNumber(numberStr, mark)
 
@@ -854,7 +927,41 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount.Quantity = qty
 
 	amount.Range.End = toASTPosition(p.current.Pos)
+	p.glueSensitiveEnd = -1
+	if amount.Commodity.Inferred || amount.Commodity.Symbol == "" ||
+		(amount.Commodity.Position == ast.CommodityRight && !amount.Commodity.Quoted) {
+		p.glueSensitiveEnd = p.prevEnd.Offset
+	}
 	return amount
+}
+
+// isSymbolText reports whether text can be part of an unquoted commodity symbol,
+// which hledger ends at digits, signs, `.`, `@`, `*`, `;`, `=`, braces, quotes
+// and whitespace.
+func isSymbolText(text string) bool {
+	return !strings.ContainsAny(text, "0123456789-+.@*;= \t\"{}")
+}
+
+// unterminatedCode reports whether the current `(` note lacks its `)`.
+func (p *Parser) unterminatedCode() bool {
+	end := p.current.End.Offset
+	return end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != ')'
+}
+
+// unterminatedQuote reports whether the current quoted commodity lacks its
+// closing quote, which happens at a line break or at a `;`.
+func (p *Parser) unterminatedQuote() bool {
+	if p.current.Type != TokenQuotedCommodity {
+		return false
+	}
+	end := p.current.End.Offset
+	return end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != '"'
+}
+
+func (p *Parser) failUnterminatedQuote() *ast.Amount {
+	p.error("expected a closing quote after the commodity")
+	p.skipToNextLine()
+	return nil
 }
 
 func (p *Parser) parseCost() *ast.Cost {
@@ -868,6 +975,7 @@ func (p *Parser) parseCost() *ast.Cost {
 
 	amount := p.parseAmount()
 	if amount == nil {
+		p.faulted = true
 		return nil
 	}
 	cost.Amount = *amount
@@ -875,22 +983,9 @@ func (p *Parser) parseCost() *ast.Cost {
 	return cost
 }
 
-func (p *Parser) ensureLotPrice(posting *ast.Posting) *ast.LotPrice {
-	if posting.LotPrice == nil {
-		posting.LotPrice = &ast.LotPrice{}
-		posting.LotPrice.Range.Start = toASTPosition(p.current.Pos)
-	}
-	return posting.LotPrice
-}
-
-func (p *Parser) parseLotAnnotations(posting *ast.Posting) {
-	p.parseAnnotationLoop(
-		func() *ast.LotPrice { return p.ensureLotPrice(posting) },
-		func(c *ast.Cost) { posting.Cost = c },
-	)
-}
-
-func (p *Parser) parseLotDate(lot *ast.LotPrice) {
+// parseLotDate reads `[DATE]` and reports whether it was a closed date.
+func (p *Parser) parseLotDate(lot *ast.LotPrice) bool {
+	open := p.current
 	p.advance() // consume [
 
 	switch p.current.Type {
@@ -907,45 +1002,36 @@ func (p *Parser) parseLotDate(lot *ast.LotPrice) {
 		}
 		lot.Date = date
 		lot.Range.End = toASTPosition(p.current.Pos)
-	}
-
-	if p.current.Type == TokenRBracket {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-	}
-}
-
-func (p *Parser) looksLikeConsolidatedDate() bool {
-	if p.current.Type != TokenNumber || len(p.current.Value) != 4 {
+	default:
+		p.annotationFault(open, "expected a date after [")
 		return false
 	}
-	endOffset := p.current.End.Offset
-	if endOffset < len(p.lexer.input) && p.lexer.input[endOffset] == '-' {
-		return true
-	}
-	return false
-}
 
-func (p *Parser) parseConsolidatedDate() string {
-	date := p.current.Value
+	if p.current.Type != TokenRBracket {
+		p.annotationFault(open, "expected ] to close the lot date")
+		return false
+	}
+	lot.Range.End = toASTPosition(p.current.End)
 	p.advance()
-	for p.current.Type == TokenSign || p.current.Type == TokenNumber {
-		date += p.current.Value
-		p.advance()
-	}
-	date = strings.TrimRight(date, ",")
-	return date
+	return true
 }
 
-func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
+// parseLotPriceInto reads `{...}` or `{{...}}` and reports whether it was closed
+// by the matching brace. The braces hold one amount, in hledger's own syntax:
+// a quoted text is the commodity of that amount, not a label.
+func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) bool {
+	open := p.current
+	lot.Braces = true
 	if p.current.Type == TokenDoubleLBrace {
 		lot.IsTotal = true
 	}
 	p.advance()
 
 	closingToken := TokenRBrace
+	closing := "}"
 	if lot.IsTotal {
 		closingToken = TokenDoubleRBrace
+		closing = "}}"
 	}
 
 	// hledger allows a fixed lot cost, written as {=PRICE} or {{=PRICE}}: the
@@ -956,37 +1042,23 @@ func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
 		p.advance()
 	}
 
-	if p.current.Type == closingToken {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-		return
-	}
-
-	if p.looksLikeConsolidatedDate() {
-		lot.Date = p.parseConsolidatedDate()
-	}
-
-	if p.current.Type == TokenQuotedCommodity {
-		lot.Label = p.current.Value
-		p.advance()
-		if p.current.Type == TokenText && strings.HasPrefix(p.current.Value, ",") {
-			p.advance()
+	if p.current.Type != closingToken &&
+		(isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign) {
+		amount := p.parseAmount()
+		if amount == nil {
+			p.faulted = true
+			return false
 		}
+		lot.Cost = amount
 	}
 
 	if p.current.Type != closingToken {
-		if isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign {
-			amount := p.parseAmount()
-			if amount != nil {
-				lot.Cost = amount
-			}
-		}
+		p.annotationFault(open, "expected %s to close the lot cost", closing)
+		return false
 	}
-
-	if p.current.Type == closingToken {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-	}
+	lot.Range.End = toASTPosition(p.current.End)
+	p.advance()
+	return true
 }
 
 func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
@@ -1006,45 +1078,121 @@ func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
 
 	amount := p.parseAmount()
 	if amount == nil {
+		p.faulted = true
 		return nil
 	}
 	ba.Amount = *amount
-	p.parseBalanceAssertionAnnotations(ba)
+	// hledger allows only a cost after an asserted amount; lot annotations
+	// there are left to the caller to report as unexpected content.
+	if p.current.Type == TokenAt || p.current.Type == TokenAtAt {
+		ba.Cost = p.parseCost()
+	}
 	ba.Range.End = toASTPosition(p.current.Pos)
 	return ba
 }
 
-func (p *Parser) parseBalanceAssertionAnnotations(ba *ast.BalanceAssertion) {
-	p.parseAnnotationLoop(
-		func() *ast.LotPrice {
-			if ba.LotPrice == nil {
-				ba.LotPrice = &ast.LotPrice{}
-				ba.LotPrice.Range.Start = toASTPosition(p.current.Pos)
-			}
-			return ba.LotPrice
-		},
-		func(c *ast.Cost) { ba.Cost = c },
-	)
+// gluedToCommodity reports whether the current `[` follows, without a space, an
+// amount that hledger reads on into the bracket: a bare number or a commodity on
+// the right that is not quoted. After a commodity on the left, a closing quote or
+// a closing `}` `)` `]` the bracket starts a lot date.
+func (p *Parser) gluedToCommodity() bool {
+	end := p.prevEnd.Offset
+	return end == p.current.Pos.Offset && end == p.glueSensitiveEnd
 }
 
-func (p *Parser) parseAnnotationLoop(ensureLot func() *ast.LotPrice, setCost func(*ast.Cost)) {
-	for {
+// parseLotAnnotations reads the cost and lot annotations that follow a posting
+// amount, in any order. hledger takes each of them at most once, so a repeat
+// ends the loop with an annotation fault instead of being merged into the first.
+func (p *Parser) parseLotAnnotations(posting *ast.Posting) {
+	var seenLotCost, seenDate, seenNote, seenCost bool
+	ensureLot := func() *ast.LotPrice {
+		if posting.LotPrice == nil {
+			posting.LotPrice = &ast.LotPrice{}
+			posting.LotPrice.Range.Start = toASTPosition(p.current.Pos)
+		}
+		return posting.LotPrice
+	}
+	for !p.faulted {
+		start := p.current
 		switch p.current.Type {
 		case TokenLBrace, TokenDoubleLBrace:
-			p.parseLotPriceInto(ensureLot())
+			if seenLotCost {
+				p.annotationFault(start, "only one lot cost ({...}) is allowed per amount")
+				return
+			}
+			seenLotCost = true
+			if !p.parseLotPriceInto(ensureLot()) {
+				return
+			}
 		case TokenLBracket:
-			p.parseLotDate(ensureLot())
+			if seenDate {
+				p.annotationFault(start, "only one lot date ([...]) is allowed per amount")
+				return
+			}
+			seenDate = true
+			if p.gluedToCommodity() {
+				p.annotationFault(start, "expected a space before the lot date")
+				return
+			}
+			if !p.parseLotDate(ensureLot()) {
+				return
+			}
 		case TokenCode:
+			if seenNote {
+				p.annotationFault(start, "only one lot note ((...)) is allowed per amount")
+				return
+			}
+			seenNote = true
+			if p.unterminatedCode() {
+				p.annotationFault(start, "expected ) to close the lot note")
+				return
+			}
 			lot := ensureLot()
 			lot.Label = p.current.Value
+			lot.Noted = true
 			lot.Range.End = toASTPosition(p.current.End)
 			p.advance()
 		case TokenAt, TokenAtAt:
-			setCost(p.parseCost())
+			if seenCost {
+				p.annotationFault(start, "only one cost (@ or @@) is allowed per amount")
+				return
+			}
+			seenCost = true
+			posting.Cost = p.parseCost()
 		default:
 			return
 		}
 	}
+}
+
+// annotationFault reports text in the annotation area that hledger rejects and
+// marks the posting as unreadable, so it is left as written instead of being
+// rebuilt without the text. The error spans from the start of the annotation to
+// the offending token, and never past the end of the line.
+func (p *Parser) annotationFault(from Token, format string, args ...any) {
+	end := p.current.End
+	if p.current.Type == TokenNewline || p.current.Type == TokenEOF {
+		end = p.current.Pos
+	}
+	p.errorCodeAt(CodeParseUnexpected, from.Pos, end, format, args...)
+	p.faulted = true
+}
+
+// abandonPostingOnFault finishes a posting that could not be read to its end:
+// what is left of the line is skipped, unless an earlier error already skipped
+// it. It reports whether the posting was abandoned.
+func (p *Parser) abandonPostingOnFault(posting *ast.Posting) bool {
+	if !p.faulted {
+		return false
+	}
+	p.faulted = false
+	if p.current.Pos.Line > posting.Range.Start.Line {
+		posting.Range.End = p.lineEnd(posting.Range.Start)
+		return true
+	}
+	posting.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return true
 }
 
 func (p *Parser) parseDirective() ast.Directive {
@@ -1459,6 +1607,7 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	}
 
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
+		commodityStart, commodityEnd := p.current.Pos, p.current.End
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
 			Quoted: p.current.Type == TokenQuotedCommodity,
@@ -1467,7 +1616,15 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 				End:   toASTPosition(p.current.End),
 			},
 		}
+		valid := p.current.Type == TokenQuotedCommodity || (p.current.Value != "" && isSymbolText(p.current.Value))
 		p.advance()
+		// hledger reads the price after at least one space, and a symbol holds
+		// no digit, sign, decimal mark or other syntax character.
+		if !valid || p.current.Pos.Offset == commodityEnd.Offset {
+			p.errorAt(commodityStart, commodityEnd, "invalid commodity %q: a space must separate it from the price, and unless it is in double quotes it holds no digit or any of - + . @ * ; = { }", dir.Commodity.Symbol)
+			p.skipToNextLine()
+			return nil
+		}
 	} else {
 		p.errorCode(CodeExpectedCommodity, "expected commodity")
 		p.skipToNextLine()
@@ -1955,6 +2112,9 @@ func (p *Parser) parseComment() ast.Comment {
 		},
 		Tags: parseTags(p.current.Value, p.current.Pos),
 	}
+	if offset := p.current.Pos.Offset; offset >= 0 && offset < len(p.lexer.input) {
+		comment.Marker = p.lexer.input[offset]
+	}
 	p.advance()
 	return comment
 }
@@ -2033,6 +2193,8 @@ func IsValidTagName(name string) bool {
 }
 
 func (p *Parser) advance() {
+	p.prevEnd = p.current.End
+	p.prevPos = p.current.Pos
 	p.current = p.lexer.Next()
 }
 
@@ -2184,6 +2346,12 @@ func (p *Parser) skipIndentedBlock() {
 }
 
 func (p *Parser) error(format string, args ...any) {
+	// At a line break the token ends on the next line, so the error points at
+	// the last token of the line instead.
+	if (p.current.Type == TokenNewline || p.current.Type == TokenEOF) && p.prevPos.Line == p.current.Pos.Line && p.prevPos.Offset < p.current.Pos.Offset {
+		p.errorCodeAt(CodeParseError, p.prevPos, p.current.Pos, format, args...)
+		return
+	}
 	p.errorCodeAt(CodeParseError, p.current.Pos, p.current.End, format, args...)
 }
 
@@ -2258,10 +2426,10 @@ func isAmbiguousNumber(number string) bool {
 	return !strings.Contains(number, " ") && strings.Count(number, ".")+strings.Count(number, ",") == 1
 }
 
-var leadingDecimalNumber = regexp.MustCompile(`^\.[0-9]+([eE][+-]?[0-9]+)?$`)
+var leadingDecimalNumber = regexp.MustCompile(`^[.,][0-9]+([eE][+-]?[0-9]+)?$`)
 
 // isLeadingDecimalNumber reports whether number is a decimal mark followed by
-// digits and an optional exponent, such as ".5" or ".5E2".
+// digits and an optional exponent, such as ".5", ",5" or ".5E2".
 func isLeadingDecimalNumber(number string) bool {
 	return leadingDecimalNumber.MatchString(number)
 }

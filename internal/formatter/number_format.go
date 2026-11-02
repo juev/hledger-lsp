@@ -27,6 +27,22 @@ func ParseCommodityFormat(formatStr string, symbol string) CommodityFormat {
 		return cf
 	}
 
+	// A symbol written before or after the number is found at the ends of the
+	// format, not by searching for it: a symbol such as "," also occurs inside
+	// the number.
+	if rest, ok := strings.CutPrefix(formatStr, symbol); ok && strings.ContainsFunc(rest, unicode.IsDigit) {
+		cf.NumberFormat = ParseNumberFormat(rest)
+		cf.Position = ast.CommodityLeft
+		cf.SpaceBetween = strings.HasPrefix(rest, " ")
+		return cf
+	}
+	if rest, ok := strings.CutSuffix(formatStr, symbol); ok && strings.ContainsFunc(rest, unicode.IsDigit) {
+		cf.NumberFormat = ParseNumberFormat(rest)
+		cf.Position = ast.CommodityRight
+		cf.SpaceBetween = strings.HasSuffix(rest, " ")
+		return cf
+	}
+
 	symbolIdx := strings.Index(formatStr, symbol)
 	if symbolIdx < 0 {
 		return cf

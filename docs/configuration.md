@@ -89,7 +89,7 @@ which `reg` lists, so it keeps its hint.
 | `hledger.diagnostics.undeclaredCommodities` | `false` | Report amounts whose commodity has no `commodity` directive (hledger itself only requires this under `--strict`) |
 | `hledger.diagnostics.unbalancedTransactions` | `true` | Report unbalanced transactions and transactions with more than one amount-less posting |
 | `hledger.diagnostics.balanceAssertions` | `true` | Evaluate `=`, `==`, `=*` and `==*` balance assertions over the whole include tree in date order |
-| `hledger.diagnostics.balanceTolerance` | `0` | Additional user tolerance for balance checks, on top of the per-commodity precision |
+| `hledger.diagnostics.balanceTolerance` | `0` | Additional user tolerance for the balance of a transaction, on top of the per-commodity precision. It does not apply to balance assertions: hledger compares an assertion with the calculated balance exactly, so a difference of any size fails it |
 | `hledger.diagnostics.debounceMs` | `100` | Delay before diagnostics are recomputed while typing |
 
 Defaults follow hledger: a journal loads without any `account` or `commodity` directive unless

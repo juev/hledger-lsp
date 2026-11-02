@@ -3711,71 +3711,6 @@ func TestParser_PostingWithLotAnnotationsReversedOrder(t *testing.T) {
 	assert.Equal(t, "lot1", p.LotPrice.Label)
 }
 
-func TestParser_PostingWithConsolidatedLotDateAndCost(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL {2026-01-15, $50}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.LotPrice)
-	assert.Equal(t, "2026-01-15", p.LotPrice.Date)
-	require.NotNil(t, p.LotPrice.Cost)
-	assert.Equal(t, "$", p.LotPrice.Cost.Commodity.Symbol)
-	assert.True(t, p.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(50)))
-}
-
-func TestParser_PostingWithConsolidatedAllFields(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL {2026-01-15, "lot1", $50}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.LotPrice)
-	assert.Equal(t, "2026-01-15", p.LotPrice.Date)
-	assert.Equal(t, "lot1", p.LotPrice.Label)
-	require.NotNil(t, p.LotPrice.Cost)
-	assert.True(t, p.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(50)))
-}
-
-func TestParser_PostingWithConsolidatedDateOnly(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL {2026-01-15}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.LotPrice)
-	assert.Equal(t, "2026-01-15", p.LotPrice.Date)
-	assert.Nil(t, p.LotPrice.Cost)
-}
-
-func TestParser_PostingWithConsolidatedLabelAndCost(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL {"lot1", $50}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.LotPrice)
-	assert.Equal(t, "lot1", p.LotPrice.Label)
-	require.NotNil(t, p.LotPrice.Cost)
-	assert.True(t, p.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(50)))
-}
-
 func TestParser_PostingWithLotPriceCRLF(t *testing.T) {
 	input := strings.ReplaceAll("2024-01-15 buy stocks\r\n    assets:stocks  10 AAPL {$150} @ $180\r\n    assets:cash\r\n", "\r\n", "\n")
 
@@ -3841,77 +3776,6 @@ func TestParser_BalanceAssertionWithTotalCost(t *testing.T) {
 	assert.True(t, p.BalanceAssertion.Cost.Amount.Quantity.Equal(decimal.NewFromInt(1500)))
 }
 
-func TestParser_BalanceAssertionWithLotPrice(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL = 10 AAPL {$150}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.BalanceAssertion)
-	require.NotNil(t, p.BalanceAssertion.LotPrice)
-	require.NotNil(t, p.BalanceAssertion.LotPrice.Cost)
-	assert.False(t, p.BalanceAssertion.LotPrice.IsTotal)
-	assert.True(t, p.BalanceAssertion.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(150)))
-	assert.Equal(t, "$", p.BalanceAssertion.LotPrice.Cost.Commodity.Symbol)
-}
-
-func TestParser_BalanceAssertionWithTotalLotPrice(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL = 10 AAPL {{$1500}}
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.BalanceAssertion)
-	require.NotNil(t, p.BalanceAssertion.LotPrice)
-	assert.True(t, p.BalanceAssertion.LotPrice.IsTotal)
-}
-
-func TestParser_BalanceAssertionWithLotDate(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL = 10 AAPL [2024-01-15]
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.BalanceAssertion)
-	require.NotNil(t, p.BalanceAssertion.LotPrice)
-	assert.Equal(t, "2024-01-15", p.BalanceAssertion.LotPrice.Date)
-}
-
-func TestParser_BalanceAssertionWithAllAnnotations(t *testing.T) {
-	input := `2024-01-15 buy stocks
-    assets:stocks  10 AAPL = 10 AAPL {$150} [2024-01-15] @ $180
-    assets:cash`
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.BalanceAssertion)
-	assert.Equal(t, "AAPL", p.BalanceAssertion.Amount.Commodity.Symbol)
-
-	require.NotNil(t, p.BalanceAssertion.LotPrice)
-	require.NotNil(t, p.BalanceAssertion.LotPrice.Cost)
-	assert.True(t, p.BalanceAssertion.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(150)))
-	assert.Equal(t, "2024-01-15", p.BalanceAssertion.LotPrice.Date)
-
-	require.NotNil(t, p.BalanceAssertion.Cost)
-	assert.False(t, p.BalanceAssertion.Cost.IsTotal)
-	assert.True(t, p.BalanceAssertion.Cost.Amount.Quantity.Equal(decimal.NewFromInt(180)))
-}
-
 func TestParser_BalanceAssignmentWithCost(t *testing.T) {
 	input := `2024-01-15 buy stocks
     assets:stocks  = 10 AAPL @ $150
@@ -3927,27 +3791,6 @@ func TestParser_BalanceAssignmentWithCost(t *testing.T) {
 	assert.Equal(t, "AAPL", p.BalanceAssertion.Amount.Commodity.Symbol)
 	require.NotNil(t, p.BalanceAssertion.Cost)
 	assert.True(t, p.BalanceAssertion.Cost.Amount.Quantity.Equal(decimal.NewFromInt(150)))
-}
-
-func TestParser_BalanceAssertionWithAllAnnotationsCRLF(t *testing.T) {
-	input := strings.ReplaceAll("2024-01-15 buy stocks\r\n    assets:stocks  10 AAPL = 10 AAPL {$150} [2024-01-15] @ $180\r\n    assets:cash\r\n", "\r\n", "\n")
-
-	journal, errs := Parse(input)
-	require.Empty(t, errs)
-	require.Len(t, journal.Transactions, 1)
-
-	p := journal.Transactions[0].Postings[0]
-	require.NotNil(t, p.BalanceAssertion)
-	assert.Equal(t, "AAPL", p.BalanceAssertion.Amount.Commodity.Symbol)
-
-	require.NotNil(t, p.BalanceAssertion.LotPrice)
-	require.NotNil(t, p.BalanceAssertion.LotPrice.Cost)
-	assert.True(t, p.BalanceAssertion.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(150)))
-	assert.Equal(t, "2024-01-15", p.BalanceAssertion.LotPrice.Date)
-
-	require.NotNil(t, p.BalanceAssertion.Cost)
-	assert.False(t, p.BalanceAssertion.Cost.IsTotal)
-	assert.True(t, p.BalanceAssertion.Cost.Amount.Quantity.Equal(decimal.NewFromInt(180)))
 }
 
 func TestParseWithContext_OrdersEveryJournalNodeAndResolvesIncludes(t *testing.T) {
@@ -4178,16 +4021,12 @@ func TestParser_BalanceAssertionUnclosedLotPrice(t *testing.T) {
     assets:cash
 `
 	journal, errs := Parse(input)
-	// parseLotPriceInto silently recovers from unclosed brace
-	require.Empty(t, errs)
+	// hledger accepts no lot annotation after an asserted amount; the parser
+	// reports it and still recovers on the next transaction.
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Message, "unexpected content")
 	require.Len(t, journal.Transactions, 2)
 	assert.Equal(t, "groceries", journal.Transactions[1].Description)
-
-	ba := journal.Transactions[0].Postings[0].BalanceAssertion
-	require.NotNil(t, ba)
-	require.NotNil(t, ba.LotPrice)
-	require.NotNil(t, ba.LotPrice.Cost)
-	assert.True(t, ba.LotPrice.Cost.Quantity.Equal(decimal.NewFromInt(150)))
 }
 
 func TestParser_ParseAmount_NoDuplicateDiagnostic(t *testing.T) {
@@ -4299,4 +4138,157 @@ func TestContext_Equal(t *testing.T) {
 	assert.False(t, Context{}.Equal(parse("decimal-mark ,\n")))
 	assert.False(t, Context{}.Equal(parse("apply account счета\n")))
 	assert.False(t, Context{}.Equal(parse("alias старый = новый\n")))
+}
+
+func TestParser_LotPriceQuotedCommodityIsNotALabel(t *testing.T) {
+	for _, amount := range []string{`1 Q {"A B" -5}`, `1 Q {{-5 "A B"}}`, `1 Q {"漢 字" -5}`, `1 Q {"Ж Ы" -5}`} {
+		t.Run(amount, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Empty(t, errs)
+
+			lot := journal.Transactions[0].Postings[0].LotPrice
+			require.NotNil(t, lot)
+			assert.Empty(t, lot.Label)
+			require.NotNil(t, lot.Cost)
+			assert.True(t, lot.Cost.Commodity.Quoted)
+			assert.True(t, lot.Cost.Quantity.Equal(decimal.NewFromInt(-5)))
+		})
+	}
+}
+
+func TestParser_RejectsAnnotationsHledgerRejects(t *testing.T) {
+	cases := map[string]string{
+		`1 Q @ -5 X @ 5 Y`:              "only one cost",
+		`1 Q @ 5 X @@ 6 X`:              "only one cost",
+		`1 Q {{-5;c}}`:                  "expected }} to close the lot cost",
+		`1 Q {-5;c}`:                    "expected } to close the lot cost",
+		`1 Q {5 X} {6 Y}`:               "only one lot cost",
+		`1 Q [2024-01-01] [2024-01-02]`: "only one lot date",
+		`1 Q (a) {5 X} (b)`:             "only one lot note",
+		`1 Q {5 X`:                      "expected } to close the lot cost",
+		`1 Q {{5 X}`:                    "expected }} to close the lot cost",
+		`1 Q {5 X}}`:                    "expected } to close the lot cost",
+		`1 Q @ "漢 字" 5 @ "Ж Ы" 5`:       "only one cost",
+	}
+	for amount, message := range cases {
+		t.Run(amount, func(t *testing.T) {
+			input := "2024-01-01 x\n    a  " + amount + "\n    b\n\n2024-01-02 y\n    a  1 Q\n    b\n"
+			journal, errs := Parse(input)
+			require.Len(t, errs, 1)
+			assert.Contains(t, errs[0].Message, message)
+			require.Len(t, journal.Transactions, 2, "the next transaction must still be parsed")
+			assert.Greater(t, journal.Transactions[0].Postings[0].UnparsedTail.End.Offset, journal.Transactions[0].Postings[0].UnparsedTail.Start.Offset)
+		})
+	}
+}
+
+// An annotation that is left unfinished while typing must cost the line it is
+// on and nothing else: the next posting and the next transaction still parse.
+func TestParser_UnfinishedAnnotationKeepsTheFollowingLines(t *testing.T) {
+	unfinished := []string{
+		`1 Q {$`, `1 Q {"A B"`, `1 Q {X`, `1 Q {-`, `1 Q {5 X`, `1 Q {{5 X}`,
+		`1 Q {2026-01-15, 5 X}`, `1 Q {"lbl", 5 X}`, `1 Q {"A;B" 5}`,
+		`1 Q @`, `1 Q @ (n)`, `1 Q {5 X} @`, `$`, `1 Q []`, `1 Q(n)[2024-01-01]`, `1 Q(a b)`, `1 Q (n`, `1 Q [2024-01-01`, `1 Q @ 3 Y[2024-01-01]`, `{5 X}`, `1 Q = `, `1 Q {"漢 字"`, `"Ж Ы" 1 {"П`,
+	}
+	for _, amount := range unfinished {
+		t.Run(amount, func(t *testing.T) {
+			withPosting := "2024-01-01 x\n    a  " + amount + "\n    b  -1 Q\n    c\n"
+			journal, errs := Parse(withPosting)
+			require.Len(t, errs, 1, "errors: %v", errs)
+			assert.Equal(t, 2, errs[0].Pos.Line)
+			require.Len(t, journal.Transactions, 1)
+			require.Len(t, journal.Transactions[0].Postings, 3)
+			if amount != `{5 X}` {
+				assert.Equal(t, 2, journal.Transactions[0].Postings[0].Range.End.Line)
+			}
+			assert.Greater(t, journal.Transactions[0].Postings[0].UnparsedTail.End.Offset, journal.Transactions[0].Postings[0].UnparsedTail.Start.Offset)
+
+			withHeader := "2024-01-01 x\n    a  " + amount + "\n2024-01-02 y\n    c  1 Q\n    d\n"
+			journal, errs = Parse(withHeader)
+			require.Len(t, errs, 1, "errors: %v", errs)
+			assert.Equal(t, 2, errs[0].Pos.Line)
+			require.Len(t, journal.Transactions, 2)
+			assert.Equal(t, "y", journal.Transactions[1].Description)
+			assert.Len(t, journal.Transactions[1].Postings, 2)
+		})
+	}
+}
+
+func TestParser_AnnotationErrorStaysOnItsLine(t *testing.T) {
+	_, errs := Parse("2024-01-01 x\n    a  1 Q {5 X\n    b\n")
+	require.Len(t, errs, 1)
+	assert.Equal(t, 2, errs[0].Pos.Line)
+	assert.Equal(t, 2, errs[0].End.Line)
+}
+
+func TestParser_RejectsLedgerLotForms(t *testing.T) {
+	for _, amount := range []string{
+		`1 Q {"lbl", 5 X}`, `1 Q {"lbl",5 X}`, `1 Q {2026-01-15, 5 X}`, `1 Q {2026-01-15, "lbl", 5 X}`, `1 Q {2026-01-15}`,
+		`1 Q = 1 Q {5 X}`, `1 Q = 1 Q [2024-01-01]`, `1 Q = 1 Q (n)`, `1 Q = 1 Q {5 X} @ 3 Y`,
+		`1 Q {"A;B" 5}`, `1 "A;B"`,
+	} {
+		t.Run(amount, func(t *testing.T) {
+			_, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			assert.NotEmpty(t, errs)
+		})
+	}
+}
+
+func TestParser_NoteGluedToCommodityBelongsToTheSymbol(t *testing.T) {
+	journal, errs := Parse("2024-01-01 x\n    a  1 Q @ 3 Y(n)\n    b\n")
+	require.Empty(t, errs)
+	posting := journal.Transactions[0].Postings[0]
+	assert.Equal(t, "Y(n)", posting.Cost.Amount.Commodity.Symbol)
+	assert.Nil(t, posting.LotPrice)
+}
+
+func TestParser_EmptyLotAnnotationsAreKept(t *testing.T) {
+	for amount, check := range map[string]func(*testing.T, *ast.LotPrice){
+		`1 Q {}`:   func(t *testing.T, l *ast.LotPrice) { assert.True(t, l.Braces) },
+		`1 Q {{}}`: func(t *testing.T, l *ast.LotPrice) { assert.True(t, l.Braces && l.IsTotal) },
+		`1 Q ()`:   func(t *testing.T, l *ast.LotPrice) { assert.True(t, l.Noted) },
+	} {
+		t.Run(amount, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Empty(t, errs)
+			lot := journal.Transactions[0].Postings[0].LotPrice
+			require.NotNil(t, lot)
+			check(t, lot)
+		})
+	}
+}
+
+func TestParser_LotDateGluedToAmountsHledgerReadsItAfter(t *testing.T) {
+	for _, amount := range []string{
+		`$1[2024-01-01]`, `1 "Q"[2024-01-01]`, `1 "A B"[2024-01-01]`, `EUR 1[2024-01-01]`, `€1[2024-01-01]`,
+		`$-1[2024-01-01]`, `-$1[2024-01-01]`, `1 Q @ $3[2024-01-01]`, `1 Q @ 3 "Y"[2024-01-01]`, `1 "漢 字"[2024-01-01]`,
+	} {
+		t.Run(amount, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Empty(t, errs)
+			require.NotNil(t, journal.Transactions[0].Postings[0].LotPrice)
+			assert.Equal(t, "2024-01-01", journal.Transactions[0].Postings[0].LotPrice.Date)
+		})
+	}
+}
+
+func TestParser_RejectsLotDateGluedToBareNumberOrRightCommodity(t *testing.T) {
+	for _, amount := range []string{`1[2024-01-01]`, `1 Q[2024-01-01]`, `1 €[2024-01-01]`, `1 Q @ 3 Y[2024-01-01]`} {
+		t.Run(amount, func(t *testing.T) {
+			_, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.Len(t, errs, 1)
+			assert.Contains(t, errs[0].Message, "space before the lot date")
+		})
+	}
+}
+
+func TestParser_ExpectedNumberErrorStaysOnItsLine(t *testing.T) {
+	for _, amount := range []string{`1 Q {"A B"`, `1 Q @`, `1 Q =`} {
+		t.Run(amount, func(t *testing.T) {
+			_, errs := Parse("2024-01-01 x\n    a  " + amount + "\n    b\n")
+			require.NotEmpty(t, errs)
+			assert.Equal(t, 2, errs[0].Pos.Line)
+			assert.Equal(t, 2, errs[0].End.Line)
+		})
+	}
 }
