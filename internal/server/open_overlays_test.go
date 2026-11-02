@@ -148,21 +148,21 @@ func TestWorkspace_DeletedIncludeWhileOpenAndAfterClose(t *testing.T) {
 	}))
 	_, err = f.ts.replaceAndWait(f.aURI, "2024-01-01 a\n    assets:cash  -20 USD\n    equity:a\n")
 	require.NoError(t, err)
-	assert.Equal(t, "3", amountOfTransaction(t, f.ts, "b"), "the open buffer of b counts although its file is gone")
+	assert.Equal(t, "3", amountOfB(t, f.ts), "the open buffer of b counts although its file is gone")
 
 	require.NoError(t, f.ts.DidClose(context.Background(), &protocol.DidCloseTextDocumentParams{
 		TextDocument: protocol.TextDocumentIdentifier{URI: f.bURI},
 	}))
-	assert.Equal(t, "", amountOfTransaction(t, f.ts, "b"), "b is gone from disk and closed")
+	assert.Equal(t, "", amountOfB(t, f.ts), "b is gone from disk and closed")
 	assert.NotEmpty(t, f.ts.workspace.LoadErrors(), "the missing include is reported")
 }
 
-func amountOfTransaction(t *testing.T, ts *testServer, description string) string {
+func amountOfB(t *testing.T, ts *testServer) string {
 	t.Helper()
 	resolved := ts.workspace.GetResolved()
 	require.NotNil(t, resolved)
 	for _, tx := range resolved.AllTransactions() {
-		if tx.Description == description {
+		if tx.Description == "b" {
 			return tx.Postings[0].Amount.Quantity.String()
 		}
 	}
@@ -201,14 +201,14 @@ func TestWorkspace_DeletedThenCreatedClosedIncludeComesBack(t *testing.T) {
 	require.NoError(t, f.ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{{URI: f.bURI, Type: protocol.FileChangeTypeDeleted}},
 	}))
-	assert.Equal(t, "", amountOfTransaction(t, f.ts, "b"))
+	assert.Equal(t, "", amountOfB(t, f.ts))
 	assert.NotEmpty(t, f.ts.workspace.LoadErrors(), "b is missing while it is renamed away")
 
 	require.NoError(t, os.Rename(moved, f.bPath))
 	require.NoError(t, f.ts.DidChangeWatchedFiles(context.Background(), &protocol.DidChangeWatchedFilesParams{
 		Changes: []protocol.FileEvent{{URI: f.bURI, Type: protocol.FileChangeTypeCreated}},
 	}))
-	assert.Equal(t, "5", amountOfTransaction(t, f.ts, "b"), "b is back in the tree")
+	assert.Equal(t, "5", amountOfB(t, f.ts), "b is back in the tree")
 	assert.Empty(t, f.ts.workspace.LoadErrors(), "the include no longer fails")
 }
 
@@ -233,5 +233,5 @@ func TestWorkspace_CloseOfUnreadableFileDropsItsBuffer(t *testing.T) {
 	_, err = f.ts.replaceAndWait(f.aURI, "2024-01-01 a\n    assets:cash  -20 USD\n    equity:a\n")
 	require.NoError(t, err)
 
-	assert.Equal(t, "", amountOfTransaction(t, f.ts, "b"), "the closed buffer of b no longer counts")
+	assert.Equal(t, "", amountOfB(t, f.ts), "the closed buffer of b no longer counts")
 }
