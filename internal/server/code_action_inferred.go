@@ -121,7 +121,6 @@ func formatInferredAmount(
 		}
 		amount.Commodity.Position = sibling.Commodity.Position
 		amount.Commodity.Quoted = sibling.Commodity.Quoted
-		amount.DecimalMark = sibling.DecimalMark
 		if siblingPlaces := -sibling.Quantity.Exponent(); siblingPlaces > places {
 			places = siblingPlaces
 		}
@@ -130,6 +129,7 @@ func formatInferredAmount(
 	// A journal that never spells this commodity out — every amount inherits it
 	// from the default commodity directive — keeps the inserted amount bare too.
 	amount.Commodity.Inferred = !transactionWritesCommodity(transaction, commodity)
+	amount.DecimalMark = transactionDecimalMark(transaction, commodity, amount.Commodity.Inferred)
 	if places > 0 {
 		amount.RawQuantity = quantity.StringFixed(places)
 	}
@@ -138,6 +138,24 @@ func formatInferredAmount(
 	}
 
 	return formatter.FormatAmount(amount, formats)
+}
+
+// transactionDecimalMark returns the decimal mark in force for a commodity where
+// the transaction is written. A directive cannot change between the postings of
+// one transaction, so any amount of that commodity, a cost or an assertion
+// included, carries it. Amounts of the same commodity written the other way
+// (bare against explicit) are skipped: hledger resolves a bare number through
+// the default commodity, which can use another mark. "" means the transaction
+// holds no such amount and the commodity format decides.
+func transactionDecimalMark(transaction *ast.Transaction, commodity string, inferred bool) string {
+	for i := range transaction.Postings {
+		for _, amt := range postingAmounts(&transaction.Postings[i]) {
+			if amt != nil && amt.Commodity.Symbol == commodity && amt.Commodity.Inferred == inferred && amt.DecimalMark != "" {
+				return amt.DecimalMark
+			}
+		}
+	}
+	return ""
 }
 
 // transactionWritesCommodity reports whether the transaction spells the
