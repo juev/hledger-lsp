@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -123,4 +124,57 @@ func TestOracle_FixUnbalancedBalancesInHledger(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestOracle_FixUnbalancedWithAssignment checks the two sides of the assignment
+// rule against hledger: a transaction whose group holds an assignment gets no
+// fix, because its amount depends on the running balance (hledger needs 2 USD
+// below, a local fix would write 0 USD); an assignment on an unbalanced-virtual
+// posting does not take part in the check, so the fix is offered and works.
+func TestOracle_FixUnbalancedWithAssignment(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	noFix := map[string]string{
+		"real assignment":      "2024-01-01 opening\n    assets:bank  -5 USD\n    equity\n\n2024-01-02 check\n    assets:bank  ==-7 USD\n    expenses:x  3 USD\n",
+		"Cyrillic assignment":  "2024-01-01 открытие\n    счёт  -5 USD\n    капитал\n\n2024-01-02 сверка\n    счёт  ==-7 USD\n    расходы  3 USD\n",
+		"CJK balanced virtual": "2024-01-01 開設\n    資産:銀行  -5 USD\n    資本\n\n2024-01-02 照合\n    費用  3 USD\n    [資産:銀行]  ==-7 USD\n    [資本]  1 USD\n",
+	}
+	for name, text := range noFix {
+		t.Run("no fix: "+name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "main.journal")
+			writeJournals(t, dir, map[string]string{"main.journal": text})
+			assert.False(t, hledgerFileAccepted(hledgerPath, path), "journal must be unbalanced in hledger")
+
+			ts, docURI := formatServer(t, dir, path, text)
+			doc, _ := ts.GetDocument(docURI)
+			journal, _ := ts.cachedJournal(docURI, doc)
+			_, _, ok := buildUnbalancedFix(docURI, doc, lsputil.NewPositionMapper(doc), ts.commodityFormatsForDocument(docURI), 0, &journal.Transactions[1])
+			assert.False(t, ok)
+		})
+	}
+
+	t.Run("fix offered for an unbalanced-virtual assignment", func(t *testing.T) {
+		text := "2024-01-01 x\n    (assets:bank)  ==0 USD\n    a  5 USD\n    b  -3 USD\n"
+		dir := t.TempDir()
+		path := filepath.Join(dir, "main.journal")
+		writeJournals(t, dir, map[string]string{"main.journal": text})
+		assert.False(t, hledgerFileAccepted(hledgerPath, path))
+
+		ts, docURI := formatServer(t, dir, path, text)
+		doc, _ := ts.GetDocument(docURI)
+		journal, _ := ts.cachedJournal(docURI, doc)
+		edit, _, ok := buildUnbalancedFix(docURI, doc, lsputil.NewPositionMapper(doc), ts.commodityFormatsForDocument(docURI), 0, &journal.Transactions[0])
+		require.True(t, ok)
+		applied := applyTextEdits(doc, edit.Changes[docURI])
+		require.NoError(t, os.WriteFile(path, []byte(applied), 0o644))
+		assert.True(t, hledgerFileAccepted(hledgerPath, path), applied)
+	})
+}
+
+// hledgerFileAccepted reports whether hledger loads the journal file. Unlike
+// testutil.HledgerReadFile it does not decode the first posting's amount, which a
+// zero-valued assignment posting leaves without a commodity.
+func hledgerFileAccepted(hledgerPath, path string) bool {
+	return exec.Command(hledgerPath, "-f", path, "print").Run() == nil
 }

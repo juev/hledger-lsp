@@ -233,6 +233,20 @@ func HasBalanceAssignment(tx *ast.Transaction) bool {
 	return false
 }
 
+// HasCheckedBalanceAssignment reports whether a balance assignment sits in a
+// posting group that must balance (real or balanced-virtual). An assignment on an
+// unbalanced-virtual posting is exempt from the balance check, so it does not
+// make the transaction's balance depend on the running balance.
+func HasCheckedBalanceAssignment(tx *ast.Transaction) bool {
+	for i := range tx.Postings {
+		p := &tx.Postings[i]
+		if p.Amount == nil && p.BalanceAssertion != nil && (p.Virtual == ast.VirtualNone || p.Virtual == ast.VirtualBalanced) {
+			return true
+		}
+	}
+	return false
+}
+
 // evaluate infers a transaction's amounts and checks that it balances, passing
 // each posting's contribution to emit. Written and assigned amounts are emitted
 // in date order, parse order within a date, and elided ones last, because

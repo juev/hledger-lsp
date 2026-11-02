@@ -186,3 +186,39 @@ func TestCodeLens_BalanceAssignmentMakesNoBalanceClaim(t *testing.T) {
 		})
 	}
 }
+
+func TestCodeLens_AssignmentOnUnbalancedVirtualPostingKeepsVerdict(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.Features.CodeLens = true
+	srv.setSettings(settings)
+
+	docURI := uri.URI("file:///test.journal")
+	srv.documents.Store(docURI, "2024-01-01 x\n    (assets:bank)  ==0 USD\n    a  5 USD\n    b  -3 USD\n")
+
+	result, err := srv.CodeLens(context.Background(), &protocol.CodeLensParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Contains(t, result[0].Command.Title, "USD off by 2")
+	assert.Equal(t, "hledger.fixUnbalanced", result[0].Command.Command)
+}
+
+func TestCodeLens_AssignmentInBalancedVirtualGroupMakesNoClaim(t *testing.T) {
+	srv := NewServer()
+	settings := srv.getSettings()
+	settings.Features.CodeLens = true
+	srv.setSettings(settings)
+
+	docURI := uri.URI("file:///test.journal")
+	srv.documents.Store(docURI, "2024-01-01 x\n    a  5 USD\n    b  -5 USD\n    [assets:bank]  ==0 USD\n")
+
+	result, err := srv.CodeLens(context.Background(), &protocol.CodeLensParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+	})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	assert.Contains(t, result[0].Command.Title, "balance assignment")
+	assert.Empty(t, result[0].Command.Command)
+}
