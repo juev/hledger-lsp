@@ -197,6 +197,58 @@ func TestPublishDiagnostics_PassingAssertionsStaySilent(t *testing.T) {
 	assert.Nil(t, diagnosticWithCode(diagnostics, "UNBALANCED"), "got %v", codesIn(diagnostics))
 }
 
+// An inclusive strict assertion checks the commodities the account has an entry
+// in, and an assignment decides those entries, as in hledger.
+func TestPublishDiagnostics_InclusiveStrictAssertionChecksOwnEntriesCRLF(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		wantLine int // -1 when no assertion may fail
+	}{
+		{
+			name: "another commodity only a subaccount holds is not checked",
+			content: "2024-01-01 a\r\n    касса:現金  1 EUR\r\n    касса:счёт  1 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  0 EUR ==* 1 EUR\r\n    капитал\r\n",
+			wantLine: -1,
+		},
+		{
+			name: "strict assignment drops the account's other commodities",
+			content: "2024-01-01 a\r\n    касса  1 USD\r\n    касса:現金  1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  ==* 1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-03 c\r\n    касса:счёт  5 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-04 d\r\n    касса  0 EUR ==* 1 EUR\r\n",
+			wantLine: -1,
+		},
+		{
+			name: "inclusive assignment gives the account a subaccount's commodity",
+			content: "2024-01-01 a\r\n    касса:現金  1 EUR\r\n    касса:счёт  0 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-02 b\r\n    касса  =* 1 EUR\r\n    капитал\r\n\r\n" +
+				"2024-01-03 c\r\n    касса:счёт  5 USD\r\n    капитал\r\n\r\n" +
+				"2024-01-04 d\r\n    касса  0 EUR ==* 1 EUR\r\n",
+			wantLine: 14,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer()
+			ts.enableOptInDiagnostics(accountCheckOff)
+			docURI := uri.URI("file:///inclusive-strict.journal")
+
+			diagnostics, err := ts.openAndWait(docURI, tt.content)
+			require.NoError(t, err)
+
+			assertion := diagnosticWithCode(diagnostics, "BALANCE_ASSERTION_FAILED")
+			if tt.wantLine < 0 {
+				assert.Nil(t, assertion, "got %v", diagnostics)
+				return
+			}
+			require.NotNil(t, assertion, "got %v", codesIn(diagnostics))
+			assert.Contains(t, assertion.Message, "EUR also holds 5 USD")
+			assert.Equal(t, uint32(tt.wantLine), assertion.Range.Start.Line)
+		})
+	}
+}
+
 func TestPublishDiagnostics_HledgerConversionIsNotFlagged(t *testing.T) {
 	ts := newTestServer()
 	docURI := uri.URI("file:///conversion.journal")

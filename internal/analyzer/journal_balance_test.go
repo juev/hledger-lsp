@@ -1810,6 +1810,105 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: []string{"EUR also holds 1 USD"},
 	},
+	{
+		name: "inclusive strict assignment gives the account an entry in a commodity a subaccount holds at zero",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  0 USD
+    e
+
+2024-01-02 b
+    a  ==* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
+	{
+		name: "inclusive assignment gives the account an entry in a commodity a subaccount holds at zero",
+		input: `2024-01-01 a
+    a:x  1 EUR
+    a:y  0 USD
+    e
+
+2024-01-02 b
+    a  =* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
+	{
+		name: "strict assignment drops the account's entries in other commodities",
+		input: `2024-01-01 a
+    a  1 USD
+    a:x  1 EUR
+    e
+
+2024-01-02 b
+    a  == 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 2 EUR
+`,
+	},
+	{
+		name: "inclusive strict assignment drops the account's entries in commodities no subaccount holds",
+		input: `2024-01-01 a
+    a  1 USD
+    a:x  1 EUR
+    e
+
+2024-01-02 b
+    a  ==* 1 EUR
+    e
+
+2024-01-03 c
+    a:y  5 USD
+    e
+
+2024-01-04 d
+    a  0 EUR ==* 1 EUR
+`,
+	},
+	{
+		name: "inclusive strict assignment on Cyrillic and CJK accounts keeps a subaccount's commodity and drops the rest",
+		input: `2024-01-01 a
+    касса  1 GBP
+    касса:現金  0 USD
+    капитал
+
+2024-01-02 b
+    касса  ==* 1 EUR
+    капитал
+
+2024-01-03 c
+    касса:現金  5 GBP
+    касса:現金  5 USD
+    капитал
+
+2024-01-04 d
+    касса  0 EUR ==* 1 EUR
+`,
+		wantMessages: []string{"EUR also holds 5 USD"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {
