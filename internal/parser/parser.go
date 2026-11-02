@@ -1280,17 +1280,17 @@ func parseCommodityText(text string, start Position) commoditySpec {
 	var spec commoditySpec
 	at := func(i int) Position { return advancePosition(start, text[:i]) }
 	skipSpaces := func(i int) int {
-		for i < len(text) && text[i] == ' ' {
+		for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
 			i++
 		}
 		return i
 	}
 	// hledger allows any Unicode space around a number but only ASCII space
-	// next to a symbol written before it.
+	// next to a symbol written before it. A tab counts as a space.
 	skipGap := func(i int) int {
 		for i < len(text) {
 			r, size := utf8.DecodeRuneInString(text[i:])
-			if r != ' ' && !unicode.Is(unicode.Zs, r) {
+			if r != ' ' && r != '\t' && !unicode.Is(unicode.Zs, r) {
 				break
 			}
 			i += size
@@ -1368,7 +1368,7 @@ func parseCommodityText(text string, start Position) commoditySpec {
 		}
 	}
 
-	rest := strings.TrimLeft(text[i:], " ")
+	rest := strings.TrimLeft(text[i:], " \t")
 	spec.trailing = rest != "" && !strings.ContainsRune("@={([", rune(rest[0]))
 	if spec.hasNumber && strings.HasPrefix(spec.number, ".") && !isLeadingDecimalNumber(spec.number) {
 		spec.trailing = true
