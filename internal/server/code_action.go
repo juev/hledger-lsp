@@ -265,6 +265,12 @@ func buildUnbalancedFix(
 	balanceTolerance float64,
 	tx *ast.Transaction,
 ) (*protocol.WorkspaceEdit, string, bool) {
+	// An assignment's amount comes from the running balance of the whole
+	// journal, which this transaction-local fix cannot see, so any amount it
+	// computed would be wrong. No fix is better than a wrong one.
+	if analyzer.HasCheckedBalanceAssignment(tx) {
+		return nil, "", false
+	}
 	result := analyzer.CheckBalance(tx, decimal.NewFromFloat(balanceTolerance))
 	if result.Balanced || result.InferredIdx >= 0 || len(result.Differences) != 1 {
 		return nil, "", false

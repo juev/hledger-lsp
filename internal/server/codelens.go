@@ -35,11 +35,12 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 	for i := range journal.Transactions {
 		tx := &journal.Transactions[i]
 
-		// An assignment takes its amount from the running balance of the whole
-		// journal, which this single-transaction check cannot see. The lens makes
-		// no balance claim and offers no fix; the journal-level diagnostics carry
+		// An assignment in a balance-checked group takes its amount from the
+		// running balance of the whole journal, which this single-transaction
+		// check cannot see. The lens makes no balance claim and offers no fix; the
+		// journal-level diagnostics carry
 		// the verdict.
-		if analyzer.HasBalanceAssignment(tx) {
+		if analyzer.HasCheckedBalanceAssignment(tx) {
 			lenses = append(lenses, protocol.CodeLens{
 				Range:   astRangeToLSP(mapper, tx.Date.Range),
 				Command: protocol.Command{Title: fmt.Sprintf("%d postings | balance assignment", len(tx.Postings))},
