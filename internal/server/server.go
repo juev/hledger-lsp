@@ -59,11 +59,11 @@ type Server struct {
 	payeeTemplatesCache   sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
 	alignmentCache        sync.Map // map[uri.URI]int
 	tokenCache            *semanticTokensCache
-	parseCache            sync.Map // map[uri.URI]*cachedDoc
-	relatedMu             sync.Mutex
-	related               map[uri.URI]map[uri.URI]bool // open documents sharing an include tree, as of the last publish
-	fanoutMu              sync.Mutex
-	fanout                map[uri.URI]map[uri.URI]bool // files other than the document itself a publish put diagnostics on
+	parseCache            sync.Map   // map[uri.URI]*cachedDoc
+	publishMu             sync.Mutex // serialises publishAffected, so the last run to finish holds the newest state
+	publishedMu           sync.Mutex
+	published             map[uri.URI][]protocol.Diagnostic // the non-empty set last published for each file
+	affected              map[uri.URI]map[uri.URI]bool      // files a document's last publish covered
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -444,18 +444,8 @@ func (s *Server) clearAlignmentCache() {
 
 func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocumentParams) error {
 	s.cancelDiagnostics(params.TextDocument.URI)
-	s.relatedMu.Lock()
-	delete(s.related, params.TextDocument.URI)
-	s.relatedMu.Unlock()
-	// Drop the published diagnostics with the document, so a closed file does not
-	// keep stale problems in the client's panel.
-	if s.client != nil {
-		_ = s.client.PublishDiagnostics(ctx, &protocol.PublishDiagnosticsParams{
-			URI:         params.TextDocument.URI,
-			Diagnostics: []protocol.Diagnostic{},
-		})
-	}
 	s.documents.Delete(params.TextDocument.URI)
+	s.resolved.Delete(params.TextDocument.URI)
 	s.docVersions.Delete(params.TextDocument.URI)
 	s.forgetWarnings(params.TextDocument.URI)
 	s.payeeTemplatesCache.Clear()
@@ -475,6 +465,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 			}
 		}
 	}
+	s.publishClosed(ctx, params.TextDocument.URI)
 	return nil
 }
 
@@ -502,13 +493,6 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 // A trailing timer coalesces rapid edits; the previous in-flight computation
 // is cancelled so a stale result never overwrites newer diagnostics.
 func (s *Server) scheduleDiagnostics(docURI uri.URI, text *document.Text, version uint32, revision uint64) {
-	s.scheduleDiagnosticsFor(docURI, text, version, revision, true)
-}
-
-// scheduleDiagnosticsFor is scheduleDiagnostics; alsoRelated also schedules the
-// other open documents of the same include trees once this one is published.
-// Those runs pass false, so republishing never cascades.
-func (s *Server) scheduleDiagnosticsFor(docURI uri.URI, text *document.Text, version uint32, revision uint64, alsoRelated bool) {
 	s.diagMu.Lock()
 	defer s.diagMu.Unlock()
 
@@ -527,59 +511,7 @@ func (s *Server) scheduleDiagnosticsFor(docURI uri.URI, text *document.Text, ver
 			default:
 			}
 			s.publishDiagnostics(ctx, docURI, text, version, revision)
-			if alsoRelated && ctx.Err() == nil {
-				s.republishRelated(docURI)
-			}
 		}),
-	}
-}
-
-// republishRelated schedules diagnostics for the other open journals that share
-// an include tree with docURI, or shared one at its previous publish. Their
-// diagnostics are read from the tree this document is part of: an edit here can
-// declare an account they use, add or remove an include of them, or move a
-// balance they are checked against.
-func (s *Server) republishRelated(docURI uri.URI) {
-	if s.workspace == nil {
-		return
-	}
-	path := uriToPath(docURI)
-	if path == "" || filetype.IsRules(path) {
-		return
-	}
-
-	current := make(map[uri.URI]bool)
-	for _, tree := range s.workspace.GetIncludeTreesForFile(path) {
-		if tree.Resolved == nil {
-			continue
-		}
-		for index := range tree.Resolved.Occurrences {
-			if other := pathToURI(tree.Resolved.Occurrences[index].Path); other != docURI {
-				current[other] = true
-			}
-		}
-	}
-
-	s.relatedMu.Lock()
-	if s.related == nil {
-		s.related = make(map[uri.URI]map[uri.URI]bool)
-	}
-	targets := make(map[uri.URI]bool, len(current))
-	for other := range current {
-		targets[other] = true
-	}
-	for other := range s.related[docURI] {
-		targets[other] = true
-	}
-	s.related[docURI] = current
-	s.relatedMu.Unlock()
-
-	for other := range targets {
-		text, open := s.documents.rope(other)
-		if !open || filetype.IsRules(string(other)) {
-			continue
-		}
-		s.scheduleDiagnosticsFor(other, text, s.documentVersion(other), s.workspace.ContentRevision(uriToPath(other)), false)
 	}
 }
 
@@ -661,193 +593,7 @@ func (s *Server) publishDiagnostics(ctx context.Context, docURI uri.URI, text *d
 		return
 	}
 
-	// Prefer the workspace's already-resolved journal only when it was built
-	// from this root buffer. Otherwise LoadFromContent keeps diagnostics in sync
-	// with the editor after an included file invalidates the tree snapshot. This
-	// per-document view is also what handlers that edit the current file (such as
-	// the declaration quick fixes) rely on.
-	var resolved *include.ResolvedJournal
-	var loadErrors []include.LoadError
-	if s.workspace != nil {
-		resolved, loadErrors = s.workspace.ResolvedForRootContent(path, revision)
-	}
-	if resolved == nil {
-		resolved, loadErrors = s.loader.LoadFromContent(path, content)
-		s.resolved.Store(docURI, resolved)
-	}
-
-	// Balance rules and assertions depend on every file of the journal, so an
-	// included file is evaluated in the context of the root that includes it
-	// instead of as a journal of its own; otherwise an assertion in a year file
-	// would not see the balances the journal's other files establish. The
-	// workspace keeps those trees fresh with the open buffer, and sorts them by
-	// root path, so the primary root is chosen deterministically when several
-	// journals include the file.
-	sources := s.journalSources(path, resolved, loadErrors)
-
-	// Each include tree that owns the document is checked on its own: the same
-	// line can balance in one journal and fail in another.
-	treeDiagnostics := make([]map[uri.URI][]protocol.Diagnostic, len(sources))
-	for index, source := range sources {
-		treeDiagnostics[index] = s.sourcedDiagnosticsByURI(docURI, path, s.journalDiagnostics(source.resolved, source.partial), settings.Diagnostics)
-	}
-	byURI := mergeTreeDiagnostics(docURI, sources, treeDiagnostics)
-
-	// The analysed document always gets a publish, even when it has no problems:
-	// the empty list is what clears previously reported diagnostics.
-	if _, ok := byURI[docURI]; !ok {
-		byURI[docURI] = nil
-	}
-
-	// Per-buffer diagnostics: parse errors, account declarations and date tags.
-	// Balance and assertion codes come from the journal-level pass above, which
-	// evaluates the whole include tree in hledger's date order.
-	byURI[docURI] = append(byURI[docURI], s.analyzeWithJournalBalance(docURI, path, content, false)...)
-
-	if ctx.Err() != nil {
-		return
-	}
-
-	// A load failure belongs to the file that contains the failing directive.
-	for _, source := range sources {
-		for _, err := range source.errors {
-			if err.Kind != include.ErrorParseError {
-				s.warnOnce(docURI, err.ErrorCode()+":"+err.Path, "hledger-lsp: "+err.Message)
-			}
-
-			target := docURI
-			if err.SourcePath != "" && err.SourcePath != path {
-				target = pathToURI(err.SourcePath)
-			}
-
-			diagnostic := loadErrorDiagnostic(err)
-			if mapper := s.mapperFor(target); mapper != nil {
-				diagnostic.Range = astRangeToLSP(mapper, err.Range)
-			}
-
-			// The per-buffer analysis reads this document under every include
-			// context, so it normally reports the document's own syntax errors
-			// already. One it does not report (a context it did not read) still
-			// belongs here: dropping it would hide the error of an occurrence.
-			if err.Kind == include.ErrorParseError && target == docURI && reportsParseError(byURI[docURI], diagnostic) {
-				continue
-			}
-			byURI[target] = append(byURI[target], diagnostic)
-		}
-	}
-
-	published := make(map[uri.URI]bool)
-	for target, diagnostics := range byURI {
-		if target == docURI {
-			s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), &version)
-			continue
-		}
-		// An open document publishes its own set, which also holds the
-		// diagnostics of the contexts this run did not read; publishing a part of
-		// it here would replace the whole with whichever file was edited last.
-		if _, open := s.documents.rope(target); open {
-			continue
-		}
-		published[target] = true
-		s.publishDiagnosticSet(ctx, target, exactDedupDiagnostics(diagnostics), nil)
-	}
-
-	// A file this document reported on last time and no longer does has nothing
-	// else to clear its problems: publish it the empty set.
-	s.fanoutMu.Lock()
-	previous := s.fanout[docURI]
-	if s.fanout == nil {
-		s.fanout = make(map[uri.URI]map[uri.URI]bool)
-	}
-	s.fanout[docURI] = published
-	s.fanoutMu.Unlock()
-	for target := range previous {
-		if published[target] {
-			continue
-		}
-		if _, open := s.documents.rope(target); open {
-			continue
-		}
-		s.publishDiagnosticSet(ctx, target, []protocol.Diagnostic{}, nil)
-	}
-}
-
-// journalSource is one include tree the document belongs to, as the journal-level
-// checks see it.
-type journalSource struct {
-	resolved *include.ResolvedJournal
-	errors   []include.LoadError
-	// partial marks a document no tree owns: there may be a larger journal behind
-	// it that is not open here, and the verdict is qualified accordingly.
-	partial bool
-}
-
-// journalSources lists the trees to check the document in. Balance rules and
-// assertions depend on every file of the journal, so an included file is
-// evaluated in the context of each root that includes it instead of as a journal
-// of its own; otherwise an assertion in a year file would not see the balances
-// the journal's other files establish. The workspace keeps those trees fresh
-// with the open buffer and sorts them by root path. A tree rooted at the
-// document itself is replaced by resolved, which was built from the buffer.
-func (s *Server) journalSources(path string, resolved *include.ResolvedJournal, loadErrors []include.LoadError) []journalSource {
-	var trees []*workspace.IncludeTree
-	if s.workspace != nil {
-		trees = s.workspace.GetIncludeTreesForFile(path)
-	}
-	if s.workspace != nil && len(trees) == 0 {
-		return []journalSource{{resolved: resolved, errors: loadErrors, partial: true}}
-	}
-
-	var sources []journalSource
-	for _, tree := range trees {
-		switch {
-		case tree.RootPath == path:
-			sources = append(sources, journalSource{resolved: resolved, errors: loadErrors})
-		case tree.Resolved != nil:
-			sources = append(sources, journalSource{resolved: tree.Resolved, errors: tree.LoadErrors})
-		}
-	}
-	if len(sources) == 0 {
-		sources = append(sources, journalSource{resolved: resolved, errors: loadErrors})
-	}
-	return sources
-}
-
-// mergeTreeDiagnostics joins the diagnostics each tree produced, per file. One
-// that every tree owning the file reports is kept as it is; one that only some
-// trees report says which includes it holds for.
-func mergeTreeDiagnostics(docURI uri.URI, sources []journalSource, perTree []map[uri.URI][]protocol.Diagnostic) map[uri.URI][]protocol.Diagnostic {
-	if len(sources) == 1 {
-		return perTree[0]
-	}
-
-	targets := make(map[uri.URI]bool)
-	for _, byURI := range perTree {
-		for target := range byURI {
-			targets[target] = true
-		}
-	}
-
-	merged := make(map[uri.URI][]protocol.Diagnostic, len(targets))
-	for target := range targets {
-		targetPath := uriToPath(target)
-		var lists [][]protocol.Diagnostic
-		var labels [][]string
-		for index, source := range sources {
-			occurrences := source.resolved.OccurrencesForCanonical(targetPath)
-			if target != docURI && len(occurrences) == 0 {
-				continue
-			}
-			lists = append(lists, perTree[index][target])
-			var treeLabels []string
-			for _, occurrence := range occurrences {
-				treeLabels = append(treeLabels, includeLabel(occurrence))
-			}
-			labels = append(labels, treeLabels)
-		}
-		merged[target] = mergeQualified(lists, labels)
-	}
-	return merged
+	s.publishAffected(ctx, docURI, content, version, revision)
 }
 
 // reportsParseError reports whether diagnostics already hold the syntax error,

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -77,4 +78,46 @@ func TestOccurrenceReaders_DoNotRaceWithEditsToAnIncludingFile(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// Hint requests running while the buffers of the journal are edited must leave
+// the workspace describing the final text: after the burst, the next request
+// sees both edits.
+func TestInlayHint_ConcurrentRequestsDoNotLoseEdits(t *testing.T) {
+	const seedB = "2024-01-01 seed\n    assets:cash  %d USD\n    income:job\n"
+	const spendA = "2024-02-01 x\n    assets:cash  -%d USD\n    expenses:food\n"
+	srv, dir := newInlayWorkspace(t, map[string]string{
+		"all.journal": "include b.journal\ninclude a.journal\n",
+		"a.journal":   fmt.Sprintf(spendA, 1),
+		"b.journal":   fmt.Sprintf(seedB, 100),
+	})
+	enableOnlyRunningBalances(srv)
+	aURI := uri.File(filepath.Join(dir, "a.journal"))
+	bURI := uri.File(filepath.Join(dir, "b.journal"))
+	openDocument(t, srv, aURI, fmt.Sprintf(spendA, 1))
+	openDocument(t, srv, bURI, fmt.Sprintf(seedB, 100))
+
+	for round := range 20 {
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				requestHintLabels(t, srv, aURI)
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			replaceDocument(t, srv, bURI, int32(round*10+2), fmt.Sprintf(seedB, round+1000))
+			replaceDocument(t, srv, aURI, int32(round*10+2), fmt.Sprintf(spendA, round+1))
+		}()
+		wg.Wait()
+
+		want := []protocol.InlayHintLabel{
+			protocol.String(fmt.Sprintf("balance: %d USD", round+1000-(round+1))),
+			protocol.String(fmt.Sprintf("balance: %d USD", round+1)),
+		}
+		require.Equal(t, want, requestHintLabels(t, srv, aURI), "round %d", round)
+	}
 }

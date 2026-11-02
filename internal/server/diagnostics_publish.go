@@ -47,18 +47,25 @@ func (s *Server) journalDiagnostics(resolved *include.ResolvedJournal, partialCo
 	}
 	s.journalDiag[resolved] = &journalDiagEntry{resolved: resolved, tolerance: tolerance.String(), partial: partialContext, diags: diags}
 
-	// A tree the workspace replaced is never asked for again; its verdict would
-	// otherwise stay for the life of the server.
-	const keepAtMost = 16
-	if len(s.journalDiag) > keepAtMost && s.workspace != nil {
-		live := map[*include.ResolvedJournal]bool{resolved: true}
+	// Only the trees something can still ask about keep a verdict: those the
+	// workspace holds and the per-document loads. A replaced tree is never asked
+	// for again, and its verdict would otherwise stay for the life of the server,
+	// with the whole resolved journal it was computed from.
+	live := map[*include.ResolvedJournal]bool{resolved: true}
+	if s.workspace != nil {
 		for _, tree := range s.workspace.AllTrees() {
 			live[tree.Resolved] = true
 		}
-		for tree := range s.journalDiag {
-			if !live[tree] {
-				delete(s.journalDiag, tree)
-			}
+	}
+	s.resolved.Range(func(_, value any) bool {
+		if tree, ok := value.(*include.ResolvedJournal); ok {
+			live[tree] = true
+		}
+		return true
+	})
+	for tree := range s.journalDiag {
+		if !live[tree] {
+			delete(s.journalDiag, tree)
 		}
 	}
 	return diags
