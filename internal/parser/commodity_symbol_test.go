@@ -324,3 +324,43 @@ func TestParser_CommoditySymbol_InLotPrice(t *testing.T) {
 		}
 	}
 }
+
+// A note or a lot date after the number of an amount that already has a symbol
+// before it is an annotation: hledger looks for a suffix symbol only when the
+// amount has no prefix symbol.
+func TestParser_CommoditySymbol_AnnotationAfterPrefixSymbolIsNotASymbol(t *testing.T) {
+	amounts := []string{
+		"-10 AAPL {$150} @ $160 (n)",
+		"10 AAPL @ $150 [2024-01-01]",
+		"$150 (lot1)",
+		"€150 [2024-01-01]",
+		`"A B" 150 (n)`,
+		"-$150 (n)",
+		"$ -150 (n)",
+		"AU$150 (n)",
+		"10 AAPL @@ £150 (n)",
+		"руб150 (заметка)",
+		"元150 [2024-01-01]",
+		"1 X {!2}",
+	}
+	for _, amount := range amounts {
+		for _, gap := range []string{"  ", "\t"} {
+			t.Run(amount+gap, func(t *testing.T) {
+				_, errs := Parse("2024-01-01 x\n    a" + gap + amount + "\n    b\n")
+				assert.Empty(t, errs)
+			})
+		}
+	}
+}
+
+// A sign in a transaction description is description text, whether a space or a
+// tab follows it.
+func TestParser_CommoditySymbol_SignInDescriptionIsText(t *testing.T) {
+	for _, description := range []string{"-\t5 apples", "- 5 apples", "+\t5 apples", "-5 apples", "- яблоки 5", "-\t元 5"} {
+		t.Run(description, func(t *testing.T) {
+			journal, errs := Parse("2024-01-01 * " + description + "\n    a  1 X\n    b\n")
+			require.Empty(t, errs)
+			assert.Equal(t, description, journal.Transactions[0].Description)
+		})
+	}
+}
