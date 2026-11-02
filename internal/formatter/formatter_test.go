@@ -4001,3 +4001,23 @@ func TestFormatDocument_NumberSyntaxForms(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatDocument_GluedCommodityStyleKeepsWrittenSpacing(t *testing.T) {
+	tests := []struct{ directive, amount, want string }{
+		{"commodity US$1.000,00\n", "US$1.234,5", "US$1.234,50"},
+		{"commodity US$ 1.000,00\n", "US$1.234,5", "US$ 1.234,50"},
+		{"commodity GB£1,000.00\n", "GB£1234.5", "GB£1,234.50"},
+		{"commodity 元1,000.00\n", "元1234.5", "元1,234.50"},
+	}
+	for _, tt := range tests {
+		input := tt.directive + "2024-01-02 t\n    a  " + tt.amount + "\n    c\n"
+		journal, errs := parser.Parse(input)
+		require.Empty(t, errs, input)
+		once := applyEdits(input, FormatDocument(journal, input))
+		assert.Contains(t, once, "  "+tt.want+"\n", input)
+
+		journal, errs = parser.Parse(once)
+		require.Empty(t, errs)
+		assert.Equal(t, once, applyEdits(once, FormatDocument(journal, once)), "formatting must be idempotent")
+	}
+}
