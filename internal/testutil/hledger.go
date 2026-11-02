@@ -92,6 +92,104 @@ var NumberSpellings = []string{
 	"15,000",
 	"1.500",
 	"1,5",
+
+	// hledger refuses an exponent next to a digit group separator
+	"1E3 X",
+	"1,5E3 X",
+	"1.5E3 X",
+	"1.5e3 X",
+	"1,500E3 X",
+	"1.500E3 X",
+	"1,234,567E3 X",
+	"1.5E3",
+	"1,5E3",
+	"1.5E-3 X",
+	"1.E3 X",
+}
+
+// AmountSyntaxDirectives are the styles that matter for how a sign or a leading
+// decimal mark is read. The list is short because AmountSyntaxSpellings is long.
+var AmountSyntaxDirectives = []string{
+	"",
+	"decimal-mark ,\n",
+	"commodity 1.000,00 X\n",
+	"commodity 1,000.00 X\n",
+	"commodity 1000.00 X\n",
+	"D 1.000,00 X\n",
+}
+
+// AmountSyntaxSpellings are amounts that differ from NumberSpellings in the way
+// they are punctuated rather than in the digit groups they use.
+var AmountSyntaxSpellings = []string{
+	// a sign before a prefix commodity
+	"-X 1,500",
+	"-X 1.500",
+	"- X 5",
+	"-X5",
+	"+X 5",
+	"-X -5",
+	"X - 5",
+	"-$5",
+	"- $5",
+	"-$ 1,5",
+	"$-5",
+	`-"A B" 5`,
+	`-"A B"5`,
+	"-X 1 500",
+	"-X 1,5E3",
+	"-X 1.5E3",
+	"--X 5",
+	"-X +5",
+	"+X -5",
+	"- -5",
+	"-руб 5",
+	"-元 5",
+	`-"元 B" 5`,
+	"-€ .5",
+
+	// a number that starts with the decimal mark
+	".5 X",
+	"-.5 X",
+	"+.5 X",
+	"$.5",
+	"$ .5",
+	"X .5",
+	"X -.5",
+	"-X .5",
+	".5",
+	"-.5",
+	".5E2 X",
+	".500 X",
+	".5 руб",
+	".5 元",
+	".5.5 X",
+	".5,5 X",
+	",5 X",
+	". X",
+	".E2 X",
+	"1.5 .5",
+}
+
+// NumberCase is one journal prefix and one amount written after it.
+type NumberCase struct {
+	Directive string
+	Spelling  string
+}
+
+// NumberCases lists every case the oracle suites compare with hledger.
+func NumberCases() []NumberCase {
+	var cases []NumberCase
+	for _, directive := range NumberDirectives {
+		for _, spelling := range NumberSpellings {
+			cases = append(cases, NumberCase{directive, spelling})
+		}
+	}
+	for _, directive := range AmountSyntaxDirectives {
+		for _, spelling := range AmountSyntaxSpellings {
+			cases = append(cases, NumberCase{directive, spelling})
+		}
+	}
+	return cases
 }
 
 // HledgerAmount is what a journal's first posting of its last transaction reads

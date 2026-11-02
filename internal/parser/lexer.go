@@ -183,10 +183,12 @@ func (l *Lexer) scanInLine() Token {
 		}
 		return l.scanQuotedCommodity()
 	case ch == '-' || ch == '+':
-		if l.nextIsCurrencySymbol() || l.nextIsLetterCommodity() || l.nextIsDigit() {
+		if l.nextIsCurrencySymbol() || l.nextIsLetterCommodity() || l.nextIsDigit() || l.signStartsPostingAmount() {
 			return l.scanSign()
 		}
 		return l.scanText()
+	case ch == '.' && l.startsLeadingDecimalNumber():
+		return l.scanNumber()
 	case l.isDigit(ch):
 		if l.looksLikeDate() {
 			return l.scanDate()
@@ -925,6 +927,62 @@ func (l *Lexer) nextIsLetterCommodity() bool {
 		return true
 	}
 	return false
+}
+
+// signStartsPostingAmount reports whether the sign at the current position
+// belongs to an amount that writes the commodity after the sign, with spaces
+// allowed in between: "-EUR 5", "- $5", `-"A B" 5`, "-.5".
+func (l *Lexer) signStartsPostingAmount() bool {
+	if !l.onPostingLine {
+		return false
+	}
+	pos := l.pos + 1
+	for pos < len(l.input) && l.input[pos] == ' ' {
+		pos++
+	}
+	if pos >= len(l.input) {
+		return false
+	}
+	switch r, size := utf8.DecodeRuneInString(l.input[pos:]); {
+	case r == '"' || l.isCurrencySymbol(r):
+		return true
+	case r == '.':
+		return pos+1 < len(l.input) && l.isDigit(l.input[pos+1])
+	case unicode.IsLetter(r):
+		pos += size
+		for pos < len(l.input) {
+			r, size = utf8.DecodeRuneInString(l.input[pos:])
+			if !unicode.IsLetter(r) {
+				break
+			}
+			pos += size
+		}
+		for pos < len(l.input) && l.input[pos] == ' ' {
+			pos++
+		}
+		if pos >= len(l.input) {
+			return false
+		}
+		next := l.input[pos]
+		if next == '-' || next == '+' {
+			pos++
+			next = 0
+			if pos < len(l.input) {
+				next = l.input[pos]
+			}
+		}
+		return l.isDigit(next) || (next == '.' && pos+1 < len(l.input) && l.isDigit(l.input[pos+1]))
+	}
+	return false
+}
+
+// startsLeadingDecimalNumber reports whether the "." at the current position
+// begins an amount that omits the integer part, such as ".5 EUR". Account names
+// and header text may start with a dot, so only the amount slot of a posting
+// qualifies.
+func (l *Lexer) startsLeadingDecimalNumber() bool {
+	inAmountSlot := (l.onPostingLine && !l.afterIndent) || (l.inDirective && l.directiveName == "P")
+	return inAmountSlot && l.pos+1 < len(l.input) && l.isDigit(l.input[l.pos+1])
 }
 
 func (l *Lexer) scanSign() Token {

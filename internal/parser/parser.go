@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -738,11 +739,14 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount := &ast.Amount{}
 	amount.Range.Start = toASTPosition(p.current.Pos)
 
-	sign := ""
+	// Two signs cancel out: hledger reads "-EUR -5" as EUR 5.
+	negative := false
 	signBeforeCommodity := false
+	signs := 0
 	if p.current.Type == TokenSign {
-		sign = p.current.Value
+		negative = p.current.Value == "-"
 		signBeforeCommodity = true
+		signs++
 		p.advance()
 	}
 
@@ -756,16 +760,18 @@ func (p *Parser) parseAmount() *ast.Amount {
 				End:   toASTPosition(p.current.End),
 			},
 		}
-		if signBeforeCommodity && (sign == "-" || sign == "+") {
+		if signBeforeCommodity {
 			amount.SignBeforeCommodity = true
 		}
 		p.advance()
+	} else if signs > 0 && p.current.Type == TokenSign {
+		p.error("expected number")
+		p.skipToNextLine()
+		return nil
 	}
 
 	if p.current.Type == TokenSign {
-		if sign == "" {
-			sign = p.current.Value
-		}
+		negative = negative != (p.current.Value == "-")
 		p.advance()
 	}
 
@@ -776,11 +782,12 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 
 	rawNumberStr := p.current.Value
-	if sign == "-" && !strings.HasPrefix(rawNumberStr, "-") {
+	if negative {
 		rawNumberStr = "-" + rawNumberStr
 	}
 	amount.RawQuantity = rawNumberStr
 	rawTokenValue := p.current.Value
+	numberPos, numberEnd := p.current.Pos, p.current.End
 	p.advance()
 
 	if amount.Commodity.Symbol == "" {
@@ -823,11 +830,25 @@ func (p *Parser) parseAmount() *ast.Amount {
 	if isAmbiguousNumber(rawTokenValue) {
 		mark = amount.DecimalMark
 	}
+	if strings.HasPrefix(rawTokenValue, ".") {
+		// A number without an integer part always uses "." as its mark, even
+		// under a decimal-mark directive that names ",".
+		if !isLeadingDecimalNumber(rawTokenValue) {
+			p.errorAt(numberPos, numberEnd, "invalid number: %s", rawTokenValue)
+			return nil
+		}
+		mark = "."
+	}
 	numberStr = normalizeNumber(numberStr, mark)
+
+	if hasExponent(rawTokenValue) && hasDigitGroupSeparator(rawTokenValue, numberStr) {
+		p.errorAt(numberPos, numberEnd, "invalid number: digit separators and exponents may not be used together")
+		return nil
+	}
 
 	qty, err := decimal.NewFromString(numberStr)
 	if err != nil {
-		p.error("invalid number: %s", rawTokenValue)
+		p.errorAt(numberPos, numberEnd, "invalid number: %s", rawTokenValue)
 		return nil
 	}
 	amount.Quantity = qty
@@ -2021,6 +2042,36 @@ func numberInFormat(format, symbol string) string {
 // decimal mark: it has one separator, and nothing else to tell its role.
 func isAmbiguousNumber(number string) bool {
 	return !strings.Contains(number, " ") && strings.Count(number, ".")+strings.Count(number, ",") == 1
+}
+
+var leadingDecimalNumber = regexp.MustCompile(`^\.[0-9]+([eE][+-]?[0-9]+)?$`)
+
+// isLeadingDecimalNumber reports whether number is a decimal mark followed by
+// digits and an optional exponent, such as ".5" or ".5E2".
+func isLeadingDecimalNumber(number string) bool {
+	return leadingDecimalNumber.MatchString(number)
+}
+
+func hasExponent(number string) bool {
+	return strings.ContainsAny(number, "eE")
+}
+
+// hasDigitGroupSeparator reports whether the mantissa of a number, written as
+// raw and read as normalized, contains a digit group separator. A separator
+// left over once the decimal mark is accounted for is a group separator. A
+// separator with no digits after it is read as the decimal mark whatever mark is
+// in force.
+func hasDigitGroupSeparator(raw, normalized string) bool {
+	mantissa, _, _ := strings.Cut(strings.ToUpper(raw), "E")
+	normalizedMantissa, _, _ := strings.Cut(strings.ToUpper(normalized), "E")
+	if strings.Contains(mantissa, " ") {
+		return true
+	}
+	marks := strings.Count(normalizedMantissa, ".")
+	if strings.HasSuffix(mantissa, ".") || strings.HasSuffix(mantissa, ",") {
+		marks = 1
+	}
+	return strings.Count(mantissa, ".")+strings.Count(mantissa, ",") > marks
 }
 
 // numberDecimalMark returns the decimal mark of a number written in a commodity

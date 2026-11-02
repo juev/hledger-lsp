@@ -27,12 +27,10 @@ func ourRead(input string) testutil.HledgerAmount {
 func TestOracle_NumberReadingMatchesHledger(t *testing.T) {
 	hledgerPath := testutil.RequireHledger(t)
 
-	for _, directive := range testutil.NumberDirectives {
-		for _, spelling := range testutil.NumberSpellings {
-			t.Run(fmt.Sprintf("%q reads %q", directive, spelling), func(t *testing.T) {
-				input := directive + "2024-01-01 x\n    a  " + spelling + "\n    b\n"
-				assert.Equal(t, testutil.HledgerRead(t, hledgerPath, input), ourRead(input), "journal:\n%s", input)
-			})
-		}
+	for _, c := range testutil.NumberCases() {
+		t.Run(fmt.Sprintf("%q reads %q", c.Directive, c.Spelling), func(t *testing.T) {
+			input := c.Directive + "2024-01-01 x\n    a  " + c.Spelling + "\n    b\n"
+			assert.Equal(t, testutil.HledgerRead(t, hledgerPath, input), ourRead(input), "journal:\n%s", input)
+		})
 	}
 }
