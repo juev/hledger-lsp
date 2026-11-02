@@ -304,3 +304,67 @@ func TestRunningBalances_ElidedPostingAloneInItsGroupIsHidden(t *testing.T) {
 	assert.False(t, hasRunningBalance(balances, 1, 2))
 	assert.False(t, hasRunningBalance(balances, 2, 0))
 }
+
+func TestRunningBalances_AssignmentAfterAssignmentTransactionKeepsItsCost(t *testing.T) {
+	// hledger keeps the cost of postings in a transaction with an assignment, so
+	// the amount assigned to b later carries 29 EUR @ 2 USD and the elided
+	// posting is -13 EUR, -58 USD. Checked against hledger 1.52 `reg x`.
+	for name, accounts := range map[string][3]string{
+		"ascii":    {"b", "c", "x"},
+		"cyrillic": {"банк", "касса", "расходы"},
+		"cjk":      {"銀行", "現金", "費用"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			balances := primaryRunningBalances(t, "2024-01-03 t3\n    "+accounts[0]+"  -29 EUR @ 2 USD\n    "+accounts[1]+"  = -7 EUR\n    d\n\n"+
+				"2024-01-16 t1\n    "+accounts[0]+"  = 13 EUR\n    "+accounts[2]+"\n")
+			assert.Equal(t, "-13", runningBalanceAt(t, balances, 1, 1, "EUR"))
+			assert.Equal(t, "-58", runningBalanceAt(t, balances, 1, 1, "USD"))
+			assert.Equal(t, "13", runningBalanceAt(t, balances, 1, 0, "EUR"))
+		})
+	}
+}
+
+func TestRunningBalances_OrdinaryTransactionCostIsNotKept(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    c
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+`)
+	assert.Equal(t, "-42", runningBalanceAt(t, balances, 1, 1, "EUR"))
+	assert.Equal(t, "0", runningBalanceAt(t, balances, 1, 1, "USD"))
+}
+
+func TestRunningBalances_ReportedJournalMatchesRegister(t *testing.T) {
+	balances := primaryRunningBalances(t, `alias q = a:x
+
+2024-01-01 t0
+    a:x  ==* 24 EUR
+    b  =* -5 EUR
+    q
+
+2024-01-16 t1
+    b  = 13 EUR
+    банк  3 EUR
+    a:x  18 EUR @ 3 USD  ; date:2024-01-04
+    q
+
+2024-01-05 t2
+    a  29 EUR
+    a
+
+2024-01-03 t3
+    a:x  -20 USD  ; date:2024-01-10
+    b  -29 EUR @ 2 USD
+    現金:食  ==* -7 EUR
+    банк
+
+2024-01-08 t4
+    a:x  ==* 1 EUR
+    現金:食
+`)
+	assert.Equal(t, "-2", runningBalanceAt(t, balances, 1, 3, "EUR"))
+	assert.Equal(t, "-112", runningBalanceAt(t, balances, 1, 3, "USD"))
+}

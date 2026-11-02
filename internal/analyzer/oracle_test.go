@@ -1,8 +1,12 @@
 package analyzer
 
 import (
+	"encoding/csv"
 	"os"
 	"os/exec"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -250,4 +254,213 @@ func hledgerAccepts(t *testing.T, hledgerPath, journal string) bool {
 	cmd.Stderr = &strings.Builder{}
 
 	return cmd.Run() == nil
+}
+
+// runningBalanceOracleJournals are journals whose running balances are compared
+// with the register of the installed hledger.
+var runningBalanceOracleJournals = map[string]string{
+	"assignment reads the cost kept by an earlier assignment transaction": `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+`,
+	"ordinary transaction posting loses its cost": `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    c
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+`,
+	"total costs merge": `2024-01-03 t3
+    b  -29 EUR @@ 58 USD
+    c  = -7 EUR
+    d
+
+2024-01-04 t4
+    b  -1 EUR @@ 3 USD
+    c  = -8 EUR
+    d
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+`,
+	"inclusive assignment reads subaccount costs": `2024-01-03 t3
+    a:x  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-16 t1
+    a  =* 13 EUR
+    x
+`,
+	"strict assignment clears another commodity with its cost": `2024-01-03 t3
+    a:x  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-16 t1
+    a:x  == 5 USD
+    x
+`,
+	"same transaction assignment sees the earlier cost": `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    b  = 13 EUR
+    d
+`,
+	"cost of a later ordinary posting is dropped": `2024-01-03 t3
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-04 t4
+    b  -5 EUR
+    d
+
+2024-01-16 t1
+    b  = 13 EUR
+    x
+`,
+	"non-ASCII accounts": `2024-01-03 покупка
+    現金:食  -29 EUR @ 2 USD
+    банк  = -7 EUR
+    капитал
+
+2024-01-16 сверка
+    現金:食  = 13 EUR
+    расходы
+`,
+	"reported journal": `alias q = a:x
+
+2024-01-01 t0
+    a:x  ==* 24 EUR
+    b  =* -5 EUR
+    q
+
+2024-01-16 t1
+    b  = 13 EUR
+    банк  3 EUR
+    a:x  18 EUR @ 3 USD  ; date:2024-01-04
+    q
+
+2024-01-05 t2
+    a  29 EUR
+    a
+
+2024-01-03 t3
+    a:x  -20 USD  ; date:2024-01-10
+    b  -29 EUR @ 2 USD
+    現金:食  ==* -7 EUR
+    банк
+
+2024-01-08 t4
+    a:x  ==* 1 EUR
+    現金:食
+`,
+}
+
+func TestOracle_RunningBalancesMatchHledgerRegister(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for name, input := range runningBalanceOracleJournals {
+		t.Run(name, func(t *testing.T) {
+			assertRunningBalancesMatchRegister(t, hledgerPath, input)
+		})
+	}
+}
+
+// assertRunningBalancesMatchRegister compares every posting's running balance
+// with the total column of `hledger reg -I`, which is the number the inlay hint
+// is meant to show. The register totals across every posting it lists, so each
+// account is queried on its own to get that account's balance.
+func assertRunningBalancesMatchRegister(t *testing.T, hledgerPath, input string) {
+	t.Helper()
+
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: input})
+	sourced := resolved.TransactionsWithSource()
+	balances := RunningBalances(sourced, sourced[0].OccurrenceID)
+
+	accounts := make(map[string]bool)
+	for _, source := range sourced {
+		for i := range source.Transaction.Postings {
+			accounts[source.Transaction.Postings[i].Account.GetResolvedName()] = true
+		}
+	}
+
+	for account := range accounts {
+		cmd := exec.Command(hledgerPath, "-f", "-", "reg", "-I", "--output-format=csv", "acct:^"+regexp.QuoteMeta(account)+"$")
+		cmd.Stdin = strings.NewReader(input)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		output, err := cmd.Output()
+		require.NoError(t, err, "hledger: %s", stderr.String())
+
+		rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+		require.NoError(t, err)
+
+		// Rows of one account inside one transaction come out in register order,
+		// which is posting-date order with parse order breaking ties.
+		seen := make(map[string]int)
+		for _, row := range rows[1:] {
+			txn, err := strconv.Atoi(row[0])
+			require.NoError(t, err)
+			tx := &sourced[txn-1].Transaction
+
+			var candidates []int
+			for i := range tx.Postings {
+				if tx.Postings[i].Account.GetResolvedName() == account {
+					candidates = append(candidates, i)
+				}
+			}
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return compareDates(registerDate(tx, &tx.Postings[candidates[i]]), registerDate(tx, &tx.Postings[candidates[j]])) < 0
+			})
+			require.Less(t, seen[row[0]], len(candidates), "register has more rows than postings for %s", account)
+			posting := candidates[seen[row[0]]]
+			seen[row[0]]++
+
+			want := parseRegisterTotal(t, row[6])
+			got := balances[PostingRef{TransactionIndex: sourced[txn-1].Index, PostingIndex: posting}]
+			for commodity, quantity := range got {
+				if !quantity.IsZero() {
+					assert.True(t, want[commodity].Equal(quantity),
+						"balance of %s in %s after transaction %d: ours %s, hledger %s\n%s", account, commodity, txn, quantity, want[commodity], input)
+				}
+			}
+			for commodity, quantity := range want {
+				assert.True(t, got[commodity].Equal(quantity),
+					"balance of %s in %s after transaction %d: ours %s, hledger %s\n%s", account, commodity, txn, got[commodity], quantity, input)
+			}
+		}
+	}
+}
+
+// parseRegisterTotal reads a register total such as "-2 EUR, -112 USD".
+func parseRegisterTotal(t *testing.T, total string) map[string]decimal.Decimal {
+	t.Helper()
+
+	result := make(map[string]decimal.Decimal)
+	if strings.TrimSpace(total) == "0" || strings.TrimSpace(total) == "" {
+		return result
+	}
+	for _, part := range strings.Split(total, ", ") {
+		fields := strings.Fields(part)
+		require.Len(t, fields, 2, "total %q", total)
+		quantity, err := decimal.NewFromString(fields[0])
+		require.NoError(t, err)
+		result[fields[1]] = quantity
+	}
+	return result
 }
