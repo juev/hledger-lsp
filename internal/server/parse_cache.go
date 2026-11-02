@@ -105,17 +105,25 @@ func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *inc
 	} else {
 		balances = analyzer.RunningBalances(journalTransactions(doc.journal), 0)
 	}
-	// Entries of a replaced tree are unreachable. Bounding the map keeps a
-	// long-lived document from accumulating one replay per tree revision.
-	const maxReplays = 16
-	if len(doc.running) >= maxReplays {
-		clear(doc.running)
-	}
 	if doc.running == nil {
 		doc.running = make(map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal)
 	}
 	doc.running[key] = balances
 	return balances
+}
+
+// keepRunningBalances drops the replays a request did not use. Entries of a
+// replaced tree are unreachable, and the request that read every current
+// occurrence is the one that knows which those are.
+func (s *Server) keepRunningBalances(docURI uri.URI, content string, used map[readingKey]bool) {
+	doc := s.cachedParse(docURI, content)
+	doc.runningMu.Lock()
+	defer doc.runningMu.Unlock()
+	for key := range doc.running {
+		if !used[key] {
+			delete(doc.running, key)
+		}
+	}
 }
 
 // cachedAnalysis returns the analysis of the document's journal, reusing the

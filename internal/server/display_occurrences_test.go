@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -182,4 +184,62 @@ func TestInlayHint_RunningBalanceOfAFileIncludedOnceIsUnchanged(t *testing.T) {
 	hints := hintsAt(t, ts, docURI)
 	assert.Equal(t, []string{"balance: 10 USD", "balance: -10 USD"}, inlayLabelsOf(hints))
 	assert.Nil(t, hints[0].Tooltip)
+}
+
+// Two inclusions of a file can sit at the same directive when the file that
+// holds it is itself included twice; the tooltip must still tell them apart.
+func TestInlayHint_TooltipLabelsOfADiamondAreDistinct(t *testing.T) {
+	shared := "2024-01-01 seed\n    assets:cash  10 USD\n    income:job\n"
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{
+		"main.journal":   "include a.journal\ninclude b.journal\n",
+		"a.journal":      "include mid.journal\n",
+		"b.journal":      "include mid.journal\n",
+		"mid.journal":    "include shared.journal\n",
+		"shared.journal": shared,
+	})
+	ts, docURI := formatServer(t, dir, filepath.Join(dir, "shared.journal"), shared)
+	enableHints(ts, false, false, true)
+
+	hints := hintsAt(t, ts, docURI)
+	require.NotEmpty(t, hints)
+	tooltip := tooltipString(hints[0].Tooltip)
+	assert.Contains(t, tooltip, "mid.journal:1 via a.journal:1")
+	assert.Contains(t, tooltip, "mid.journal:1 via b.journal:1")
+}
+
+// More inclusions than any fixed cap must still be replayed once, not on every
+// request.
+func TestInlayHint_RunningBalancesOfManyInclusionsAreReused(t *testing.T) {
+	shared := "2024-01-01 seed\n    assets:cash  10 USD\n    income:job\n"
+	dir := t.TempDir()
+	var main strings.Builder
+	files := map[string]string{"shared.journal": shared}
+	const inclusions = 20
+	for i := range inclusions {
+		name := fmt.Sprintf("inc%02d.journal", i)
+		main.WriteString("include " + name + "\n")
+		files[name] = "include shared.journal\n"
+	}
+	files["main.journal"] = main.String()
+	writeJournals(t, dir, files)
+	ts, docURI := formatServer(t, dir, filepath.Join(dir, "shared.journal"), shared)
+	enableHints(ts, false, false, true)
+
+	replays := func() map[readingKey]uintptr {
+		hintsAt(t, ts, docURI)
+		cached, ok := ts.parseCache.Load(docURI)
+		require.True(t, ok)
+		doc := cached.(*cachedDoc)
+		doc.runningMu.Lock()
+		defer doc.runningMu.Unlock()
+		pointers := make(map[readingKey]uintptr)
+		for key, balances := range doc.running {
+			pointers[key] = reflect.ValueOf(balances).Pointer()
+		}
+		return pointers
+	}
+	first := replays()
+	assert.Len(t, first, inclusions)
+	assert.Equal(t, first, replays(), "an unchanged document and tree must reuse every replay")
 }
