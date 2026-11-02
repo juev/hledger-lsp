@@ -112,3 +112,43 @@ func BenchmarkAnalyze_Large_IncludedTwiceSameContext(b *testing.B) {
 func BenchmarkAnalyze_Large_IncludedTwiceConflictingMarks(b *testing.B) {
 	benchmarkAnalyzeAfterEdit(b, []string{",", "."})
 }
+
+// benchmarkInlayHintAfterEdit measures the first inlay hint request after each
+// edit, with every kind of hint on.
+func benchmarkInlayHintAfterEdit(b *testing.B, marks []string) {
+	srv, docURI := setupOccurrenceBench(b, largeContent, marks)
+	settings := srv.getSettings()
+	settings.InlayHints.InferredAmounts = true
+	settings.InlayHints.CostExpansion = true
+	settings.InlayHints.RunningBalances = true
+	srv.setSettings(settings)
+	path := uriToPath(docURI)
+	params := &protocol.InlayHintParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        protocol.Range{End: protocol.Position{Line: 100}},
+	}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; b.Loop(); i++ {
+		content := largeContent + strings.Repeat(" ", i%2)
+		srv.StoreDocument(docURI, content)
+		srv.workspace.MarkFileDirty(path, workspace.StaticContent(content))
+		if _, err := srv.InlayHint(ctx, params); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInlayHint_Large_IncludedOnce(b *testing.B) {
+	benchmarkInlayHintAfterEdit(b, []string{""})
+}
+
+func BenchmarkInlayHint_Large_IncludedTwiceSameContext(b *testing.B) {
+	benchmarkInlayHintAfterEdit(b, []string{"", ""})
+}
+
+func BenchmarkInlayHint_Large_IncludedTwiceConflictingMarks(b *testing.B) {
+	benchmarkInlayHintAfterEdit(b, []string{",", "."})
+}
