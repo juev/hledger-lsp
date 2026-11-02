@@ -130,6 +130,11 @@ type Amount struct {
 	// or "" when nothing is declared. A number rewritten at this position has to
 	// use it, whatever style the commodity declares elsewhere.
 	DecimalMark string
+	// SymbolDecimalMark is, for an amount that inherited its symbol from the
+	// D directive, the mark in force at this position for amounts written with
+	// that symbol. It can differ from DecimalMark, so text that names the symbol
+	// has to use it to read back as the same value.
+	SymbolDecimalMark string
 }
 
 type Commodity struct {
@@ -174,15 +179,19 @@ type LotPrice struct {
 	// Fixed marks the `{=PRICE}` / `{{=PRICE}}` form, which states the lot cost
 	// outright instead of the per-unit price.
 	Fixed bool
-	Date  string
-	Label string
+	// Braces marks a written `{...}` or `{{...}}`, which hledger reads even
+	// when it is empty: `{}` is a lot annotation without a cost, not no lot.
+	Braces bool
+	Date   string
+	Label  string
+	// Noted marks a written `(...)` note; an empty `()` is still a note.
+	Noted bool
 	Range Range
 }
 
 type BalanceAssertion struct {
 	Amount      Amount
 	Cost        *Cost
-	LotPrice    *LotPrice
 	IsStrict    bool
 	IsInclusive bool
 	Range       Range
@@ -286,9 +295,12 @@ func (AliasDirective) directive()        {}
 func (d AliasDirective) GetRange() Range { return d.Range }
 
 type Comment struct {
-	Text  string
-	Tags  []Tag
-	Range Range
+	Text string
+	Tags []Tag
+	// Marker is the character that opened the comment: ';', or '#' on an indented
+	// line. hledger reads only ';' lines as comments of the posting above them.
+	Marker byte
+	Range  Range
 }
 
 type Tag struct {

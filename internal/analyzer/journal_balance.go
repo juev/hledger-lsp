@@ -76,27 +76,20 @@ func (b accountBalances) amount(account, commodity string, inclusive bool) decim
 	return total
 }
 
-// otherCommodities returns the balances held by an account (and, for inclusive
-// assertions, its subaccounts) in commodities other than the asserted one, in a
-// stable order. hledger's `==` form requires these to be empty, and it compares
-// each commodity using that commodity's own precision, so a balance like 0.20 EUR
-// still fails a dollar assertion.
-func (b accountBalances) otherCommodities(account, except string, inclusive bool, userTolerance decimal.Decimal) []string {
+// otherCommodities returns what an account holds in commodities other than the
+// asserted one, in a stable order, as hledger's `==` form checks it. The
+// commodities checked are those the account itself has an entry in, even one that
+// has netted to zero; for an inclusive assertion each is totalled with the
+// subaccounts, so a subaccount can offset the account's own balance but a
+// commodity only a subaccount holds is not looked at. Any non-zero balance
+// counts, however small: assertions are exact.
+func (b accountBalances) otherCommodities(account, except string, inclusive bool) []string {
 	var result []string
-	for commodity := range b.heldCommodities(account, inclusive) {
+	for commodity := range b[account] {
 		quantity := b.amount(account, commodity, inclusive)
 		if commodity == except || quantity.IsZero() {
 			continue
 		}
-
-		tolerance := toleranceForPrecision(decimalPrecision(quantity))
-		if userTolerance.IsPositive() && userTolerance.GreaterThan(tolerance) {
-			tolerance = userTolerance
-		}
-		if quantity.Abs().LessThanOrEqual(tolerance) {
-			continue
-		}
-
 		result = append(result, fmt.Sprintf("%s %s", quantity.String(), displayCommodity(commodity)))
 	}
 	sort.Strings(result)
@@ -119,11 +112,57 @@ func (b accountBalances) heldCommodities(account string, inclusive bool) map[str
 	return held
 }
 
-// pricedKey identifies an amount that was written with a cost: the commodity it
-// is denominated in and the commodity of its cost.
+// settleAssignment leaves an account with the commodity entries hledger gives it
+// after a balance assignment, once the assigned amount has been added. hledger
+// replaces the account's own balance rather than adding to it: an inclusive
+// assignment computes it from what the subaccounts hold, so the account gets an
+// entry, possibly zero, in each of their commodities, and a strict one keeps no
+// other entry, the assigned amount having emptied it. A strict assertion checks
+// the commodities the account has an entry in, so these entries decide what a
+// later one looks at.
+func (b accountBalances) settleAssignment(account string, assertion *ast.BalanceAssertion) {
+	keep := map[string]bool{assertion.Amount.Commodity.Symbol: true}
+	if assertion.IsInclusive {
+		prefix := account + ":"
+		for name, byCommodity := range b {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			for commodity := range byCommodity {
+				keep[commodity] = true
+				b.add(account, commodity, decimal.Zero)
+			}
+		}
+	}
+	if !assertion.IsStrict {
+		return
+	}
+	for commodity := range b[account] {
+		if !keep[commodity] {
+			delete(b[account], commodity)
+		}
+	}
+}
+
+// pricedKey identifies an amount that was written with a cost the way hledger
+// tells such amounts apart: by commodity, by the commodity of the cost, and by the
+// unit price for @ or as one group for @@. Amounts under one key add up, while
+// amounts under different keys stay apart even when their quantities cancel.
 type pricedKey struct {
 	commodity     string
 	costCommodity string
+	// unitPrice is the canonical text of the @ price, empty for @@.
+	unitPrice string
+	total     bool
+}
+
+// costKey returns the key an amount with the given cost is held under.
+func costKey(amount ast.Amount, cost *ast.Cost) pricedKey {
+	key := pricedKey{commodity: amount.Commodity.Symbol, costCommodity: cost.Amount.Commodity.Symbol, total: cost.IsTotal}
+	if !cost.IsTotal {
+		key.unitPrice = cost.Amount.Quantity.String()
+	}
+	return key
 }
 
 // pricedAmount is what an account holds under one pricedKey: the quantity, and
@@ -356,8 +395,8 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 				precision: decimalPrecision(p.Amount.Quantity),
 			}
 			if carryCosts && p.Cost != nil {
-				if costCommodity, value, ok := balanceSumContribution(*p); ok {
-					e.priced.add(p.Account.GetResolvedName(), pricedKey{p.Amount.Commodity.Symbol, costCommodity}, p.Amount.Quantity, value)
+				if _, value, ok := balanceSumContribution(*p); ok {
+					e.priced.add(p.Account.GetResolvedName(), costKey(*p.Amount, p.Cost), p.Amount.Quantity, value)
 				}
 			}
 		case p.BalanceAssertion != nil:
@@ -440,6 +479,9 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 		scope = scopeSubtree
 	}
 	priced := e.pricedParts(account, commodity, scope)
+	if assertedPart, ok := assertionPricedPart(assertion); ok {
+		priced = append(priced, assertedPart)
+	}
 
 	for other := range e.balances.heldCommodities(account, assertion.IsInclusive) {
 		if other == commodity {
@@ -470,7 +512,64 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 			priced = append(priced, parts...)
 		}
 	}
-	return contribution, priced
+	return contribution, mergePricedParts(priced)
+}
+
+// assertionPricedPart returns the asserted amount as a priced part when the
+// assertion carries a cost. hledger gives the inferred posting that cost, and it
+// covers the whole asserted amount rather than only the change, while the balance
+// it replaces is taken out at the costs it was held at.
+func assertionPricedPart(assertion *ast.BalanceAssertion) (pricedPart, bool) {
+	if assertion.Cost == nil {
+		return pricedPart{}, false
+	}
+	_, value, ok := balanceSumContribution(ast.Posting{Amount: &assertion.Amount, Cost: assertion.Cost})
+	if !ok {
+		return pricedPart{}, false
+	}
+	return pricedPart{
+		pricedKey: costKey(assertion.Amount, assertion.Cost),
+		quantity:  assertion.Amount.Quantity,
+		value:     value,
+	}, true
+}
+
+// mergePricedParts sums parts that share a key and drops those that cancel out,
+// so an assignment that restates the balance an account already holds at the same
+// cost has no priced part left and moves nothing. Parts at different prices stay
+// apart, as they do in hledger.
+func mergePricedParts(parts []pricedPart) []pricedPart {
+	if len(parts) == 0 {
+		return parts
+	}
+	sums := make(map[pricedKey]pricedAmount, len(parts))
+	for _, part := range parts {
+		sum := sums[part.pricedKey]
+		sums[part.pricedKey] = pricedAmount{quantity: sum.quantity.Add(part.quantity), value: sum.value.Add(part.value)}
+	}
+	merged := make([]pricedPart, 0, len(sums))
+	for key, sum := range sums {
+		if sum.quantity.IsZero() && sum.value.IsZero() {
+			continue
+		}
+		merged = append(merged, pricedPart{pricedKey: key, quantity: sum.quantity, value: sum.value})
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return lessPricedKey(merged[i].pricedKey, merged[j].pricedKey)
+	})
+	return merged
+}
+
+func lessPricedKey(a, b pricedKey) bool {
+	switch {
+	case a.commodity != b.commodity:
+		return a.commodity < b.commodity
+	case a.costCommodity != b.costCommodity:
+		return a.costCommodity < b.costCommodity
+	case a.total != b.total:
+		return !a.total
+	}
+	return a.unitPrice < b.unitPrice
 }
 
 // pricedParts returns the negation of the priced balances an assignment replaces
@@ -484,7 +583,7 @@ func (e *journalEvaluator) pricedParts(account, commodity string, scope pricedSc
 		}
 		parts = append(parts, pricedPart{pricedKey: key, quantity: amount.quantity.Neg(), value: amount.value.Neg()})
 	}
-	sort.Slice(parts, func(i, j int) bool { return parts[i].costCommodity < parts[j].costCommodity })
+	sort.Slice(parts, func(i, j int) bool { return lessPricedKey(parts[i].pricedKey, parts[j].pricedKey) })
 	return parts
 }
 
@@ -534,6 +633,9 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 		step := func(postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
+			if posting.Amount == nil && posting.BalanceAssertion != nil {
+				e.balances.settleAssignment(posting.Account.GetResolvedName(), posting.BalanceAssertion)
+			}
 			if e.observe != nil {
 				e.observe(event.sourceOrder, postingIndex, contribution, priced)
 			}
@@ -578,32 +680,101 @@ func registerDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 // yearless value inherits the transaction year. Invalid date: values have their
 // own diagnostic and fall back to the transaction date here.
 func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
-	for _, tag := range posting.Tags {
-		if tag.Name == "date" {
-			if date, ok := parsePostingDateValue(tag.Value, tx.Date.Year); ok {
-				return date
-			}
+	if date, ok := postingDateOverride(tx, posting); ok {
+		return date
+	}
+	return tx.Date
+}
+
+// postingDateOverride returns the date a posting carries of its own. hledger
+// reads the comment of the posting line and then the comment lines below it, each
+// on its own, and takes the first date it meets: a date: tag, or the primary date
+// of a bracketed date. A date: value is read up to its first character that
+// cannot belong to a date, while a bracketed date must be the whole bracket, so
+// [ 2024-01-20 ] is not one. Names are case sensitive, so Date: is an ordinary
+// tag.
+func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, bool) {
+	if date, ok := commentDate(posting.Comment, tx.Date.Year); ok {
+		return date, true
+	}
+	for _, line := range continuationComments(tx, posting) {
+		if date, ok := commentDate(line.Text, tx.Date.Year); ok {
+			return date, true
+		}
+	}
+	return ast.Date{}, false
+}
+
+// commentDate returns the first date written in one comment line: the earlier of
+// its date: tag and its first bracketed date.
+func commentDate(comment string, transactionYear int) (ast.Date, bool) {
+	best, bestAt, found := ast.Date{}, 0, false
+	consider := func(date ast.Date, at int) {
+		if !found || at < bestAt {
+			best, bestAt, found = date, at, true
 		}
 	}
 
-	comment := posting.Comment
-	for {
-		start := strings.IndexByte(comment, '[')
-		if start < 0 {
-			break
+	for _, tag := range parser.ScanPostingCommentTags(comment) {
+		if tag.Name != "date" {
+			continue
 		}
-		comment = comment[start+1:]
-		end := strings.IndexByte(comment, ']')
+		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transactionYear); ok {
+			consider(date, tag.NameStart)
+		}
+	}
+
+	for start := 0; start < len(comment); start++ {
+		if comment[start] != '[' {
+			continue
+		}
+		end := strings.IndexByte(comment[start+1:], ']')
 		if end < 0 {
 			break
 		}
-		primary, _, _ := strings.Cut(comment[:end], "=")
-		if date, ok := parsePostingDateValue(primary, tx.Date.Year); ok {
-			return date
+		primary, _, _ := strings.Cut(comment[start+1:start+1+end], "=")
+		if primary != strings.TrimSpace(primary) {
+			continue
 		}
-		comment = comment[end+1:]
+		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
+			consider(date, start)
+			break
+		}
 	}
-	return tx.Date
+	return best, found
+}
+
+// continuationComments returns the comment lines written under a posting, which
+// belong to that posting: the parser keeps them with the transaction.
+func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comment {
+	if len(tx.Comments) == 0 {
+		return nil
+	}
+	next := int(^uint(0) >> 1)
+	for i := range tx.Postings {
+		if &tx.Postings[i] == posting && i+1 < len(tx.Postings) {
+			next = postingRange(&tx.Postings[i+1]).Start.Line
+		}
+	}
+	first := postingRange(posting).Start.Line
+	var lines []ast.Comment
+	for _, line := range tx.Comments {
+		if line.Marker == ';' && line.Range.Start.Line > first && line.Range.Start.Line < next {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// leadingDateText returns the part of a tag value that reads as a date: digits
+// joined by -, / or ., after any leading spaces.
+func leadingDateText(value string) string {
+	value = strings.TrimLeft(value, " \t")
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '-' || value[end] == '/' || value[end] == '.') {
+		end++
+	}
+	return strings.TrimRight(value[:end], "-/.")
 }
 
 func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
@@ -756,13 +927,12 @@ func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingInde
 	account := p.Account.GetResolvedName()
 	commodity := assertion.Amount.Commodity.Symbol
 	actual := e.balances.amount(account, commodity, assertion.IsInclusive)
-	tolerance := toleranceForPrecision(decimalPrecision(assertion.Amount.Quantity))
-	if e.tolerance.IsPositive() && e.tolerance.GreaterThan(tolerance) {
-		tolerance = e.tolerance
-	}
 
+	// hledger compares an assertion with the calculated balance exactly: neither
+	// the precision of the asserted amount, nor the commodity style, nor the
+	// balance tolerance of transactions widens it.
 	difference := actual.Sub(assertion.Amount.Quantity)
-	if difference.Abs().GreaterThan(tolerance) {
+	if !difference.IsZero() {
 		message := fmt.Sprintf("balance assertion failed in %s: asserted %s %s, calculated %s %s (difference %s)",
 			account,
 			assertion.Amount.Quantity.String(), displayCommodity(commodity),
@@ -796,10 +966,9 @@ func (e *journalEvaluator) assertionDiagnostics(tx *ast.Transaction, postingInde
 		return diagnostics
 	}
 
-	// `==` requires the account to hold nothing else. hledger compares every
-	// other commodity with its own precision, so a small EUR balance still fails
-	// a dollar assertion.
-	if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive, e.tolerance); len(others) > 0 {
+	// `==` requires the account to hold nothing else, so even a small EUR balance
+	// fails a dollar assertion.
+	if others := e.balances.otherCommodities(account, commodity, assertion.IsInclusive); len(others) > 0 {
 		diagnostics = append(diagnostics, SourcedDiagnostic{
 			Path:     path,
 			Range:    assertion.Range,
@@ -891,20 +1060,25 @@ func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effecti
 	return postings
 }
 
-// pricedPosting renders a priced part as a posting whose total cost is the part's
-// value. A part whose quantity is zero or whose value has the opposite sign cannot
-// be written as a total cost, so it contributes its value in the cost commodity.
+// pricedPosting renders a priced part as a posting that keeps its cost, so the
+// balance check sees that the transaction names a conversion rate. An @ part is
+// written at its unit price. An @@ part has no price of its own: its quantity and
+// its total cost can differ in sign or the quantity can be zero once parts are
+// added, so the total is stored with the sign that makes the posting convert to
+// exactly the part's value.
 func pricedPosting(posting ast.Posting, part pricedPart) ast.Posting {
-	if part.quantity.IsZero() || part.quantity.Sign() != part.value.Sign() {
-		posting.Amount = &ast.Amount{Quantity: part.value, Commodity: ast.Commodity{Symbol: part.costCommodity}}
-		posting.Cost = nil
-		return posting
-	}
 	posting.Amount = &ast.Amount{Quantity: part.quantity, Commodity: ast.Commodity{Symbol: part.commodity}}
-	posting.Cost = &ast.Cost{
-		Amount:  ast.Amount{Quantity: part.value.Abs(), Commodity: ast.Commodity{Symbol: part.costCommodity}},
-		IsTotal: true,
+	cost := &ast.Cost{Amount: ast.Amount{Commodity: ast.Commodity{Symbol: part.costCommodity}}}
+	if part.total {
+		cost.IsTotal = true
+		cost.Amount.Quantity = part.value
+		if part.quantity.IsNegative() {
+			cost.Amount.Quantity = part.value.Neg()
+		}
+	} else {
+		cost.Amount.Quantity, _ = decimal.NewFromString(part.unitPrice)
 	}
+	posting.Cost = cost
 	return posting
 }
 

@@ -1057,30 +1057,6 @@ func TestAnalyzer_UndeclaredCommodity_BalanceAssertionCost(t *testing.T) {
 	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY for $ in balance assertion cost")
 }
 
-func TestAnalyzer_UndeclaredCommodity_BalanceAssertionLotPrice(t *testing.T) {
-	input := `commodity AAPL
-
-2024-01-15 test
-    assets:stocks  10 AAPL = 10 AAPL {$150}
-    assets:cash`
-
-	journal, errs := parser.Parse(input)
-	require.Empty(t, errs)
-
-	a := New()
-	result := a.Analyze(journal)
-
-	var foundUndeclared bool
-	for _, d := range result.Diagnostics {
-		if d.Code == "UNDECLARED_COMMODITY" && d.Message == "commodity '$' has no directive" {
-			foundUndeclared = true
-		}
-	}
-	assert.True(t, foundUndeclared, "expected UNDECLARED_COMMODITY for $ in balance assertion lot price")
-}
-
-// collectUndeclaredCommodityMessages returns the messages of all
-// UNDECLARED_COMMODITY diagnostics, for quoted-commodity regression checks.
 func collectUndeclaredCommodityMessages(diags []Diagnostic) []string {
 	var msgs []string
 	for _, d := range diags {

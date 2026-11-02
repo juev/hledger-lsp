@@ -144,6 +144,20 @@ type Parser struct {
 	// transaction being parsed: hledger applies their tags to the transaction and
 	// to all of its postings.
 	postingComments []ast.Comment
+	// commentBelowPosting is set while the parser reads the lines below a
+	// posting of a transaction, a periodic transaction or an auto posting rule,
+	// where hledger reads a ; line as a posting comment.
+	commentBelowPosting bool
+	// prevEnd is where the token before the current one ends, prevPos where it starts.
+	prevEnd Position
+	prevPos Position
+	// glueSensitiveEnd is the end offset of the last amount whose text hledger
+	// extends over a `[` written right against it: a bare number or an unquoted
+	// commodity on the right. -1 when the last amount is not one.
+	glueSensitiveEnd int
+	// faulted is set while a posting is parsed when its rest cannot be read:
+	// abandonPostingOnFault then drops the remainder of the line.
+	faulted bool
 	// inAutoPostingRule is set while parsing the postings of an auto posting
 	// rule, the only place hledger accepts a `*` multiplier amount.
 	inAutoPostingRule bool
@@ -322,6 +336,8 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 
 	for p.current.Type == TokenIndent {
 		p.postingComments = nil
+		// A ; line below a posting is that posting's comment.
+		p.commentBelowPosting = len(tx.Postings) > 0
 		posting := p.parsePosting()
 		if posting != nil {
 			tx.Postings = append(tx.Postings, *posting)
@@ -337,6 +353,7 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 			p.advance()
 		}
 	}
+	p.commentBelowPosting = false
 
 	tx.Range.End = toASTPosition(p.current.Pos)
 	return tx
@@ -433,14 +450,19 @@ func (p *Parser) parsePeriodicTransaction() *ast.PeriodicTransaction {
 
 	// Parse postings
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
+		p.commentBelowPosting = len(ptx.Postings) > 0
 		posting := p.parsePosting()
 		if posting != nil {
 			ptx.Postings = append(ptx.Postings, *posting)
 		}
+		ptx.Comments = append(ptx.Comments, p.postingComments...)
+		p.postingComments = nil
 		if p.current.Type == TokenNewline {
 			p.advance()
 		}
 	}
+	p.commentBelowPosting = false
 
 	ptx.Range.End = toASTPosition(p.current.Pos)
 	return ptx
@@ -489,14 +511,19 @@ func (p *Parser) parseAutoPostingRule() *ast.AutoPostingRule {
 	p.inAutoPostingRule = true
 	defer func() { p.inAutoPostingRule = false }()
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
+		p.commentBelowPosting = len(rule.Postings) > 0
 		posting := p.parsePosting()
 		if posting != nil {
 			rule.Postings = append(rule.Postings, *posting)
 		}
+		rule.Comments = append(rule.Comments, p.postingComments...)
+		p.postingComments = nil
 		if p.current.Type == TokenNewline {
 			p.advance()
 		}
 	}
+	p.commentBelowPosting = false
 
 	rule.Range.End = toASTPosition(p.current.Pos)
 	return rule
@@ -638,7 +665,34 @@ func (p *Parser) parseStatus() ast.Status {
 	return status
 }
 
+// parsePosting reads one posting line. A posting whose line produced an error
+// is recorded as unparsed, so the formatter leaves it as written: rebuilding it
+// from a partial reading could change what hledger reads.
 func (p *Parser) parsePosting() *ast.Posting {
+	errorsBefore := len(p.errors)
+	posting := p.parsePostingLine()
+	if posting != nil && len(p.errors) > errorsBefore && posting.UnparsedTail.End.Offset <= posting.UnparsedTail.Start.Offset {
+		posting.UnparsedTail = ast.Range{Start: posting.Range.Start, End: p.lineEnd(posting.Range.Start)}
+	}
+	return posting
+}
+
+// lineEnd returns the end of the line that holds pos, before its line break.
+func (p *Parser) lineEnd(pos ast.Position) ast.Position {
+	input := p.lexer.input
+	start := min(pos.Offset, len(input))
+	end := len(input)
+	if idx := strings.IndexByte(input[start:], '\n'); idx >= 0 {
+		end = start + idx
+	}
+	return ast.Position{
+		Line:   pos.Line,
+		Column: pos.Column + utf8.RuneCountInString(input[start:end]),
+		Offset: end,
+	}
+}
+
+func (p *Parser) parsePostingLine() *ast.Posting {
 	if p.current.Type != TokenIndent {
 		return nil
 	}
@@ -699,22 +753,37 @@ func (p *Parser) parsePosting() *ast.Posting {
 
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign {
 		amount := p.parseAmount()
-		if amount != nil {
+		if amount == nil {
+			p.faulted = true
+		} else {
 			posting.Amount = amount
+		}
+		if p.abandonPostingOnFault(posting) {
+			return posting
 		}
 	}
 
-	p.parseLotAnnotations(posting)
+	// Lot annotations and costs belong to an amount; without one hledger reads
+	// them as unexpected content.
+	if posting.Amount != nil {
+		p.parseLotAnnotations(posting)
+		if p.abandonPostingOnFault(posting) {
+			return posting
+		}
+	}
 
 	if p.current.Type == TokenEquals || p.current.Type == TokenDoubleEquals ||
 		p.current.Type == TokenEqualsStar || p.current.Type == TokenDoubleEqualsStar {
 		posting.BalanceAssertion = p.parseBalanceAssertion()
+		if p.abandonPostingOnFault(posting) {
+			return posting
+		}
 	}
 
 	if p.current.Type == TokenComment {
 		posting.Comment = p.current.Value
 		posting.CommentRange = ast.Range{Start: toASTPosition(p.current.Pos), End: toASTPosition(p.current.End)}
-		posting.Tags = parseTags(p.current.Value, p.current.Pos)
+		posting.Tags = parseTags(p.current.Value, p.current.Pos, true)
 		p.advance()
 	}
 
@@ -751,6 +820,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 	}
 
 	if isCommodityToken(p.current.Type) {
+		if p.unterminatedQuote() {
+			return p.failUnterminatedQuote()
+		}
 		amount.Commodity = ast.Commodity{
 			Symbol:   p.current.Value,
 			Quoted:   p.current.Type == TokenQuotedCommodity,
@@ -794,6 +866,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 		isCommodity := isCommodityToken(p.current.Type) ||
 			(p.current.Type == TokenText && isValidCommodityText(p.current.Value))
 		if isCommodity {
+			if p.unterminatedQuote() {
+				return p.failUnterminatedQuote()
+			}
 			amount.Commodity = ast.Commodity{
 				Symbol:   p.current.Value,
 				Quoted:   p.current.Type == TokenQuotedCommodity,
@@ -803,7 +878,22 @@ func (p *Parser) parseAmount() *ast.Amount {
 					End:   toASTPosition(p.current.End),
 				},
 			}
+			quoted := amount.Commodity.Quoted
+			end := p.current.End
 			p.advance()
+			// hledger reads a `(...)` written right against an unquoted commodity
+			// as part of its symbol, so `Y(n)` is one commodity, not `Y` and a note.
+			for !quoted && p.current.Type == TokenCode && p.current.Pos.Offset == end.Offset {
+				if !isSymbolText(p.current.Value) || p.unterminatedCode() {
+					p.error("a note must be separated from the commodity by a space")
+					p.skipToNextLine()
+					return nil
+				}
+				amount.Commodity.Symbol += p.lexer.input[p.current.Pos.Offset:p.current.End.Offset]
+				amount.Commodity.Range.End = toASTPosition(p.current.End)
+				end = p.current.End
+				p.advance()
+			}
 		} else if p.defaultCommoditySymbol != "" {
 			// hledger reads a bare number as the default commodity set by the
 			// D directive. Keep Inferred so the amount can still be rendered
@@ -826,18 +916,21 @@ func (p *Parser) parseAmount() *ast.Amount {
 	// way. `1.234,50` and `1 500,50` say which mark they use, and hledger takes
 	// them at their word whatever the commodity declares.
 	amount.DecimalMark = p.resolveDecimalMark(amount.Commodity.WrittenSymbol())
+	if amount.Commodity.Inferred {
+		amount.SymbolDecimalMark = p.resolveDecimalMark(amount.Commodity.Symbol)
+	}
 	mark := ""
 	if isAmbiguousNumber(rawTokenValue) {
 		mark = amount.DecimalMark
 	}
-	if strings.HasPrefix(rawTokenValue, ".") {
-		// A number without an integer part always uses "." as its mark, even
-		// under a decimal-mark directive that names ",".
+	if strings.HasPrefix(rawTokenValue, ".") || strings.HasPrefix(rawTokenValue, ",") {
+		// A number without an integer part takes the mark it starts with, even
+		// under a decimal-mark directive that names the other one.
 		if !isLeadingDecimalNumber(rawTokenValue) {
 			p.errorAt(numberPos, numberEnd, "invalid number: %s", rawTokenValue)
 			return nil
 		}
-		mark = "."
+		mark = rawTokenValue[:1]
 	}
 	numberStr = normalizeNumber(numberStr, mark)
 
@@ -854,7 +947,41 @@ func (p *Parser) parseAmount() *ast.Amount {
 	amount.Quantity = qty
 
 	amount.Range.End = toASTPosition(p.current.Pos)
+	p.glueSensitiveEnd = -1
+	if amount.Commodity.Inferred || amount.Commodity.Symbol == "" ||
+		(amount.Commodity.Position == ast.CommodityRight && !amount.Commodity.Quoted) {
+		p.glueSensitiveEnd = p.prevEnd.Offset
+	}
 	return amount
+}
+
+// isSymbolText reports whether text can be part of an unquoted commodity symbol,
+// which hledger ends at digits, signs, `.`, `@`, `*`, `;`, `=`, braces, quotes
+// and whitespace.
+func isSymbolText(text string) bool {
+	return !strings.ContainsAny(text, "0123456789-+.@*;= \t\"{}")
+}
+
+// unterminatedCode reports whether the current `(` note lacks its `)`.
+func (p *Parser) unterminatedCode() bool {
+	end := p.current.End.Offset
+	return end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != ')'
+}
+
+// unterminatedQuote reports whether the current quoted commodity lacks its
+// closing quote, which happens at a line break or at a `;`.
+func (p *Parser) unterminatedQuote() bool {
+	if p.current.Type != TokenQuotedCommodity {
+		return false
+	}
+	end := p.current.End.Offset
+	return end-p.current.Pos.Offset < 2 || p.lexer.input[end-1] != '"'
+}
+
+func (p *Parser) failUnterminatedQuote() *ast.Amount {
+	p.error("expected a closing quote after the commodity")
+	p.skipToNextLine()
+	return nil
 }
 
 func (p *Parser) parseCost() *ast.Cost {
@@ -868,6 +995,7 @@ func (p *Parser) parseCost() *ast.Cost {
 
 	amount := p.parseAmount()
 	if amount == nil {
+		p.faulted = true
 		return nil
 	}
 	cost.Amount = *amount
@@ -875,22 +1003,9 @@ func (p *Parser) parseCost() *ast.Cost {
 	return cost
 }
 
-func (p *Parser) ensureLotPrice(posting *ast.Posting) *ast.LotPrice {
-	if posting.LotPrice == nil {
-		posting.LotPrice = &ast.LotPrice{}
-		posting.LotPrice.Range.Start = toASTPosition(p.current.Pos)
-	}
-	return posting.LotPrice
-}
-
-func (p *Parser) parseLotAnnotations(posting *ast.Posting) {
-	p.parseAnnotationLoop(
-		func() *ast.LotPrice { return p.ensureLotPrice(posting) },
-		func(c *ast.Cost) { posting.Cost = c },
-	)
-}
-
-func (p *Parser) parseLotDate(lot *ast.LotPrice) {
+// parseLotDate reads `[DATE]` and reports whether it was a closed date.
+func (p *Parser) parseLotDate(lot *ast.LotPrice) bool {
+	open := p.current
 	p.advance() // consume [
 
 	switch p.current.Type {
@@ -907,45 +1022,36 @@ func (p *Parser) parseLotDate(lot *ast.LotPrice) {
 		}
 		lot.Date = date
 		lot.Range.End = toASTPosition(p.current.Pos)
-	}
-
-	if p.current.Type == TokenRBracket {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-	}
-}
-
-func (p *Parser) looksLikeConsolidatedDate() bool {
-	if p.current.Type != TokenNumber || len(p.current.Value) != 4 {
+	default:
+		p.annotationFault(open, "expected a date after [")
 		return false
 	}
-	endOffset := p.current.End.Offset
-	if endOffset < len(p.lexer.input) && p.lexer.input[endOffset] == '-' {
-		return true
-	}
-	return false
-}
 
-func (p *Parser) parseConsolidatedDate() string {
-	date := p.current.Value
+	if p.current.Type != TokenRBracket {
+		p.annotationFault(open, "expected ] to close the lot date")
+		return false
+	}
+	lot.Range.End = toASTPosition(p.current.End)
 	p.advance()
-	for p.current.Type == TokenSign || p.current.Type == TokenNumber {
-		date += p.current.Value
-		p.advance()
-	}
-	date = strings.TrimRight(date, ",")
-	return date
+	return true
 }
 
-func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
+// parseLotPriceInto reads `{...}` or `{{...}}` and reports whether it was closed
+// by the matching brace. The braces hold one amount, in hledger's own syntax:
+// a quoted text is the commodity of that amount, not a label.
+func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) bool {
+	open := p.current
+	lot.Braces = true
 	if p.current.Type == TokenDoubleLBrace {
 		lot.IsTotal = true
 	}
 	p.advance()
 
 	closingToken := TokenRBrace
+	closing := "}"
 	if lot.IsTotal {
 		closingToken = TokenDoubleRBrace
+		closing = "}}"
 	}
 
 	// hledger allows a fixed lot cost, written as {=PRICE} or {{=PRICE}}: the
@@ -956,37 +1062,23 @@ func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
 		p.advance()
 	}
 
-	if p.current.Type == closingToken {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-		return
-	}
-
-	if p.looksLikeConsolidatedDate() {
-		lot.Date = p.parseConsolidatedDate()
-	}
-
-	if p.current.Type == TokenQuotedCommodity {
-		lot.Label = p.current.Value
-		p.advance()
-		if p.current.Type == TokenText && strings.HasPrefix(p.current.Value, ",") {
-			p.advance()
+	if p.current.Type != closingToken &&
+		(isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign) {
+		amount := p.parseAmount()
+		if amount == nil {
+			p.faulted = true
+			return false
 		}
+		lot.Cost = amount
 	}
 
 	if p.current.Type != closingToken {
-		if isCommodityToken(p.current.Type) || p.current.Type == TokenNumber || p.current.Type == TokenSign {
-			amount := p.parseAmount()
-			if amount != nil {
-				lot.Cost = amount
-			}
-		}
+		p.annotationFault(open, "expected %s to close the lot cost", closing)
+		return false
 	}
-
-	if p.current.Type == closingToken {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
-	}
+	lot.Range.End = toASTPosition(p.current.End)
+	p.advance()
+	return true
 }
 
 func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
@@ -1006,45 +1098,121 @@ func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
 
 	amount := p.parseAmount()
 	if amount == nil {
+		p.faulted = true
 		return nil
 	}
 	ba.Amount = *amount
-	p.parseBalanceAssertionAnnotations(ba)
+	// hledger allows only a cost after an asserted amount; lot annotations
+	// there are left to the caller to report as unexpected content.
+	if p.current.Type == TokenAt || p.current.Type == TokenAtAt {
+		ba.Cost = p.parseCost()
+	}
 	ba.Range.End = toASTPosition(p.current.Pos)
 	return ba
 }
 
-func (p *Parser) parseBalanceAssertionAnnotations(ba *ast.BalanceAssertion) {
-	p.parseAnnotationLoop(
-		func() *ast.LotPrice {
-			if ba.LotPrice == nil {
-				ba.LotPrice = &ast.LotPrice{}
-				ba.LotPrice.Range.Start = toASTPosition(p.current.Pos)
-			}
-			return ba.LotPrice
-		},
-		func(c *ast.Cost) { ba.Cost = c },
-	)
+// gluedToCommodity reports whether the current `[` follows, without a space, an
+// amount that hledger reads on into the bracket: a bare number or a commodity on
+// the right that is not quoted. After a commodity on the left, a closing quote or
+// a closing `}` `)` `]` the bracket starts a lot date.
+func (p *Parser) gluedToCommodity() bool {
+	end := p.prevEnd.Offset
+	return end == p.current.Pos.Offset && end == p.glueSensitiveEnd
 }
 
-func (p *Parser) parseAnnotationLoop(ensureLot func() *ast.LotPrice, setCost func(*ast.Cost)) {
-	for {
+// parseLotAnnotations reads the cost and lot annotations that follow a posting
+// amount, in any order. hledger takes each of them at most once, so a repeat
+// ends the loop with an annotation fault instead of being merged into the first.
+func (p *Parser) parseLotAnnotations(posting *ast.Posting) {
+	var seenLotCost, seenDate, seenNote, seenCost bool
+	ensureLot := func() *ast.LotPrice {
+		if posting.LotPrice == nil {
+			posting.LotPrice = &ast.LotPrice{}
+			posting.LotPrice.Range.Start = toASTPosition(p.current.Pos)
+		}
+		return posting.LotPrice
+	}
+	for !p.faulted {
+		start := p.current
 		switch p.current.Type {
 		case TokenLBrace, TokenDoubleLBrace:
-			p.parseLotPriceInto(ensureLot())
+			if seenLotCost {
+				p.annotationFault(start, "only one lot cost ({...}) is allowed per amount")
+				return
+			}
+			seenLotCost = true
+			if !p.parseLotPriceInto(ensureLot()) {
+				return
+			}
 		case TokenLBracket:
-			p.parseLotDate(ensureLot())
+			if seenDate {
+				p.annotationFault(start, "only one lot date ([...]) is allowed per amount")
+				return
+			}
+			seenDate = true
+			if p.gluedToCommodity() {
+				p.annotationFault(start, "expected a space before the lot date")
+				return
+			}
+			if !p.parseLotDate(ensureLot()) {
+				return
+			}
 		case TokenCode:
+			if seenNote {
+				p.annotationFault(start, "only one lot note ((...)) is allowed per amount")
+				return
+			}
+			seenNote = true
+			if p.unterminatedCode() {
+				p.annotationFault(start, "expected ) to close the lot note")
+				return
+			}
 			lot := ensureLot()
 			lot.Label = p.current.Value
+			lot.Noted = true
 			lot.Range.End = toASTPosition(p.current.End)
 			p.advance()
 		case TokenAt, TokenAtAt:
-			setCost(p.parseCost())
+			if seenCost {
+				p.annotationFault(start, "only one cost (@ or @@) is allowed per amount")
+				return
+			}
+			seenCost = true
+			posting.Cost = p.parseCost()
 		default:
 			return
 		}
 	}
+}
+
+// annotationFault reports text in the annotation area that hledger rejects and
+// marks the posting as unreadable, so it is left as written instead of being
+// rebuilt without the text. The error spans from the start of the annotation to
+// the offending token, and never past the end of the line.
+func (p *Parser) annotationFault(from Token, format string, args ...any) {
+	end := p.current.End
+	if p.current.Type == TokenNewline || p.current.Type == TokenEOF {
+		end = p.current.Pos
+	}
+	p.errorCodeAt(CodeParseUnexpected, from.Pos, end, format, args...)
+	p.faulted = true
+}
+
+// abandonPostingOnFault finishes a posting that could not be read to its end:
+// what is left of the line is skipped, unless an earlier error already skipped
+// it. It reports whether the posting was abandoned.
+func (p *Parser) abandonPostingOnFault(posting *ast.Posting) bool {
+	if !p.faulted {
+		return false
+	}
+	p.faulted = false
+	if p.current.Pos.Line > posting.Range.Start.Line {
+		posting.Range.End = p.lineEnd(posting.Range.Start)
+		return true
+	}
+	posting.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return true
 }
 
 func (p *Parser) parseDirective() ast.Directive {
@@ -1112,7 +1280,7 @@ func (p *Parser) parseAccountDirective(startPos Position) ast.Directive {
 
 	if p.current.Type == TokenComment {
 		dir.Comment = p.current.Value
-		dir.Tags = parseTags(p.current.Value, p.current.Pos)
+		dir.Tags = parseTags(p.current.Value, p.current.Pos, false)
 		p.advance()
 	}
 
@@ -1169,7 +1337,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 	if format, ok := dir.Subdirs["format"]; ok {
 		dir.Format = format
-		number = numberInFormat(format, dir.Commodity.Symbol)
+		number = numberInFormat(format)
 		formatEnd = p.current.Pos
 	}
 	if note, ok := dir.Subdirs["note"]; ok {
@@ -1177,16 +1345,21 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 	}
 
 	if number != "" {
-		mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol))
-		if mark == "" {
-			p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
-		} else if dir.Commodity.Symbol != "" || p.defaultCommodityDecimalMark == "" {
-			p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
-		} else {
-			// A symbol-less style written after a D directive does not take
-			// effect as written: hledger gives the D directive's commodity the
-			// D directive's mark instead, and that style crosses an include.
+		switch {
+		case endsInInvalidSeparator(number):
+			p.errorAt(formatPos, formatEnd, "invalid number: %s", number)
+		case dir.Commodity.Symbol == "" && hasInlineFormat && p.defaultCommodityDecimalMark != "":
+			// hledger reads a number without a symbol as an amount of the D
+			// directive's commodity in the D directive's style, so the style
+			// declared here is D's mark on D's commodity, whatever mark the
+			// number is written with. It crosses an include like any style.
 			p.commodityDecimalMarks[p.defaultCommoditySymbol] = p.defaultCommodityDecimalMark
+		default:
+			if mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol)); mark == "" {
+				p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
+			} else {
+				p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
+			}
 		}
 	} else if dir.Commodity.Symbol != "" {
 		// A declaration without a format resets the style. The empty mark, rather
@@ -1464,6 +1637,7 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	}
 
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
+		commodityStart, commodityEnd := p.current.Pos, p.current.End
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
 			Quoted: p.current.Type == TokenQuotedCommodity,
@@ -1472,7 +1646,15 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 				End:   toASTPosition(p.current.End),
 			},
 		}
+		valid := p.current.Type == TokenQuotedCommodity || (p.current.Value != "" && isSymbolText(p.current.Value))
 		p.advance()
+		// hledger reads the price after at least one space, and a symbol holds
+		// no digit, sign, decimal mark or other syntax character.
+		if !valid || p.current.Pos.Offset == commodityEnd.Offset {
+			p.errorAt(commodityStart, commodityEnd, "invalid commodity %q: a space must separate it from the price, and unless it is in double quotes it holds no digit or any of - + . @ * ; = { }", dir.Commodity.Symbol)
+			p.skipToNextLine()
+			return nil
+		}
 	} else {
 		p.errorCode(CodeExpectedCommodity, "expected commodity")
 		p.skipToNextLine()
@@ -1582,6 +1764,24 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 
 	var numberStr string
 	numberPos, numberEnd := startPos, startPos
+	// The lexer reads a number such as 1000.00. or 1000.00.00 as a date, but to
+	// hledger it is still the D directive's number, valid or not. Of a dashed
+	// date such as 2024-01-15 hledger reads 2024 and ignores the rest of the
+	// line. A date with slashes is left alone.
+	atNumber := func() bool {
+		return p.current.Type == TokenNumber ||
+			(p.current.Type == TokenDate && !strings.Contains(p.current.Value, "/"))
+	}
+	restIgnored := false
+	readNumber := func() {
+		numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if p.current.Type == TokenDate {
+			if number, _, dashed := strings.Cut(numberStr, "-"); dashed {
+				numberStr, restIgnored = number, true
+			}
+		}
+		p.advance()
+	}
 
 	switch p.current.Type {
 	case TokenCommodity, TokenQuotedCommodity:
@@ -1589,10 +1789,9 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		dir.Symbol = symbol
 		p.advance()
 
-		if p.current.Type == TokenNumber {
-			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if atNumber() {
+			readNumber()
 			dir.Format = symbol + numberStr
-			p.advance()
 		}
 	case TokenText:
 		// Word commodity before the number: `D RUB 1.000,00`, which hledger
@@ -1600,17 +1799,18 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 		symbol := p.current.Value
 		p.advance()
 
-		if p.current.Type == TokenNumber {
-			numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
+		if atNumber() {
+			readNumber()
 			dir.Symbol = symbol
 			dir.Format = symbol + " " + numberStr
-			p.advance()
 		}
-	case TokenNumber:
-		numberStr, numberPos, numberEnd = p.current.Value, p.current.Pos, p.current.End
-		p.advance()
+	case TokenNumber, TokenDate:
+		if !atNumber() {
+			break
+		}
+		readNumber()
 
-		if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
+		if !restIgnored && (isCommodityToken(p.current.Type) || p.current.Type == TokenText) {
 			dir.Symbol = p.current.Value
 			dir.Format = numberStr + " " + p.current.Value
 			p.advance()
@@ -1620,17 +1820,26 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 	// The default commodity applies to every amount written without a symbol
 	// from here on — including amounts in files included later, because
 	// hledger's directive state flows into an include — so record it even when
-	// the decimal mark is already known. A D directive with a number but no
-	// symbol clears it again; a line hledger would reject (`D RUB`, a bare `D`)
-	// leaves the state alone instead of silently dropping the commodity.
+	// the decimal mark is already known. A line hledger would reject (`D RUB`, a
+	// bare `D`) leaves the state alone instead of silently dropping the
+	// commodity.
+	//
+	// A D number without a symbol, written while another D is in force, is read
+	// as an amount of that D's commodity in that D's style, so it changes
+	// neither the commodity nor the mark, and needs no decimal mark of its own.
 	if numberStr != "" {
-		p.defaultCommoditySymbol = dir.Symbol
-		p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
+		if endsInInvalidSeparator(numberStr) {
+			p.errorAt(numberPos, numberEnd, "invalid number: %s", numberStr)
+		}
+		if dir.Symbol != "" || p.defaultCommodityDecimalMark == "" {
+			p.defaultCommoditySymbol = dir.Symbol
+			p.defaultCommodityPosition = defaultCommodityPositionOf(dir.Format, dir.Symbol)
 
-		if mark := numberDecimalMark(numberStr, p.resolveDecimalMark(dir.Symbol)); mark == "" {
-			p.errorAt(numberPos, numberEnd, missingDecimalMarkMessage)
-		} else {
-			p.defaultCommodityDecimalMark = mark
+			if mark := numberDecimalMark(numberStr, p.resolveDecimalMark(dir.Symbol)); mark == "" {
+				p.errorAt(numberPos, numberEnd, missingDecimalMarkMessage)
+			} else {
+				p.defaultCommodityDecimalMark = mark
+			}
 		}
 	}
 
@@ -1958,68 +2167,119 @@ func (p *Parser) parseComment() ast.Comment {
 			Start: toASTPosition(p.current.Pos),
 			End:   toASTPosition(p.current.End),
 		},
-		Tags: parseTags(p.current.Value, p.current.Pos),
 	}
+	if offset := p.current.Pos.Offset; offset >= 0 && offset < len(p.lexer.input) {
+		comment.Marker = p.lexer.input[offset]
+	}
+	comment.Tags = parseTags(p.current.Value, p.current.Pos, p.commentBelowPosting && comment.Marker == ';')
 	p.advance()
 	return comment
 }
 
-func parseTags(text string, basePos Position) []ast.Tag {
-	if !strings.Contains(text, ":") {
-		return nil
+// parseTags returns the tags of one comment line, read as a posting comment
+// when posting is set. A tag's range runs from its name to the end of its
+// value, or to its colon when the value is empty.
+func parseTags(text string, basePos Position, posting bool) []ast.Tag {
+	position := func(at int) ast.Position {
+		return ast.Position{
+			Line:   basePos.Line,
+			Column: basePos.Column + 1 + utf8.RuneCountInString(text[:at]),
+			Offset: basePos.Offset + 1 + at,
+		}
 	}
 
 	var tags []ast.Tag
-	parts := strings.Split(text, ",")
-	searchStart := 0
-
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		colonIdx := strings.Index(trimmed, ":")
-		if colonIdx == -1 {
-			continue
+	for _, tag := range scanTags(text, posting) {
+		end := tag.NameStart + len(tag.Name) + 1
+		if tag.Value != "" {
+			end = tag.ValueEnd
 		}
-
-		name := strings.TrimSpace(trimmed[:colonIdx])
-		if !IsValidTagName(name) {
-			continue
-		}
-
-		value := ""
-		if colonIdx+1 < len(trimmed) {
-			value = ExtractTagValue(trimmed[colonIdx+1:])
-		}
-
-		tagStart := strings.Index(text[searchStart:], name+":")
-		if tagStart == -1 {
-			continue
-		}
-		tagStart += searchStart
-
-		tagEnd := tagStart + len(name) + 1
-		if value != "" {
-			valueStart := strings.Index(text[tagEnd:], value)
-			if valueStart != -1 {
-				tagEnd = tagEnd + valueStart + len(value)
-			}
-		}
-
-		startCol := basePos.Column + 1 + utf8.RuneCountInString(text[:tagStart])
-		endCol := basePos.Column + 1 + utf8.RuneCountInString(text[:tagEnd])
-
 		tags = append(tags, ast.Tag{
-			Name:  name,
-			Value: value,
-			Range: ast.Range{
-				Start: ast.Position{Line: basePos.Line, Column: startCol, Offset: basePos.Offset + 1 + tagStart},
-				End:   ast.Position{Line: basePos.Line, Column: endCol, Offset: basePos.Offset + 1 + tagEnd},
-			},
+			Name:  tag.Name,
+			Value: tag.Value,
+			Range: ast.Range{Start: position(tag.NameStart), End: position(end)},
+		})
+	}
+	return tags
+}
+
+// CommentTag is a tag read in one line of comment text. Offsets are bytes into
+// that text: the name starts at NameStart and its colon follows it, the value
+// without surrounding spaces runs from ValueStart to ValueEnd.
+type CommentTag struct {
+	Name       string
+	Value      string
+	NameStart  int
+	ValueStart int
+	ValueEnd   int
+}
+
+// ScanCommentTags reads the tags of one comment line the way hledger 1.52 does.
+// A colon ends a tag name, and the name is the last word before it, so prose
+// may come before a tag and a comma glued to the word belongs to the name
+// ("x,date:" is the tag "x,date"). A colon with no word right before it names
+// nothing, and the scan goes on after it. A value runs to the next comma, which
+// ends the tag, or to the end of the line. This is how hledger reads the comment
+// of a transaction or a directive; a posting comment differs only after a colon
+// that names nothing, see ScanPostingCommentTags.
+func ScanCommentTags(text string) []CommentTag {
+	return scanTags(text, false)
+}
+
+// ScanPostingCommentTags reads the tags of a posting comment: the comment on a
+// posting line or a ; line below a posting. hledger reads it like any comment,
+// except that after a colon that names nothing it skips the spaces and one
+// comma, so "; :,date:2024-01-19" dates the posting.
+func ScanPostingCommentTags(text string) []CommentTag {
+	return scanTags(text, true)
+}
+
+func scanTags(text string, posting bool) []CommentTag {
+	var tags []CommentTag
+	from := 0
+	for {
+		colon := strings.IndexByte(text[from:], ':')
+		if colon < 0 {
+			return tags
+		}
+		colon += from
+
+		nameStart := from
+		if space := strings.LastIndexFunc(text[from:colon], isHledgerSpace); space >= 0 {
+			_, size := utf8.DecodeRuneInString(text[from+space:])
+			nameStart = from + space + size
+		}
+		if nameStart == colon {
+			from = colon + 1
+			if posting {
+				from = len(text) - len(strings.TrimLeftFunc(text[from:], isHledgerSpace))
+				if strings.HasPrefix(text[from:], ",") {
+					from++
+				}
+			}
+			continue
+		}
+
+		valueEnd := len(text)
+		if comma := strings.IndexByte(text[colon+1:], ','); comma >= 0 {
+			valueEnd = colon + 1 + comma
+		}
+		raw := text[colon+1 : valueEnd]
+		value := ExtractTagValue(raw)
+		valueStart := valueEnd - len(strings.TrimLeftFunc(raw, isHledgerSpace))
+		tags = append(tags, CommentTag{
+			Name:       text[nameStart:colon],
+			Value:      value,
+			NameStart:  nameStart,
+			ValueStart: valueStart,
+			ValueEnd:   valueStart + len(value),
 		})
 
-		searchStart = tagEnd
+		if valueEnd == len(text) {
+			return tags
+		}
+		from = valueEnd + 1
 	}
-
-	return tags
 }
 
 // ExtractTagValue extracts a tag value from raw text after the colon.
@@ -2028,16 +2288,20 @@ func parseTags(text string, basePos Position) []ast.Tag {
 // value. Comma splitting happens in the callers; here only surrounding
 // whitespace is trimmed.
 func ExtractTagValue(raw string) string {
-	return strings.TrimSpace(raw)
+	return strings.TrimFunc(raw, isHledgerSpace)
 }
 
-// IsValidTagName reports whether name can be a tag name. Per hledger, any
-// non-empty run of non-whitespace characters qualifies, in any script.
-func IsValidTagName(name string) bool {
-	return name != "" && !strings.ContainsFunc(name, unicode.IsSpace)
+// isHledgerSpace reports whether hledger counts r as a space between words of a
+// comment (Haskell's isSpace): the ASCII spaces and the Unicode space
+// separators, such as the no-break and the ideographic space. Line and
+// paragraph separators and U+0085 are not spaces there.
+func isHledgerSpace(r rune) bool {
+	return r >= '\t' && r <= '\r' || unicode.Is(unicode.Zs, r)
 }
 
 func (p *Parser) advance() {
+	p.prevEnd = p.current.End
+	p.prevPos = p.current.Pos
 	p.current = p.lexer.Next()
 }
 
@@ -2189,6 +2453,12 @@ func (p *Parser) skipIndentedBlock() {
 }
 
 func (p *Parser) error(format string, args ...any) {
+	// At a line break the token ends on the next line, so the error points at
+	// the last token of the line instead.
+	if (p.current.Type == TokenNewline || p.current.Type == TokenEOF) && p.prevPos.Line == p.current.Pos.Line && p.prevPos.Offset < p.current.Pos.Offset {
+		p.errorCodeAt(CodeParseError, p.prevPos, p.current.Pos, format, args...)
+		return
+	}
 	p.errorCodeAt(CodeParseError, p.current.Pos, p.current.End, format, args...)
 }
 
@@ -2245,16 +2515,12 @@ func (p *Parser) resolveDecimalMark(commodity string) string {
 	return p.defaultCommodityDecimalMark
 }
 
-// numberInFormat returns the number written in a commodity format string.
-func numberInFormat(format, symbol string) string {
-	format = strings.Replace(format, symbol, "", 1)
-	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' }
-	start := strings.IndexFunc(format, isNumberRune)
-	end := strings.LastIndexFunc(format, isNumberRune)
-	if start < 0 {
-		return ""
-	}
-	return format[start : end+1]
+// numberInFormat returns the number written in a commodity format string. It
+// is read by the rules of a commodity directive line, so the symbol is taken
+// from the side it is actually written on: in `, 1.000,` the comma before the
+// number is the symbol and the one after it is the decimal mark.
+func numberInFormat(format string) string {
+	return parseCommodityText(format, Position{}).number
 }
 
 // isAmbiguousNumber reports whether a written number could be read with either
@@ -2263,10 +2529,10 @@ func isAmbiguousNumber(number string) bool {
 	return !strings.Contains(number, " ") && strings.Count(number, ".")+strings.Count(number, ",") == 1
 }
 
-var leadingDecimalNumber = regexp.MustCompile(`^\.[0-9]+([eE][+-]?[0-9]+)?$`)
+var leadingDecimalNumber = regexp.MustCompile(`^[.,][0-9]+([eE][+-]?[0-9]+)?$`)
 
 // isLeadingDecimalNumber reports whether number is a decimal mark followed by
-// digits and an optional exponent, such as ".5" or ".5E2".
+// digits and an optional exponent, such as ".5", ",5" or ".5E2".
 func isLeadingDecimalNumber(number string) bool {
 	return leadingDecimalNumber.MatchString(number)
 }
@@ -2323,6 +2589,21 @@ func numberDecimalMark(number, inForce string) string {
 		return ""
 	}
 	return mark
+}
+
+// endsInInvalidSeparator reports whether a number ends in a separator that
+// hledger rejects as an invalid use of separator: one the number already uses
+// before (1.000., 1,000.00.), or one after a decimal mark that a space digit
+// group and the other separator already settle (1 000.00,).
+func endsInInvalidSeparator(number string) bool {
+	last := len(number) - 1
+	if last <= 0 || (number[last] != '.' && number[last] != ',') {
+		return false
+	}
+	before := number[:last]
+	mark := number[last : last+1]
+	return strings.Contains(before, mark) ||
+		(strings.Contains(before, " ") && strings.Contains(before, otherDecimalMark(mark)))
 }
 
 func otherDecimalMark(mark string) string {

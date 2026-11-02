@@ -81,6 +81,33 @@ func TestOracle_RunningBalancesCoverTheRegisterRows(t *testing.T) {
     assets:cash  = 151 USD @@ 5 EUR
     equity:opening
 `
+	assertRunningBalancesCoverRegisterRows(t, hledgerPath, journal)
+}
+
+// TestOracle_RunningBalancesCoverTheRowsOfAssertionCosts covers assignments whose
+// assertion carries a cost: one that nets to nothing is left out of the register,
+// one that leaves a priced part is listed.
+func TestOracle_RunningBalancesCoverTheRowsOfAssertionCosts(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for name, journal := range assertionCostJournals {
+		t.Run(name, func(t *testing.T) {
+			assertRunningBalancesCoverRegisterRows(t, hledgerPath, journal)
+		})
+	}
+}
+
+// assertRunningBalancesCoverRegisterRows checks that a posting has a running
+// balance exactly when `hledger reg` lists a row for it.
+func assertRunningBalancesCoverRegisterRows(t *testing.T, hledgerPath, journal string) {
+	t.Helper()
+
 	cmd := exec.Command(hledgerPath, "-f", "-", "reg", "-O", "csv")
 	cmd.Stdin = strings.NewReader(journal)
 	out, err := cmd.Output()
@@ -103,4 +130,251 @@ func TestOracle_RunningBalancesCoverTheRegisterRows(t *testing.T) {
 			assert.Equal(t, listed[key], has, "transaction %d posting %s", source.Index+1, key[1])
 		}
 	}
+}
+
+// assertionCostJournals are journals whose assignments carry a cost on the
+// assertion. TestOracle_RunningBalancesMatchHledgerRegister compares their
+// balances with the register, and the test above their listed rows.
+var assertionCostJournals = map[string]string{
+	"assertion cost is inferred in the cost commodity": `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity
+`,
+	"assertion cost restated moves nothing and is not listed": `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity
+`,
+	"assertion total cost restated moves nothing": `2024-01-01 t
+    assets:cash  = 2 EUR @@ 6 USD
+    equity
+
+2024-01-02 t
+    assets:cash  == 2 EUR @@ 6 USD
+    equity
+`,
+	"assertion cost with a negative quantity": `2024-01-01 t
+    assets:cash  = -2 EUR @ 2 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = -2 EUR @@ 6 USD
+    equity
+`,
+	"assertion cost of zero is not listed": `2023-12-31 seed
+    other  1 USD
+    equity
+
+2024-01-01 t
+    assets:cash  = 0 EUR @ 2 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 0 EUR @ 2 USD
+    equity
+`,
+	"assertion cost changes a plain balance": `2024-01-01 t
+    assets:cash  1 EUR
+    equity
+
+2024-01-02 t
+    assets:cash  = 3 EUR @ 2 USD
+    equity
+`,
+	"assertion cost after a priced posting of an ordinary transaction": `2024-01-01 t
+    assets:cash  1 EUR @ 5 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 3 EUR @ 2 USD
+    equity
+`,
+	"assertion cost over several commodities": `2024-01-01 t
+    assets:cash  1 EUR
+    assets:cash  1 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 3 EUR @ 2 USD
+    equity
+`,
+	"strict assertion cost clears the other commodities": `2024-01-01 t
+    assets:cash  1 EUR
+    assets:cash  1 USD
+    equity
+
+2024-01-02 t
+    assets:cash  == 3 EUR @ 2 USD
+    equity
+
+2024-01-03 t
+    assets:cash  == 1 USD @ 2 EUR
+    equity
+`,
+	"inclusive assertion cost covers the subaccounts": `2024-01-01 t
+    assets:cash:a  1 EUR
+    assets:cash:b  2 EUR
+    equity
+
+2024-01-02 t
+    assets:cash  =* 5 EUR @ 2 USD
+    equity
+
+2024-01-03 t
+    assets:cash  ==* 5 EUR @@ 7 USD
+    equity
+`,
+	"assertion cost replaced by another cost and then by none": `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 3 EUR @ 2 USD
+    equity
+
+2024-01-03 t
+    assets:cash  = 3 EUR @ 4 USD
+    equity
+
+2024-01-04 t
+    assets:cash  = 1 EUR
+    equity
+
+2024-01-05 t
+    assets:cash  = 2 EUR @ 3 USD
+    equity
+`,
+	"assertion cost with the same total at another price": `2024-01-01 t
+    assets:cash  = 2 EUR @ 3 USD
+    equity
+
+2024-01-02 t
+    assets:cash  = 3 EUR @ 2 USD
+    equity
+`,
+	"assertion cost beside a posting dated across it": `2024-01-05 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity  ; date:2024-01-01
+
+2024-01-03 t
+    assets:cash  1 EUR  ; date:2024-01-09
+    equity
+
+2024-01-07 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity
+`,
+	"assertion cost in a balanced virtual group": `2024-01-01 t
+    [assets:cash]  = 2 EUR @ 2 USD
+    [equity]
+
+2024-01-02 t
+    [assets:cash]  = 2 EUR @ 2 USD
+    [equity]
+`,
+	"assertion cost on a parenthesised virtual posting": `2024-01-01 t
+    (assets:cash)  = 2 EUR @ 2 USD
+
+2024-01-02 t
+    (assets:cash)  = 2 EUR @ 2 USD
+`,
+	"assertion cost on Cyrillic and CJK accounts": `2024-01-01 касса
+    касса:наличные  = 2 EUR @ 2 USD
+    капитал
+
+2024-01-02 касса
+    касса:наличные  = 2 EUR @ 2 USD
+    капитал
+
+2024-01-03 現金
+    現金:口座  1 EUR
+    現金:口座  1 USD
+    資本
+
+2024-01-04 現金
+    現金:口座  == 3 EUR @@ 7 USD
+    資本
+
+2024-01-05 現金
+    現金  ==* 3 EUR @@ 7 USD
+    資本
+`,
+	"assertion cost replaces balances held at two unit prices": `2024-01-01 t1
+    bank  1 GBP @ 1 EUR
+    bank  1 GBP @ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	"assertion cost at a unit price replaces a total cost": `2024-01-01 t1
+    bank  = 2 GBP @@ 4 EUR
+    c
+
+2024-01-02 t2
+    bank  = 2 GBP @ 2 EUR
+    b
+`,
+	"assertion total costs add up and restate to nothing": `2024-01-01 t
+    bank  = 2 GBP @@ 4 EUR
+    c
+
+2024-01-02 t
+    bank  = 3 GBP @@ 9 EUR
+    c
+
+2024-01-03 t
+    bank  = 3 GBP @@ 9 EUR
+    c
+`,
+	"assertion total cost over total costs of several totals": `2024-01-01 t
+    bank  1 GBP @@ 4 EUR
+    bank  2 GBP @@ 3 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 5 GBP @@ 20 EUR
+    c
+`,
+	"assertion cost over unit prices written alike and in another cost commodity": `2024-01-01 t
+    bank  1 GBP @ 2 EUR
+    bank  1 GBP @ 2.0 EUR
+    bank  1 GBP @ 2 USD
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 2 GBP @ 2 EUR
+    c
+`,
+	"assertion cost over a unit price and a total cost that cancel in quantity": `2024-01-01 t
+    bank  -2 GBP @ 3 EUR
+    bank  2 GBP @@ 6 EUR
+    d  = 0 EUR
+    c
+
+2024-01-02 t
+    bank  = 0 GBP @ 2 EUR
+    c
+`,
+	"assertion cost over two prices on Cyrillic and CJK accounts": `2024-01-01 t1
+    банк:現金  1 GBP @ 1 EUR
+    банк:現金  1 GBP @ 3 EUR
+    касса  = 0 EUR
+    капитал
+
+2024-01-02 t2
+    банк:現金  = 2 GBP @ 2 EUR
+    資本
+
+2024-01-03 t3
+    банк:現金  = 2 GBP @@ 4 EUR
+    資本
+`,
 }

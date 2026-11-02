@@ -163,17 +163,17 @@ func formatDocument(journal *ast.Journal, content string, commodityFormats map[s
 
 		for i := range journal.Transactions {
 			tx := &journal.Transactions[i]
-			txEdits := formatTransactionWithOpts(tx, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
+			txEdits := formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, alignment, opts)
 			edits = append(edits, txEdits...)
 		}
 		for i := range journal.PeriodicTransactions {
 			tx := &journal.PeriodicTransactions[i]
-			txEdits := formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
+			txEdits := formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, alignment, opts)
 			edits = append(edits, txEdits...)
 		}
 		for i := range journal.AutoPostingRules {
 			rule := &journal.AutoPostingRules[i]
-			txEdits := formatPostingsWithOpts(rule.Postings, mapper, commodityFormats, alignment.AccountCol, alignment.DecimalCol, alignment.AmountEndCol, alignment.CommentColumn, opts)
+			txEdits := formatPostingsWithOpts(rule.Postings, mapper, commodityFormats, alignment, opts)
 			edits = append(edits, txEdits...)
 		}
 	}
@@ -192,10 +192,17 @@ func formatDocument(journal *ast.Journal, content string, commodityFormats map[s
 // columns ghost text targets always match what Format Document would produce
 // for the same document.
 func ComputeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
-	return computeAlignment(journal, content, commodityFormats, opts)
+	return computeAlignment(journal, content, commodityFormats, opts, true)
 }
 
-func computeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
+// ComputeAmountAlignment is ComputeAlignment without the comment column, for
+// callers that place an amount and no comment. It skips the work of settling the
+// comment column, which needs every posting rendered.
+func ComputeAmountAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options) AlignmentInfo {
+	return computeAlignment(journal, content, commodityFormats, opts, false)
+}
+
+func computeAlignment(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options, withComments bool) AlignmentInfo {
 	if journal == nil || !opts.AlignAmounts {
 		return AlignmentInfo{}
 	}
@@ -217,6 +224,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	if opts.MinAlignmentColumn > 0 && globalAccountCol < opts.MinAlignmentColumn-1 {
 		globalAccountCol = opts.MinAlignmentColumn - 1
 	}
+	rule := alignmentRule{baseAccountCol: globalAccountCol}
 	globalDecimalCol := 0
 	globalAmountEndCol := 0
 
@@ -226,6 +234,8 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 			globalDecimalCol = opts.AmountAlignmentColumn
 		} else {
 			globalDecimalCol = CalculateGlobalDecimalCol(postings, commodityFormats, globalAccountCol, target)
+			rule.naturalDecimalCol = globalDecimalCol
+			rule.settleDecimal = true
 			if detected := detectExistingDecimalColumn(lines, postings, commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
@@ -233,17 +243,21 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	case "left":
 		if opts.AmountAlignmentColumn > 0 {
 			globalAccountCol = opts.AmountAlignmentColumn
-		} else if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
-			globalAccountCol = detected
+		} else {
+			rule.settleAccount = true
+			if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
+				globalAccountCol = detected
+			}
 		}
 	default:
+		rule.settleAccount = true
 		// Smart detection: if the file already has hand-aligned
 		// amounts, use the most common existing start column as the
 		// base. Decimal mode uses decimal-target detection instead.
 		if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
-		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings) {
+		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings, commodityFormats) {
 			globalAmountEndCol = opts.AmountAlignmentColumn
 			break
 		}
@@ -255,10 +269,11 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// MinAlignmentColumn also falls back to start-column —
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
-		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings) {
+		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings, commodityFormats) {
 			if endCol := detectExistingAmountEndColumn(lines, postings, commodityFormats, target); endCol > 0 {
-				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
-				globalAmountEndCol = max(naturalEndCol, endCol)
+				rule.naturalEndCol = naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
+				rule.settleEnd = true
+				globalAmountEndCol = max(rule.naturalEndCol, endCol)
 			}
 		}
 	}
@@ -268,7 +283,10 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
-	alignment.CommentColumn = commentColumn(lines, postings)
+	alignment = settleAlignment(lines, postings, alignment, rule, commodityFormats, opts, target)
+	if withComments {
+		alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
+	}
 	return alignment
 }
 
@@ -295,28 +313,166 @@ func AllPostings(journal *ast.Journal) []ast.Posting {
 	return result
 }
 
+// alignmentRule records how the next pass would derive each alignment column
+// from the text this pass writes.
+type alignmentRule struct {
+	// baseAccountCol is the account column before any detection.
+	baseAccountCol int
+	// settleAccount: the account column is raised to the most common column the
+	// amounts start in.
+	settleAccount bool
+	// settleEnd: the end column is the larger of naturalEndCol and the most
+	// common column the right-side amounts end in.
+	settleEnd     bool
+	naturalEndCol int
+	// settleDecimal: the decimal column is the larger of naturalDecimalCol and
+	// the most common column the decimal marks sit in.
+	settleDecimal     bool
+	naturalDecimalCol int
+}
+
+// accountColumnMatters reports whether the account column decides where
+// anything is written: the amounts themselves when they are aligned by their
+// start, and postings that carry only a balance assertion or a multiplier.
+func accountColumnMatters(postings []ast.Posting, alignment AlignmentInfo) bool {
+	if alignment.DecimalCol == 0 && alignment.AmountEndCol == 0 {
+		return true
+	}
+	for i := range postings {
+		if postings[i].Amount == nil && (postings[i].BalanceAssertion != nil || postings[i].Multiplier) {
+			return true
+		}
+	}
+	return false
+}
+
+// settleAlignment returns the alignment that formatting the output again would
+// pick. The next pass derives the account, end and decimal columns from where
+// the amounts of its input sit, so a column that this pass lays out differently
+// from where the amounts were written would move everything on the second pass.
+// The columns are taken from the layout instead, and the choice is repeated until
+// it no longer changes.
+func settleAlignment(lines []string, postings []ast.Posting, alignment AlignmentInfo, rule alignmentRule, commodityFormats map[string]CommodityFormat, opts Options, target string) AlignmentInfo {
+	settleAccount := rule.settleAccount && accountColumnMatters(postings, alignment)
+	if !settleAccount && !rule.settleEnd && !rule.settleDecimal {
+		return alignment
+	}
+
+	indent := strings.Repeat(" ", opts.IndentSize)
+	const maxRounds = 8
+	for range maxRounds {
+		var starts, ends, decimals []int
+		for i := range postings {
+			p := &postings[i]
+			if p.Amount == nil || p.Amount.Range.Start.Column <= 0 {
+				continue
+			}
+			var start int
+			if p.UnparsedTail.End.Offset > p.UnparsedTail.Start.Offset {
+				start = displayColumn(lines, p.Amount.Range.Start.Line, amountTextStartColumn(p))
+			} else {
+				var head strings.Builder
+				writePostingHead(&head, p, indent)
+				headWidth := displayWidth(head.String())
+				start = headWidth + amountGap(p, alignment, commodityFormats, opts.AlignAmounts, target, headWidth)
+			}
+			starts = append(starts, start)
+			if rendersCommodityRight(p.Amount, commodityFormats) {
+				ends = append(ends, start+calculateAlignmentTargetLen(p, commodityFormats, target))
+			}
+			decimals = append(decimals, start+calculateAlignmentTargetDecimalPrefix(p, commodityFormats, target))
+		}
+
+		next := alignment
+		if settleAccount {
+			next.AccountCol = max(rule.baseAccountCol, selectModalColumn(starts))
+		}
+		if rule.settleEnd {
+			if detected := selectModalColumn(ends); detected > 0 {
+				next.AmountEndCol = max(rule.naturalEndCol, detected)
+			}
+		}
+		if rule.settleDecimal {
+			next.DecimalCol = max(rule.naturalDecimalCol, selectModalColumn(decimals))
+		}
+		if next == alignment {
+			break
+		}
+		alignment = next
+	}
+	return alignment
+}
+
 // commentColumn preserves a hand-aligned block of inline comments: when at least
 // two comments already share a column, formatting keeps them there instead of
 // pulling each one to two spaces after its own amount. A lone comment keeps the
 // default two-space gap, so a one-off comment does not end up detached from its
 // posting.
 //
+// The column is chosen so that formatting the output again picks the same one.
+// Rewriting moves comments: two that did not share a column can land on the same
+// one, and the next pass would then pull every other comment to it. The column
+// is therefore taken from where the comments end up, not only from where they
+// were written, and the choice is repeated until it no longer changes.
+//
 // The writer still enforces a two-space minimum, so a preserved column can never
 // make a comment collide with the amount, assertion or cost text.
-func commentColumn(lines []string, postings []ast.Posting) int {
-	var columns []int
+func commentColumn(lines []string, postings []ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) int {
+	type commented struct {
+		posting *ast.Posting
+		written int
+	}
+	var all []commented
+	var written []int
 	for i := range postings {
 		if postings[i].Comment == "" {
 			continue
 		}
-		if column := displayColumn(lines, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column); column > 0 {
-			columns = append(columns, column)
+		column := displayColumn(lines, postings[i].CommentRange.Start.Line, postings[i].CommentRange.Start.Column)
+		if column > 0 {
+			written = append(written, column)
 		}
+		all = append(all, commented{posting: &postings[i], written: column})
 	}
+
+	column := sharedColumn(written)
+	if len(all) < 2 {
+		return column
+	}
+
+	indent := strings.Repeat(" ", opts.IndentSize)
+	bodyWidths := make([]int, len(all))
+	for i, c := range all {
+		bodyWidths[i] = displayWidth(formatPostingBody(c.posting, alignment, commodityFormats, indent, opts.AlignAmounts, target))
+	}
+
+	const maxRounds = 8
+	for range maxRounds {
+		landed := make([]int, 0, len(all))
+		for i, c := range all {
+			if c.posting.UnparsedTail.End.Offset > c.posting.UnparsedTail.Start.Offset {
+				if c.written > 0 {
+					landed = append(landed, c.written)
+				}
+				continue
+			}
+			landed = append(landed, bodyWidths[i]+max(column-bodyWidths[i], minSpaces))
+		}
+		next := sharedColumn(landed)
+		if next == column {
+			break
+		}
+		column = next
+	}
+	return column
+}
+
+// sharedColumn returns the most common column among those that at least two
+// comments use, or 0 when no column is shared.
+func sharedColumn(columns []int) int {
 	if len(columns) < 2 {
 		return 0
 	}
-
 	detected := selectModalColumn(columns)
 	if columnCount(columns, detected) < 2 {
 		return 0
@@ -443,14 +599,10 @@ func extractCommodityFormats(journal *ast.Journal) map[string]CommodityFormat {
 	return ExtractCommodityFormats(journal.Directives)
 }
 
-func formatTransactionWithOpts(tx *ast.Transaction, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, globalCommentCol int, opts Options) []protocol.TextEdit {
-	return formatPostingsWithOpts(tx.Postings, mapper, commodityFormats, globalAccountCol, globalDecimalCol, globalAmountEndCol, globalCommentCol, opts)
-}
-
 // formatPostingsWithOpts renders a list of postings that share one alignment,
 // which is how transactions, periodic transactions and auto posting rules are
 // formatted.
-func formatPostingsWithOpts(postings []ast.Posting, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, globalAccountCol int, globalDecimalCol int, globalAmountEndCol int, globalCommentCol int, opts Options) []protocol.TextEdit {
+func formatPostingsWithOpts(postings []ast.Posting, mapper *lsputil.PositionMapper, commodityFormats map[string]CommodityFormat, alignment AlignmentInfo, opts Options) []protocol.TextEdit {
 	if len(postings) == 0 {
 		return nil
 	}
@@ -458,18 +610,8 @@ func formatPostingsWithOpts(postings []ast.Posting, mapper *lsputil.PositionMapp
 	indent := strings.Repeat(" ", opts.IndentSize)
 	var edits []protocol.TextEdit
 
-	var alignment AlignmentInfo
-	if opts.AlignAmounts {
-		alignment = CalculateAlignmentWithGlobal(postings, commodityFormats, globalAccountCol)
-		if globalDecimalCol > 0 {
-			alignment.DecimalCol = globalDecimalCol
-		}
-		if globalAmountEndCol > 0 {
-			alignment.AmountEndCol = globalAmountEndCol
-		}
-	}
-	if globalCommentCol > 0 {
-		alignment.CommentColumn = globalCommentCol
+	if !opts.AlignAmounts {
+		alignment = AlignmentInfo{CommentColumn: alignment.CommentColumn}
 	}
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
@@ -614,7 +756,7 @@ func detectExistingAmountEndColumn(lines []string, postings []ast.Posting, commo
 	var columns []int
 	for i := range postings {
 		p := &postings[i]
-		if p.Amount == nil || p.Amount.Commodity.Position != ast.CommodityRight {
+		if p.Amount == nil || !rendersCommodityRight(p.Amount, commodityFormats) {
 			continue
 		}
 		if p.Amount.Range.Start.Column <= 0 {
@@ -662,11 +804,29 @@ func multiplierLen(p *ast.Posting) int {
 	return 0
 }
 
+// rendersCommodityRight reports whether the amount is written with its
+// commodity symbol after the number. It asks how the amount is rendered, not how
+// it was written: the formatter moves a symbol to the side its commodity
+// directive declares, so the written side says nothing about the output and
+// choosing the alignment mode by it makes the second pass lay out differently.
+// An amount without a symbol has no side, except a bare number that inherits
+// the D directive's commodity, which keeps that commodity's position.
+func rendersCommodityRight(amount *ast.Amount, commodityFormats map[string]CommodityFormat) bool {
+	if amount.Commodity.Inferred {
+		return amount.Commodity.Position == ast.CommodityRight
+	}
+	if commoditySymbolDisplay(&amount.Commodity) == "" {
+		return false
+	}
+	position, _ := resolveCommodityDisplay(amount, commodityFormats)
+	return position == ast.CommodityRight
+}
+
 // allAmountsCommodityRight reports whether every posting that carries an
-// amount has a right-position commodity. Used as a guard for end-column
+// amount renders with a right-position commodity. Used as a guard for end-column
 // alignment — mixed positions fall back to start-column semantics so
 // commodity-left amounts (`$10.00`) keep their `$` column aligned.
-func allAmountsCommodityRight(postings []ast.Posting) bool {
+func allAmountsCommodityRight(postings []ast.Posting, commodityFormats map[string]CommodityFormat) bool {
 	seenAny := false
 	for i := range postings {
 		p := &postings[i]
@@ -677,7 +837,7 @@ func allAmountsCommodityRight(postings []ast.Posting) bool {
 		if p.Amount.Commodity.Symbol == "" {
 			continue
 		}
-		if p.Amount.Commodity.Position != ast.CommodityRight {
+		if !rendersCommodityRight(p.Amount, commodityFormats) {
 			return false
 		}
 	}
@@ -883,9 +1043,9 @@ func FormatPosting(posting *ast.Posting, alignCol int) string {
 	return FormatPostingWithAlignment(posting, AlignmentInfo{AccountCol: alignCol}, nil)
 }
 
-func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
-	var sb strings.Builder
-
+// writePostingHead writes everything before the amount: indent, status, the
+// account name and its virtual brackets.
+func writePostingHead(sb *strings.Builder, posting *ast.Posting, indent string) {
 	sb.WriteString(indent)
 
 	switch posting.Status {
@@ -910,22 +1070,30 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	case ast.VirtualBalanced:
 		sb.WriteString("]")
 	}
+}
+
+// amountGap returns the number of spaces between a posting's head, currentLen
+// wide, and its amount.
+func amountGap(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, alignAmounts bool, target string, currentLen int) int {
+	switch {
+	case alignAmounts && alignment.DecimalCol > 0:
+		prefix := calculateAlignmentTargetDecimalPrefix(posting, commodityFormats, target)
+		return max(alignment.DecimalCol-currentLen-prefix, minSpaces)
+	case alignAmounts && alignment.AmountEndCol > 0:
+		amountLen := calculateAlignmentTargetLen(posting, commodityFormats, target)
+		return max(alignment.AmountEndCol-currentLen-amountLen, minSpaces)
+	case alignAmounts && alignment.AccountCol > 0:
+		return max(alignment.AccountCol-currentLen, minSpaces)
+	}
+	return minSpaces
+}
+
+func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
+	var sb strings.Builder
+	writePostingHead(&sb, posting, indent)
 
 	if posting.Amount != nil {
-		spaces := minSpaces
-		switch {
-		case alignAmounts && alignment.DecimalCol > 0:
-			currentLen := displayWidth(sb.String())
-			prefix := calculateAlignmentTargetDecimalPrefix(posting, commodityFormats, target)
-			spaces = max(alignment.DecimalCol-currentLen-prefix, minSpaces)
-		case alignAmounts && alignment.AmountEndCol > 0:
-			currentLen := displayWidth(sb.String())
-			amountLen := calculateAlignmentTargetLen(posting, commodityFormats, target)
-			spaces = max(alignment.AmountEndCol-currentLen-amountLen, minSpaces)
-		case alignAmounts && alignment.AccountCol > 0:
-			currentLen := displayWidth(sb.String())
-			spaces = max(alignment.AccountCol-currentLen, minSpaces)
-		}
+		spaces := amountGap(posting, alignment, commodityFormats, alignAmounts, target, displayWidth(sb.String()))
 		sb.WriteString(strings.Repeat(" ", spaces))
 
 		if posting.Multiplier {
@@ -977,9 +1145,6 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 			sb.WriteString("= ")
 		}
 		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
-		if posting.BalanceAssertion.LotPrice != nil {
-			writeLotPrice(&sb, posting.BalanceAssertion.LotPrice, commodityFormats)
-		}
 		if posting.BalanceAssertion.Cost != nil {
 			if posting.BalanceAssertion.Cost.IsTotal {
 				sb.WriteString(" @@ ")
@@ -1021,6 +1186,22 @@ func appendPostingComment(body string, posting *ast.Posting, alignment Alignment
 }
 
 func resolveCommodityDisplay(amount *ast.Amount, commodityFormats map[string]CommodityFormat) (position ast.CommodityPosition, spaceBetween bool) {
+	position, spaceBetween = commodityDisplayStyle(amount, commodityFormats)
+	// A comma written right after a symbol is part of the symbol, so a number
+	// that starts with the decimal comma keeps the space that separates it.
+	if position == ast.CommodityLeft && !spaceBetween {
+		qty := strings.TrimLeft(formatAmountQuantity(amount, commodityFormats), "+-")
+		spaceBetween = strings.HasPrefix(qty, ",")
+	}
+	// Likewise a symbol that starts with a comma, written right after a number,
+	// would read as the number's decimal mark.
+	if position == ast.CommodityRight && !spaceBetween {
+		spaceBetween = strings.HasPrefix(amount.Commodity.Symbol, ",")
+	}
+	return position, spaceBetween
+}
+
+func commodityDisplayStyle(amount *ast.Amount, commodityFormats map[string]CommodityFormat) (position ast.CommodityPosition, spaceBetween bool) {
 	// An amount written without a symbol renders bare, so a declared format for
 	// the inherited commodity must not add a space where the symbol would be.
 	if commoditySymbolDisplay(&amount.Commodity) == "" {
@@ -1076,18 +1257,20 @@ func commoditySymbolDisplay(c *ast.Commodity) string {
 }
 
 func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) {
-	if lot.Cost != nil {
+	if lot.Cost != nil || lot.Braces {
 		if lot.IsTotal {
 			sb.WriteString(" {{")
 		} else {
 			sb.WriteString(" {")
 		}
-		if lot.Fixed {
-			// {=PRICE} / {{=PRICE}}: the amount is the whole lot cost, so the
-			// `=` must survive formatting (hledger 1.52 accepts this form).
-			sb.WriteString("=")
+		if lot.Cost != nil {
+			if lot.Fixed {
+				// {=PRICE} / {{=PRICE}}: the amount is the whole lot cost, so the
+				// `=` must survive formatting (hledger 1.52 accepts this form).
+				sb.WriteString("=")
+			}
+			writeAmountWithSign(sb, lot.Cost, commodityFormats)
 		}
-		writeAmountWithSign(sb, lot.Cost, commodityFormats)
 		if lot.IsTotal {
 			sb.WriteString("}}")
 		} else {
@@ -1101,7 +1284,7 @@ func writeLotPrice(sb *strings.Builder, lot *ast.LotPrice, commodityFormats map[
 		sb.WriteString("]")
 	}
 
-	if lot.Label != "" {
+	if lot.Label != "" || lot.Noted {
 		sb.WriteString(" (")
 		sb.WriteString(lot.Label)
 		sb.WriteString(")")

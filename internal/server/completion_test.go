@@ -590,7 +590,7 @@ func TestExtractCurrentTagName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.line, func(t *testing.T) {
-			result := extractCurrentTagName(tt.line, tt.pos)
+			result := extractCurrentTagName(tt.line, tt.pos, false)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -610,7 +610,7 @@ func TestExtractCurrentTagName_Unicode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractCurrentTagName(tt.line, tt.utf16Pos)
+			result := extractCurrentTagName(tt.line, tt.utf16Pos, false)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

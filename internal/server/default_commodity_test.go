@@ -177,3 +177,40 @@ func TestCodeAction_InsertInferredAmount_KeepsWrittenCommodityFromCost(t *testin
 	edit := requireSingleEdit(t, actions[0])
 	assert.Equal(t, "-1.000,00 RUB", strings.TrimSpace(edit.NewText))
 }
+
+// A symbol-less D written while another D is in force changes nothing: hledger
+// 1.52.4 reads the bare amounts with the first D's commodity and mark, and
+// prints the elided amounts below. The document has no diagnostics.
+func TestInlayHint_SymbolLessDefaultCommodityKeepsTheOneInForce(t *testing.T) {
+	tests := []struct {
+		name, content, label string
+	}{
+		{
+			"Cyrillic CRLF",
+			"D 1.000,00 руб\r\nD 1000.\r\n\r\n2024-01-15 покупка\r\n    расходы:еда  1.500\r\n    активы:касса\r\n",
+			"= -1.500,00 руб",
+		},
+		{
+			"symbol LF",
+			"D 1000.00 X\nD 1000,\n\n2024-01-15 x\n    a  1,5\n    b\n",
+			"= -15.00 X",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer()
+			docURI := uri.URI("file:///test.journal")
+			diagnostics, err := ts.openAndWait(docURI, tt.content)
+			require.NoError(t, err)
+			assert.Empty(t, diagnostics)
+
+			hints, err := ts.InlayHint(context.Background(), &protocol.InlayHintParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+				Range:        protocol.Range{End: protocol.Position{Line: 10}},
+			})
+			require.NoError(t, err)
+			require.Len(t, hints, 1)
+			assert.Equal(t, protocol.String(tt.label), hints[0].Label)
+		})
+	}
+}

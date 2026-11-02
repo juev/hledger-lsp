@@ -47,7 +47,7 @@ func (s *Server) getInferredAmountCodeActions(params *protocol.CodeActionParams)
 			if workspaceFormats := s.commodityFormatsForDocument(params.TextDocument.URI); workspaceFormats != nil {
 				commodityFormats = workspaceFormats
 			}
-			alignment = formatter.ComputeAlignment(journal, doc, commodityFormats, formatterOptionsFrom(settings.Formatting))
+			alignment = formatter.ComputeAmountAlignment(journal, doc, commodityFormats, formatterOptionsFrom(settings.Formatting))
 			alignmentComputed = true
 		}
 		return alignment
@@ -238,9 +238,6 @@ func postingAmounts(posting *ast.Posting) []*ast.Amount {
 		amounts = append(amounts, &posting.BalanceAssertion.Amount)
 		if posting.BalanceAssertion.Cost != nil {
 			amounts = append(amounts, &posting.BalanceAssertion.Cost.Amount)
-		}
-		if posting.BalanceAssertion.LotPrice != nil {
-			amounts = append(amounts, posting.BalanceAssertion.LotPrice.Cost)
 		}
 	}
 	return amounts
