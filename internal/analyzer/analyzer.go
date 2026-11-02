@@ -132,6 +132,7 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 
 		dateTagDiags := validateDateTags(tx)
 		result.Diagnostics = append(result.Diagnostics, dateTagDiags...)
+		result.Diagnostics = append(result.Diagnostics, checkAssignmentDates(tx)...)
 	}
 
 	return result
@@ -207,6 +208,7 @@ func (a *Analyzer) AnalyzeResolved(resolved *include.ResolvedJournal) *AnalysisR
 			txDiags = append(txDiags, checkUndeclaredCommodities(&tx, declaredCommodities)...)
 		}
 		txDiags = append(txDiags, validateDateTags(&tx)...)
+		txDiags = append(txDiags, checkAssignmentDates(&tx)...)
 
 		for _, d := range txDiags {
 			key := diagKey{d.Range.Start.Line, d.Range.Start.Column, d.Message, d.Code, d.Severity}
@@ -736,6 +738,31 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		}
 	}
 
+	return diags
+}
+
+// checkAssignmentDates reports the balance assignments that carry a posting date.
+// hledger refuses them because the amount of an assignment comes from the running
+// balance at a date, and a date of its own would make the balancing circular. A
+// secondary date (date2: or a bracket with only the part after =) is allowed.
+func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
+	var diags []Diagnostic
+	for i := range tx.Postings {
+		p := &tx.Postings[i]
+		if p.Amount != nil || p.BalanceAssertion == nil {
+			continue
+		}
+		if _, ok := postingDateOverride(tx, p); !ok {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Range:    postingRange(p),
+			Severity: SeverityError,
+			Code:     "ASSIGNMENT_POSTING_DATE",
+			Message:  "balance assignments and custom posting dates may not be combined: write the amount explicitly or remove the posting date",
+			Data:     map[string]any{"kind": "assignmentPostingDate", "account": p.Account.GetResolvedName()},
+		})
+	}
 	return diags
 }
 
