@@ -16,13 +16,8 @@ func NormalizeLineEndings(s string) string {
 }
 
 // BOM is the UTF-8 byte order mark that some editors write at the start of a
-// file. hledger accepts it at the very start of a journal or rules file and
-// nowhere else.
+// file. hledger accepts exactly one at the very start of a journal or rules
+// file and nowhere else. The server keeps it in the text, like the editor does,
+// so that offsets agree between a file read from disk and an open buffer; the
+// journal and rules lexers skip it.
 const BOM = "\uFEFF"
-
-// StripBOM removes a leading byte order mark. Use it on text read from disk,
-// where no client has counted the mark in its positions; text received from an
-// editor keeps the mark so that columns on its first line match the client.
-func StripBOM(s string) string {
-	return strings.TrimPrefix(s, BOM)
-}

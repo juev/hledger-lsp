@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 // DirectiveInfo holds the name and human-readable description of a top-level directive.
@@ -128,7 +130,11 @@ func (l *Lexer) Next() Token {
 		lineNum := l.lineIdx + 1
 		lineOffset := l.offset
 
-		lineTokens := l.scanLine(line, lineNum, lineOffset)
+		scanLine, scanOffset := line, lineOffset
+		if l.lineIdx == 0 && strings.HasPrefix(line, textutil.BOM) {
+			scanLine, scanOffset = line[len(textutil.BOM):], lineOffset+len(textutil.BOM)
+		}
+		lineTokens := l.scanLine(scanLine, lineNum, scanOffset)
 		l.lineIdx++
 		l.offset += len(rawLine) + 1 // +1 for '\n'; rawLine includes \r for CRLF files
 

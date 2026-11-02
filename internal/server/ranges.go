@@ -59,7 +59,7 @@ func (s *Server) documentSource(docURI uri.URI) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return textutil.NormalizeLineEndings(textutil.StripBOM(string(content))), true
+	return textutil.NormalizeLineEndings(string(content)), true
 }
 
 // mapperFor builds a position mapper for a journal the server may not have

@@ -313,7 +313,7 @@ func (s *loadState) readIncluded(path string) (string, *LoadError) {
 	if err != nil {
 		return "", &LoadError{Kind: ErrorFileNotFound, Path: path, Message: fmt.Sprintf("cannot read included file: %v", err)}
 	}
-	content = textutil.NormalizeLineEndings(textutil.StripBOM(string(raw)))
+	content = textutil.NormalizeLineEndings(string(raw))
 	s.loader.mu.Lock()
 	s.loader.cache[canonical] = content
 	s.loader.mu.Unlock()
@@ -338,7 +338,7 @@ func (l *Loader) readRoot(path string, options LoadOptions) (string, *LoadError)
 	if err != nil {
 		return "", &LoadError{Kind: ErrorFileNotFound, Path: path, SourcePath: path, Message: fmt.Sprintf("cannot read file: %v", err)}
 	}
-	return textutil.NormalizeLineEndings(textutil.StripBOM(string(raw))), nil
+	return textutil.NormalizeLineEndings(string(raw)), nil
 }
 
 func (l *Loader) expandGlob(basePath, pattern string) ([]string, error) {

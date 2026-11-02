@@ -27,12 +27,3 @@ func TestNormalizeLineEndings(t *testing.T) {
 		})
 	}
 }
-
-func TestStripBOM(t *testing.T) {
-	assert.Equal(t, "2024-01-01 x", StripBOM(BOM+"2024-01-01 x"))
-	assert.Equal(t, "2024-01-01 x", StripBOM("2024-01-01 x"))
-	assert.Equal(t, "кафе", StripBOM(BOM+"кафе"))
-	assert.Equal(t, "", StripBOM(BOM))
-	assert.Equal(t, BOM+"x", StripBOM(BOM+BOM+"x"), "only one leading mark is removed")
-	assert.Equal(t, "a"+BOM+"b", StripBOM("a"+BOM+"b"), "a mark inside the text is kept")
-}
