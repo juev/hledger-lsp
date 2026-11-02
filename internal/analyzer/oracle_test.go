@@ -335,6 +335,64 @@ var runningBalanceOracleJournals = map[string]string{
     現金:食  = 13 EUR
     расходы
 `,
+	"strict assignment keeps the cost of a commodity that nets to zero": `2024-01-01 t1
+    b  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-02 t2
+    b  29 EUR
+    e
+
+2024-01-03 t3
+    b  == 5 USD
+    x
+`,
+	"inclusive assignment keeps the cost of a subaccount commodity that nets to zero": `2024-01-01 t1
+    a:x  -29 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-02 t2
+    a:x  29 EUR
+    e
+
+2024-01-03 t3
+    a  =* 5 USD
+    x
+`,
+	"strict assignment after two prices that cancel in quantity": `2024-01-01 t1
+    b  -10 EUR @ 2 USD
+    c  = -7 EUR
+    d
+
+2024-01-02 t2
+    b  10 EUR @ 3 USD
+    c  = -8 EUR
+    d
+
+2024-01-03 t3
+    b  == 5 USD
+    x
+`,
+	"non-ASCII: cost of a commodity that nets to zero": `2024-01-01 покупка
+    現金:食  -29 EUR @ 2 USD
+    банк  = -7 EUR
+    капитал
+
+2024-01-02 возврат
+    現金:食  29 EUR
+    расходы
+
+2024-01-03 сверка
+    現金:食  == 5 USD
+    итог
+`,
+	"assignment that nets to zero but carries a cost is listed": `2024-01-09 t2
+    d  -3 EUR @ 4 USD
+    d  =* -3 EUR
+    a:x
+`,
 	"reported journal": `alias q = a:x
 
 2024-01-01 t0

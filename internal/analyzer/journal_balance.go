@@ -204,8 +204,11 @@ type journalEvaluator struct {
 	// file's transactions only.
 	partialContext bool
 	// observe, when set, receives each posting's contribution as the replay
-	// applies it.
-	observe func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal)
+	// applies it, and whether it carries a cost.
+	observe func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool)
+	// emittedPriced tells observe whether the contribution being emitted
+	// carries a cost, which the contribution map alone cannot show.
+	emittedPriced bool
 }
 
 // postingEffective is the amount a posting contributes to the journal once
@@ -355,8 +358,10 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 				native:    map[string]decimal.Decimal{p.Amount.Commodity.Symbol: p.Amount.Quantity},
 				precision: decimalPrecision(p.Amount.Quantity),
 			}
-			if costCommodity, value, ok := balanceSumContribution(*p); ok && carryCosts && p.Cost != nil {
-				e.priced.add(p.Account.GetResolvedName(), pricedKey{p.Amount.Commodity.Symbol, costCommodity}, p.Amount.Quantity, value)
+			if carryCosts && p.Cost != nil {
+				if costCommodity, value, ok := balanceSumContribution(*p); ok {
+					e.priced.add(p.Account.GetResolvedName(), pricedKey{p.Amount.Commodity.Symbol, costCommodity}, p.Amount.Quantity, value)
+				}
 			}
 		case p.BalanceAssertion != nil:
 			native, priced := e.assignedContribution(p)
@@ -381,6 +386,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 			continue
 		}
 
+		e.emittedPriced = len(effective[i].priced) > 0
 		emit(i, effective[i].native)
 	}
 
@@ -411,6 +417,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 	}
 
 	for group, index := range elidedByGroup {
+		e.emittedPriced = false
 		emit(index, e.elidedContribution(tx, effective, index, groups[group]))
 	}
 
@@ -456,11 +463,16 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 				otherScope = scopeSubtree
 			}
 		case !assertion.IsInclusive:
-			otherScope = scopeOwn
+			// A plain assertion leaves the account's other commodities alone.
+			continue
 		}
-		if change := target.Sub(own); !change.IsZero() {
+		// The quantity can net to zero while a priced part remains (a posting
+		// at one price offset by another at a different price), and that part
+		// still moves the transaction's sum.
+		parts := e.pricedParts(account, other, otherScope)
+		if change := target.Sub(own); !change.IsZero() || len(parts) > 0 {
 			contribution[other] = change
-			priced = append(priced, e.pricedParts(account, other, otherScope)...)
+			priced = append(priced, parts...)
 		}
 	}
 	return contribution, priced
@@ -528,7 +540,7 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 			posting := &event.tx.Postings[postingIndex]
 			e.apply(posting.Account.GetResolvedName(), contribution)
 			if e.observe != nil {
-				e.observe(event.sourceOrder, postingIndex, contribution)
+				e.observe(event.sourceOrder, postingIndex, contribution, e.emittedPriced)
 			}
 			if posting.BalanceAssertion != nil {
 				assertionDiagnostics = append(assertionDiagnostics, e.assertionDiagnostics(event.tx, postingIndex, event.path)...)
