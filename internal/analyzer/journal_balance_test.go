@@ -1237,6 +1237,84 @@ var assignmentOrderCases = []struct {
     a  0 USD
 `,
 	},
+	{
+		name: "assertion cost converts the inferred amount",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity  -4 USD
+`,
+	},
+	{
+		name: "assertion total cost converts the inferred amount",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @@ 6 USD
+    equity  -6 USD
+`,
+	},
+	{
+		name: "assertion cost leaves the asserted commodity unbalanced",
+		input: `2024-01-01 t
+    assets:cash  = 2 EUR @ 2 USD
+    equity  -2 EUR
+`,
+		wantMessages: []string{"EUR off by -2; USD off by 4"},
+	},
+	{
+		name: "assertion total cost with a negative quantity",
+		input: `2024-01-01 t
+    assets:cash  = -2 EUR @@ 6 USD
+    equity  6 USD
+`,
+	},
+	{
+		name: "assertion cost replaces the balance that was there before",
+		input: `2024-01-01 t1
+    assets:cash  1 EUR
+    equity
+
+2024-01-02 t2
+    assets:cash  = 3 EUR @ 2 USD
+    equity  1 EUR
+    equity  -6 USD
+`,
+	},
+	{
+		name: "assertion cost replaces the balance that was there before and misses one commodity",
+		input: `2024-01-01 t1
+    assets:cash  1 EUR
+    equity
+
+2024-01-02 t2
+    assets:cash  = 3 EUR @ 2 USD
+    equity  2 EUR
+    equity  -6 USD
+`,
+		wantMessages: []string{"EUR off by 1"},
+	},
+	{
+		name: "assertion cost restated later moves nothing",
+		input: `2024-01-01 t1
+    касса  = 2 EUR @ 2 USD
+    капитал
+
+2024-01-02 t2
+    касса  0 EUR = 2 EUR
+    капитал  0 EUR
+`,
+	},
+	{
+		name: "strict inclusive assertion with a cost covers the subaccounts",
+		input: `2024-01-01 t1
+    現金:a  1 EUR
+    現金:b  2 EUR
+    equity
+
+2024-01-02 t2
+    現金  ==* 5 EUR @@ 7 USD
+    equity  3 EUR
+    equity  -7 USD
+`,
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {

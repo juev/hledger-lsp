@@ -450,3 +450,22 @@ func TestRunningBalancesFor_MatchesOneReplayPerOccurrence(t *testing.T) {
 		assert.NotEmpty(t, together[id])
 	}
 }
+
+func TestRunningBalances_AssertionCostIsInferredInTheCostCommodity(t *testing.T) {
+	balances := primaryRunningBalances(t, `2024-01-01 касса
+    касса:наличные  = 2 EUR @ 2 USD
+    капитал
+
+2024-01-02 касса
+    касса:наличные  = 2 EUR @ 2 USD
+    капитал
+`)
+
+	assert.True(t, balances[PostingRef{TransactionIndex: 0, PostingIndex: 0}]["EUR"].Equal(decimal.NewFromInt(2)))
+	assert.True(t, balances[PostingRef{TransactionIndex: 0, PostingIndex: 1}]["USD"].Equal(decimal.NewFromInt(-4)))
+	assert.NotContains(t, balances[PostingRef{TransactionIndex: 0, PostingIndex: 1}], "EUR")
+
+	// The second assignment moves nothing, and hledger's register lists no row for it.
+	assert.NotContains(t, balances, PostingRef{TransactionIndex: 1, PostingIndex: 0})
+	assert.NotContains(t, balances, PostingRef{TransactionIndex: 1, PostingIndex: 1})
+}
