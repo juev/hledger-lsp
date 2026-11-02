@@ -1328,8 +1328,13 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		mark := numberDecimalMark(number, p.resolveDecimalMark(dir.Commodity.Symbol))
 		if mark == "" {
 			p.errorAt(formatPos, formatEnd, missingDecimalMarkMessage)
-		} else {
+		} else if dir.Commodity.Symbol != "" || p.defaultCommodityDecimalMark == "" {
 			p.commodityDecimalMarks[dir.Commodity.Symbol] = mark
+		} else {
+			// A symbol-less style written after a D directive does not take
+			// effect as written: hledger gives the D directive's commodity the
+			// D directive's mark instead, and that style crosses an include.
+			p.commodityDecimalMarks[p.defaultCommoditySymbol] = p.defaultCommodityDecimalMark
 		}
 	} else if dir.Commodity.Symbol != "" {
 		// A declaration without a format resets the style. The empty mark, rather
@@ -2470,6 +2475,11 @@ func numberDecimalMark(number, inForce string) string {
 		return "."
 	}
 	mark := number[last : last+1]
+	if last == len(number)-1 {
+		// A separator with no digits after it is the decimal mark, whichever mark
+		// is in force.
+		return mark
+	}
 	if isAmbiguousNumber(number) {
 		if inForce != "" && inForce != mark {
 			return ""
