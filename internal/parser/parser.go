@@ -443,9 +443,16 @@ func (p *Parser) parsePeriodicTransaction() *ast.PeriodicTransaction {
 
 	// Parse postings
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
 		posting := p.parsePosting()
 		if posting != nil {
 			ptx.Postings = append(ptx.Postings, *posting)
+		}
+		// Indented comment lines stay with the periodic transaction, as they do
+		// with an ordinary one: a ; line under a posting is its comment.
+		if len(p.postingComments) > 0 {
+			ptx.Comments = append(ptx.Comments, p.postingComments...)
+			p.postingComments = nil
 		}
 		if p.current.Type == TokenNewline {
 			p.advance()
@@ -499,9 +506,16 @@ func (p *Parser) parseAutoPostingRule() *ast.AutoPostingRule {
 	p.inAutoPostingRule = true
 	defer func() { p.inAutoPostingRule = false }()
 	for p.current.Type == TokenIndent {
+		p.postingComments = nil
 		posting := p.parsePosting()
 		if posting != nil {
 			rule.Postings = append(rule.Postings, *posting)
+		}
+		// Indented comment lines stay with the rule: a ; line under a posting
+		// is its comment.
+		if len(p.postingComments) > 0 {
+			rule.Comments = append(rule.Comments, p.postingComments...)
+			p.postingComments = nil
 		}
 		if p.current.Type == TokenNewline {
 			p.advance()

@@ -298,3 +298,106 @@ func TestOracle_YearlessDateTagVerdictsMatchHledger(t *testing.T) {
 	assert.True(t, hledgerAccepts(t, hledgerPath, "2024-01-01 t  ; date:02-30\n    a  5 USD\n    b\n"))
 	assert.True(t, hledgerAccepts(t, hledgerPath, "2023-01-01 касса\n    ; заметка date:02-29\n    現金  5 USD\n    капитал\n"))
 }
+
+// ruleBracketDateCases are periodic transactions and auto posting rules with a
+// bracketed date on a posting. hledger 1.52.4 checks those brackets as it does in
+// a transaction. A periodic transaction reads a date without a year in the default
+// year (Y, else the current one); an auto posting rule has no year at all, so a
+// date without one is refused there unless it follows a full primary date.
+var ruleBracketDateCases = []struct {
+	name    string
+	input   string
+	invalid bool
+}{
+	{name: "periodic, month 13", input: "~ monthly\n    a  5 USD  ; [2024-13-05]\n    b\n", invalid: true},
+	{name: "periodic, on a comment line below", input: "~ monthly\n    расход  5 USD\n    ; заметка [2024-13-05]\n    капитал\n", invalid: true},
+	{name: "periodic, secondary only", input: "~ monthly\n    a  5 USD  ; [=2024-13-05]\n    b\n", invalid: true},
+	{name: "periodic, date followed by a dash", input: "~ monthly\n    a  5 USD  ; [2024-01-05-]\n    b\n", invalid: true},
+	{name: "periodic, yearless 30 February", input: "~ monthly\n    a  5 USD  ; [02-30]\n    b\n", invalid: true},
+	{name: "periodic, yearless secondary in the common year of the primary", input: "~ monthly\n    a  5 USD  ; [2023-01-05=02-29]\n    b\n", invalid: true},
+	{name: "periodic, valid date", input: "~ monthly\n    a  5 USD  ; [2024-01-05]\n    b\n"},
+	{name: "periodic, text after =", input: "~ monthly\n    a  5 USD  ; [2024-01-05=garbage]\n    b\n"},
+	{name: "periodic, yearless date", input: "~ monthly\n    a  5 USD  ; [01-05]\n    b\n"},
+	{name: "periodic, February 29 in a leap default year", input: "Y 2024\n~ monthly\n    a  5 USD  ; [02-29]\n    b\n"},
+	{name: "periodic, yearless secondary in the leap year of the primary", input: "~ monthly\n    a  5 USD  ; [2024-01-05=02-29]\n    b\n"},
+	{name: "periodic, in the header comment", input: "~ monthly  ; [2024-13-05]\n    a  5 USD\n    b\n"},
+	{name: "periodic, on a comment line before the postings", input: "~ monthly\n    ; [2024-13-05]\n    a  5 USD\n    b\n"},
+
+	{name: "auto, month 13", input: "= a\n    b  *2  ; [2024-13-05]\n", invalid: true},
+	{name: "auto, on a comment line below", input: "= расход\n    налог  *2\n    ; 日本 [2024-13-05]\n", invalid: true},
+	{name: "auto, secondary only", input: "= a\n    b  *2  ; [=2024-13-05]\n", invalid: true},
+	{name: "auto, date followed by a dash", input: "= a\n    b  *2  ; [2024-01-05-]\n", invalid: true},
+	{name: "auto, yearless date", input: "= a\n    b  *2  ; [01-05]\n", invalid: true},
+	{name: "auto, yearless date with a default year", input: "Y 2024\n= a\n    b  *2  ; [02-29]\n", invalid: true},
+	{name: "auto, yearless secondary only", input: "= a\n    b  *2  ; [=01-05]\n", invalid: true},
+	{name: "auto, valid date", input: "= a\n    b  *2  ; [2024-01-05]\n"},
+	{name: "auto, text after =", input: "= a\n    b  *2  ; [2024-01-05=garbage]\n"},
+	{name: "auto, yearless secondary after a full primary", input: "= a\n    b  *2  ; [2024-01-05=02-29]\n"},
+	{name: "auto, a day only", input: "= a\n    b  *2  ; [5]\n"},
+	{name: "auto, in the rule comment", input: "= a  ; [2024-13-05]\n    b  *2\n"},
+	{name: "auto, on a comment line before the postings", input: "= a\n    ; [2024-13-05]\n    b  *2\n"},
+}
+
+func TestAnalyzer_BracketedDateInRules(t *testing.T) {
+	for _, tc := range ruleBracketDateCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tc.input)
+			require.Empty(t, errs)
+
+			var reported []Diagnostic
+			for _, d := range New().Analyze(journal).Diagnostics {
+				if d.Code == "INVALID_POSTING_DATE" {
+					reported = append(reported, d)
+				}
+			}
+			if !tc.invalid {
+				assert.Empty(t, reported)
+				return
+			}
+			require.NotEmpty(t, reported)
+			assert.Equal(t, SeverityError, reported[0].Severity)
+		})
+	}
+}
+
+func TestAnalyzer_BracketedDateRangeInARuleCommentLine(t *testing.T) {
+	// "    ; 日本 [2024-13-05]": ";" is at column 5, "日本" at 7 and 8, "[" at 10,
+	// so the date runs from 11 to 21.
+	journal, errs := parser.Parse("= расход\n    налог  *2\n    ; 日本 [2024-13-05]\n")
+	require.Empty(t, errs)
+
+	var reported []Diagnostic
+	for _, d := range New().Analyze(journal).Diagnostics {
+		if d.Code == "INVALID_POSTING_DATE" {
+			reported = append(reported, d)
+		}
+	}
+	require.Len(t, reported, 1)
+	assert.Equal(t, 3, reported[0].Range.Start.Line)
+	assert.Equal(t, 11, reported[0].Range.Start.Column)
+	assert.Equal(t, 21, reported[0].Range.End.Column)
+}
+
+func TestOracle_BracketedDateInRulesMatchesHledger(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for _, tc := range ruleBracketDateCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tc.input)
+			require.Empty(t, errs)
+
+			failed := false
+			for _, d := range New().Analyze(journal).Diagnostics {
+				failed = failed || d.Severity == SeverityError
+			}
+			assert.Equal(t, !hledgerAccepts(t, hledgerPath, tc.input), failed, "our verdict must match hledger for:\n%s", tc.input)
+			assert.Equal(t, tc.invalid, failed)
+		})
+	}
+}

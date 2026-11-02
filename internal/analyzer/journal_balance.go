@@ -757,18 +757,24 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 // continuationComments returns the comment lines written under a posting, which
 // belong to that posting: the parser keeps them with the transaction.
 func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comment {
-	if len(tx.Comments) == 0 {
+	return postingCommentLines(tx.Postings, tx.Comments, posting)
+}
+
+// postingCommentLines returns the ; lines among comments that are written under
+// the posting, before the next one of postings.
+func postingCommentLines(postings []ast.Posting, comments []ast.Comment, posting *ast.Posting) []ast.Comment {
+	if len(comments) == 0 {
 		return nil
 	}
 	next := int(^uint(0) >> 1)
-	for i := range tx.Postings {
-		if &tx.Postings[i] == posting && i+1 < len(tx.Postings) {
-			next = postingRange(&tx.Postings[i+1]).Start.Line
+	for i := range postings {
+		if &postings[i] == posting && i+1 < len(postings) {
+			next = postingRange(&postings[i+1]).Start.Line
 		}
 	}
 	first := postingRange(posting).Start.Line
 	var lines []ast.Comment
-	for _, line := range tx.Comments {
+	for _, line := range comments {
 		if line.Marker == ';' && line.Range.Start.Line > first && line.Range.Start.Line < next {
 			lines = append(lines, line)
 		}

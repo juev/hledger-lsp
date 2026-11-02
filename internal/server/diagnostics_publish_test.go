@@ -693,3 +693,27 @@ func TestPublishDiagnostics_AssignmentWithTextBracketIsNotDated(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishDiagnostics_ImpossibleBracketedDateInAPeriodicTransaction(t *testing.T) {
+	content := "~ monthly  ; бюджет\n    расход:еда  5 USD\n    ; заметка [2024-13-05]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///periodic-bracket-date.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			invalid := diagnosticWithCode(diagnostics, "INVALID_POSTING_DATE")
+			require.NotNil(t, invalid, "got %v", codesIn(diagnostics))
+			assert.Equal(t, protocol.DiagnosticSeverityError, invalid.Severity)
+			assert.Equal(t, uint32(2), invalid.Range.Start.Line)
+			assert.Equal(t, uint32(15), invalid.Range.Start.Character)
+			assert.Equal(t, uint32(25), invalid.Range.End.Character)
+		})
+	}
+}

@@ -136,6 +136,7 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 		result.Diagnostics = append(result.Diagnostics, checkAssignmentDates(tx)...)
 		result.Diagnostics = append(result.Diagnostics, validateBracketDates(tx)...)
 	}
+	result.Diagnostics = append(result.Diagnostics, validateRuleBracketDates(journal)...)
 
 	return result
 }
@@ -791,12 +792,33 @@ func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 // Every bracket of the comment of a posting and of the comment lines below it is
 // checked.
 func validateBracketDates(tx *ast.Transaction) []Diagnostic {
+	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.Year)
+}
+
+// validateRuleBracketDates reports the bracketed posting dates hledger refuses in
+// periodic transactions and auto posting rules. A periodic transaction reads a
+// date without a year in the default year, which the AST does not keep, so such a
+// date is checked against a leap year there; an auto posting rule has no year.
+func validateRuleBracketDates(journal *ast.Journal) []Diagnostic {
 	var diags []Diagnostic
-	for i := range tx.Postings {
-		posting := &tx.Postings[i]
-		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, tx.Date.Year)
-		for _, line := range continuationComments(tx, posting) {
-			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, tx.Date.Year)
+	for i := range journal.PeriodicTransactions {
+		periodic := &journal.PeriodicTransactions[i]
+		diags = append(diags, postingBracketDateDiagnostics(periodic.Postings, periodic.Comments, 0)...)
+	}
+	for i := range journal.AutoPostingRules {
+		rule := &journal.AutoPostingRules[i]
+		diags = append(diags, postingBracketDateDiagnostics(rule.Postings, rule.Comments, unknownYear)...)
+	}
+	return diags
+}
+
+func postingBracketDateDiagnostics(postings []ast.Posting, comments []ast.Comment, year int) []Diagnostic {
+	var diags []Diagnostic
+	for i := range postings {
+		posting := &postings[i]
+		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, year)
+		for _, line := range postingCommentLines(postings, comments, posting) {
+			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, year)
 		}
 	}
 	return diags
@@ -900,7 +922,7 @@ func bracketDateYear(value string, year int) (int, bool) {
 	switch {
 	case len(parts) == 3 && len(parts[0]) >= 4 && separators[0] == separators[1]:
 		year = yearNumber(parts[0])
-	case len(parts) == 2 && len(parts[0]) < 4:
+	case len(parts) == 2 && len(parts[0]) < 4 && year != unknownYear:
 	default:
 		return 0, false
 	}
@@ -916,6 +938,10 @@ func yearNumber(digits string) int {
 	}
 	return year
 }
+
+// unknownYear stands for the year of an auto posting rule, which has none: hledger
+// refuses a bracketed date without a year there unless it follows a full date.
+const unknownYear = -2
 
 // withoutYear stands for the year of a date tag written outside a posting. hledger
 // reads no posting date there, so a value without a year is not checked against
