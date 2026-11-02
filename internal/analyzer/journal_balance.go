@@ -211,7 +211,7 @@ func (e *journalEvaluator) run(sourced []include.SourcedTransaction) []SourcedDi
 	var diagnostics []SourcedDiagnostic
 	for _, index := range ordered {
 		tx, path := &sourced[index].Transaction, sourced[index].Path
-		if hasBalanceAssignment(tx) {
+		if HasBalanceAssignment(tx) {
 			e.deferAssignments(tx, path, index)
 			continue
 		}
@@ -222,9 +222,9 @@ func (e *journalEvaluator) run(sourced []include.SourcedTransaction) []SourcedDi
 	return append(diagnostics, e.replay()...)
 }
 
-// hasBalanceAssignment reports whether a posting's amount must be computed from
+// HasBalanceAssignment reports whether a posting's amount must be computed from
 // the running balance.
-func hasBalanceAssignment(tx *ast.Transaction) bool {
+func HasBalanceAssignment(tx *ast.Transaction) bool {
 	for i := range tx.Postings {
 		if tx.Postings[i].Amount == nil && tx.Postings[i].BalanceAssertion != nil {
 			return true

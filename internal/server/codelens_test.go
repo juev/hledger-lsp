@@ -10,6 +10,7 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/parser"
+	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
 func TestCodeLens_BalancedTransaction(t *testing.T) {
@@ -154,4 +155,34 @@ func TestCodeLens_OneLensPerTransaction(t *testing.T) {
 	result, err := srv.CodeLens(context.Background(), params)
 	require.NoError(t, err)
 	require.Len(t, result, 2)
+}
+
+func TestCodeLens_BalanceAssignmentMakesNoBalanceClaim(t *testing.T) {
+	cases := map[string]string{
+		"ascii":    "2024-01-01 opening\n    assets:bank  -5 USD\n    equity\n\n2024-01-02 statement check\n    assets:bank  ==-5 USD\n",
+		"cyrillic": "2024-01-01 открытие\n    активы:банк  -5 USD\n    капитал\n\n2024-01-02 сверка\n    активы:банк  ==-5 USD\n",
+		"cjk":      "2024-01-01 開設\n    資産:銀行  -5 USD\n    資本\n\n2024-01-02 照合\n    資産:銀行  ==-5 USD\n",
+		"crlf":     "2024-01-01 opening\r\n    assets:bank  -5 USD\r\n    equity\r\n\r\n2024-01-02 statement check\r\n    assets:bank  ==-5 USD\r\n",
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			settings := srv.getSettings()
+			settings.Features.CodeLens = true
+			srv.setSettings(settings)
+
+			docURI := uri.URI("file:///test.journal")
+			srv.documents.Store(docURI, textutil.NormalizeLineEndings(content))
+
+			result, err := srv.CodeLens(context.Background(), &protocol.CodeLensParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			})
+			require.NoError(t, err)
+			require.Len(t, result, 2)
+			assert.Contains(t, result[0].Command.Title, "balanced")
+			assert.NotContains(t, result[1].Command.Title, "unbalanced")
+			assert.Contains(t, result[1].Command.Title, "balance assignment")
+			assert.Empty(t, result[1].Command.Command, "no fix command for an assignment transaction")
+		})
+	}
 }
