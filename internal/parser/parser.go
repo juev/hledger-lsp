@@ -144,6 +144,9 @@ type Parser struct {
 	// transaction being parsed: hledger applies their tags to the transaction and
 	// to all of its postings.
 	postingComments []ast.Comment
+	// fault is the span of annotation text hledger rejects, set while a
+	// posting is parsed and consumed by abandonPostingOnFault.
+	fault *ast.Range
 	// inAutoPostingRule is set while parsing the postings of an auto posting
 	// rule, the only place hledger accepts a `*` multiplier amount.
 	inAutoPostingRule bool
@@ -705,10 +708,16 @@ func (p *Parser) parsePosting() *ast.Posting {
 	}
 
 	p.parseLotAnnotations(posting)
+	if p.abandonPostingOnFault(posting) {
+		return posting
+	}
 
 	if p.current.Type == TokenEquals || p.current.Type == TokenDoubleEquals ||
 		p.current.Type == TokenEqualsStar || p.current.Type == TokenDoubleEqualsStar {
 		posting.BalanceAssertion = p.parseBalanceAssertion()
+		if p.abandonPostingOnFault(posting) {
+			return posting
+		}
 	}
 
 	if p.current.Type == TokenComment {
@@ -937,7 +946,10 @@ func (p *Parser) parseConsolidatedDate() string {
 	return date
 }
 
-func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
+// parseLotPriceInto reads `{...}` or `{{...}}` and reports whether it was closed
+// by the matching brace.
+func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) bool {
+	open := p.current
 	if p.current.Type == TokenDoubleLBrace {
 		lot.IsTotal = true
 	}
@@ -959,14 +971,16 @@ func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
 	if p.current.Type == closingToken {
 		lot.Range.End = toASTPosition(p.current.End)
 		p.advance()
-		return
+		return true
 	}
 
 	if p.looksLikeConsolidatedDate() {
 		lot.Date = p.parseConsolidatedDate()
 	}
 
-	if p.current.Type == TokenQuotedCommodity {
+	// A quoted text is the lot label only in the `{"label", PRICE}` form. Without
+	// the comma it is the commodity of the lot price: `{"A B" -5}`.
+	if p.current.Type == TokenQuotedCommodity && p.quotedTextEndsWithComma() {
 		lot.Label = p.current.Value
 		p.advance()
 		if p.current.Type == TokenText && strings.HasPrefix(p.current.Value, ",") {
@@ -983,10 +997,22 @@ func (p *Parser) parseLotPriceInto(lot *ast.LotPrice) {
 		}
 	}
 
-	if p.current.Type == closingToken {
-		lot.Range.End = toASTPosition(p.current.End)
-		p.advance()
+	if p.current.Type != closingToken {
+		closing := "}"
+		if lot.IsTotal {
+			closing = "}}"
+		}
+		p.annotationFault(open, "expected %s to close the lot cost", closing)
+		return false
 	}
+	lot.Range.End = toASTPosition(p.current.End)
+	p.advance()
+	return true
+}
+
+func (p *Parser) quotedTextEndsWithComma() bool {
+	end := p.current.End.Offset
+	return end < len(p.lexer.input) && p.lexer.input[end] == ','
 }
 
 func (p *Parser) parseBalanceAssertion() *ast.BalanceAssertion {
@@ -1027,24 +1053,72 @@ func (p *Parser) parseBalanceAssertionAnnotations(ba *ast.BalanceAssertion) {
 	)
 }
 
+// parseAnnotationLoop reads the cost and lot annotations that follow an amount,
+// in any order. hledger takes each of them at most once, so a repeat ends the
+// loop with an annotation fault instead of being merged into the first.
 func (p *Parser) parseAnnotationLoop(ensureLot func() *ast.LotPrice, setCost func(*ast.Cost)) {
+	var seenLotCost, seenDate, seenNote, seenCost bool
 	for {
+		start := p.current
 		switch p.current.Type {
 		case TokenLBrace, TokenDoubleLBrace:
-			p.parseLotPriceInto(ensureLot())
+			if seenLotCost {
+				p.annotationFault(start, "only one lot cost ({...}) is allowed per amount")
+				return
+			}
+			seenLotCost = true
+			if !p.parseLotPriceInto(ensureLot()) {
+				return
+			}
 		case TokenLBracket:
+			if seenDate {
+				p.annotationFault(start, "only one lot date ([...]) is allowed per amount")
+				return
+			}
+			seenDate = true
 			p.parseLotDate(ensureLot())
 		case TokenCode:
+			if seenNote {
+				p.annotationFault(start, "only one lot note ((...)) is allowed per amount")
+				return
+			}
+			seenNote = true
 			lot := ensureLot()
 			lot.Label = p.current.Value
 			lot.Range.End = toASTPosition(p.current.End)
 			p.advance()
 		case TokenAt, TokenAtAt:
+			if seenCost {
+				p.annotationFault(start, "only one cost (@ or @@) is allowed per amount")
+				return
+			}
+			seenCost = true
 			setCost(p.parseCost())
 		default:
 			return
 		}
 	}
+}
+
+// annotationFault reports text in the annotation area that hledger rejects and
+// remembers it, so the posting is left as written instead of being rebuilt
+// without the text.
+func (p *Parser) annotationFault(from Token, format string, args ...any) {
+	p.errorCodeAt(CodeParseUnexpected, p.current.Pos, p.current.End, format, args...)
+	p.fault = &ast.Range{Start: toASTPosition(from.Pos), End: toASTPosition(p.current.End)}
+}
+
+// abandonPostingOnFault finishes a posting whose annotations were rejected: the
+// rest of the line is skipped and recorded as unparsed. It reports whether it did.
+func (p *Parser) abandonPostingOnFault(posting *ast.Posting) bool {
+	if p.fault == nil {
+		return false
+	}
+	posting.UnparsedTail = *p.fault
+	p.fault = nil
+	posting.Range.End = toASTPosition(p.current.Pos)
+	p.skipToNextLine()
+	return true
 }
 
 func (p *Parser) parseDirective() ast.Directive {

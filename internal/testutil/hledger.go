@@ -336,3 +336,57 @@ func HledgerPostingAmounts(t *testing.T, hledgerPath, path string) (amounts []st
 	}
 	return amounts, true
 }
+
+// HledgerPostingDetails returns how hledger reads every posting of the journal
+// on stdin: amounts with their costs and lot annotations, and balance
+// assertions, with display styles removed. Two journals that give equal details
+// mean the same to hledger. ok is false when hledger rejects the journal.
+func HledgerPostingDetails(t *testing.T, hledgerPath, input string) (details string, ok bool) {
+	t.Helper()
+	cmd := exec.Command(hledgerPath, "-f", "-", "print", "-O", "json")
+	cmd.Stdin = strings.NewReader(input)
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return "", false
+	}
+
+	var transactions []struct {
+		Postings []map[string]any `json:"tpostings"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(stdout.String()), &transactions))
+
+	var kept []map[string]any
+	for _, transaction := range transactions {
+		for _, posting := range transaction.Postings {
+			kept = append(kept, map[string]any{
+				"amount":    stripStyles(posting["pamount"]),
+				"assertion": stripStyles(posting["pbalanceassertion"]),
+			})
+		}
+	}
+	encoded, err := json.Marshal(kept)
+	require.NoError(t, err)
+	return string(encoded), true
+}
+
+func stripStyles(v any) any {
+	switch value := v.(type) {
+	case map[string]any:
+		cleaned := make(map[string]any, len(value))
+		for k, inner := range value {
+			if k == "astyle" {
+				continue
+			}
+			cleaned[k] = stripStyles(inner)
+		}
+		return cleaned
+	case []any:
+		cleaned := make([]any, len(value))
+		for i, inner := range value {
+			cleaned[i] = stripStyles(inner)
+		}
+		return cleaned
+	}
+	return v
+}
