@@ -3970,3 +3970,34 @@ func TestFormatDocument_PreservesSignificantDigitsBeyondCommodityFormat(t *testi
 	assert.Contains(t, got2, "-0.01234 BYN", "second format pass must keep significant digits, got:\n%s", got2)
 	assert.Contains(t, got2, "0.00001234 BTC", "second format pass must keep raw BTC quantity, got:\n%s", got2)
 }
+
+func TestFormatDocument_NumberSyntaxForms(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"sign before commodity with space", "-EUR 1,500", "-EUR 1,500"},
+		{"sign before spaced commodity", "- EUR 5", "-EUR 5"},
+		{"double sign", "-EUR -5", "EUR 5"},
+		{"sign before quoted commodity", `-"A B" 5`, `-"A B" 5`},
+		{"sign before Cyrillic commodity", "-руб 5", "-руб 5"},
+		{"sign before CJK commodity", "-元 5", "-元 5"},
+		{"leading decimal mark", ".5 EUR", ".5 EUR"},
+		{"leading decimal mark with sign", "-.5 EUR", "-.5 EUR"},
+		{"leading decimal mark Cyrillic", ".5 руб", ".5 руб"},
+		{"leading decimal mark CJK", ".5 元", ".5 元"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := "2024-01-01 x\n    a  " + tt.input + "\n    b\n"
+
+			journal, errs := parser.Parse(input)
+			require.Empty(t, errs)
+			once := applyEdits(input, FormatDocument(journal, input))
+			assert.Contains(t, once, "  "+tt.want+"\n")
+
+			journal, errs = parser.Parse(once)
+			require.Empty(t, errs)
+			assert.Equal(t, once, applyEdits(once, FormatDocument(journal, once)), "formatting must be idempotent")
+		})
+	}
+}
