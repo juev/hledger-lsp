@@ -229,6 +229,8 @@ $-100       ; Sign after commodity (before quantity)
 
 All three forms are equivalent and represent negative $100.
 
+Both signs may be present, with spaces around the commodity and the second sign. The two signs multiply, so `-EUR - 5` is `EUR 5` and `+EUR - 5` is `EUR -5`. A third sign is an error (`-EUR --5`, `-EUR - - 5`). The same rule holds in costs (`@`, `@@`), balance assertions and the price of a `P` directive.
+
 ### Quantity Formats
 
 | Format | Example | Notes |

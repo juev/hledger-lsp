@@ -247,6 +247,13 @@ func (l *Lexer) scanInLine() Token {
 			}
 			return l.scanCommodityOrText()
 		}
+		// The price of a P directive: "P 2024-01-01 A EUR 5"
+		if l.inPriceAmountSlot() {
+			if l.looksLikeMultiCharCurrency() {
+				return l.scanMultiCharCurrency()
+			}
+			return l.scanCommodityOrText()
+		}
 		// In directive context → check if it's an account, otherwise single-word argument
 		if l.inDirective {
 			if l.directiveName == "account" || l.directiveName == "bucket" || l.directiveName == "A" {
@@ -952,11 +959,25 @@ func (l *Lexer) nextIsLetterCommodity() bool {
 	return false
 }
 
+// inPriceAmountSlot reports whether the lexer is past the commodity of a P
+// directive, where the price is written the way a posting amount is.
+func (l *Lexer) inPriceAmountSlot() bool {
+	if !l.inDirective || l.directiveName != "P" {
+		return false
+	}
+	switch l.prevType {
+	case TokenDirective, TokenDate, TokenTime:
+		return false
+	}
+	return true
+}
+
 // signStartsPostingAmount reports whether the sign at the current position
 // belongs to an amount that writes the commodity after the sign, with spaces
-// allowed in between: "-EUR 5", "- $5", `-"A B" 5`, "-.5".
+// allowed in between: "-EUR 5", "- $5", `-"A B" 5`, "-.5". A second sign after
+// the commodity may be followed by spaces as well: "-EUR - 5".
 func (l *Lexer) signStartsPostingAmount() bool {
-	if !l.onPostingLine {
+	if !l.onPostingLine && !l.inPriceAmountSlot() {
 		return false
 	}
 	pos := l.pos + 1
@@ -989,6 +1010,9 @@ func (l *Lexer) signStartsPostingAmount() bool {
 		next := l.input[pos]
 		if next == '-' || next == '+' {
 			pos++
+			for pos < len(l.input) && l.input[pos] == ' ' {
+				pos++
+			}
 			next = 0
 			if pos < len(l.input) {
 				next = l.input[pos]
