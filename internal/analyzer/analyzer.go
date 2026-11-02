@@ -697,7 +697,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
 
 	checkTag := func(tag ast.Tag) {
-		name := strings.ToLower(tag.Name)
+		name := tag.Name
 		if name != "date" && name != "date2" {
 			return
 		}
@@ -713,7 +713,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 			return
 		}
 
-		if !isValidDateValue(tag.Value) {
+		if !isValidDateValue(leadingDateText(tag.Value)) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
 				Severity: SeverityError,

@@ -1,8 +1,11 @@
 package analyzer
 
 import (
+	"encoding/csv"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -59,6 +62,14 @@ var assignmentDateCases = []struct {
 	{name: "date on the transaction", input: "2024-01-01 t ; date:2024-01-19\n    c  = -4 GBP\n    b\n"},
 	{name: "date on a posting with an amount and an assertion", input: "2024-01-01 t\n    c  -4 GBP = -4 GBP  ; date:2024-01-19\n    b\n"},
 	{name: "date beside an assignment that has none", input: "2024-01-01 t\n    c  = -4 GBP\n    b  4 GBP  ; date:2024-01-19\n"},
+	{name: "bracketed date inside double brackets", input: "2024-01-01 t\n    c  = -4 GBP  ; [[2024-01-20]]\n    b\n", refused: true},
+	{name: "first of a bracketed date and a date tag below", input: "2024-01-01 t\n    c  = -4 GBP  ; [2024-01-05]\n    ; date:2024-01-20\n    b\n", refused: true},
+	{name: "bracketed date with spaces inside", input: "2024-01-01 t\n    c  = -4 GBP  ; [ 2024-01-20 ]\n    b\n"},
+	{name: "bracketed date with a trailing space", input: "2024-01-01 t\n    c  = -4 GBP  ; [2024-01-20 ]\n    b\n"},
+	{name: "bracketed date with a leading tab", input: "2024-01-01 t\n    c  = -4 GBP  ; [\t2024-01-20]\n    b\n"},
+	{name: "bracketed date with spaces inside a note", input: "2024-01-01 t\n    c  = -4 GBP  ; paid [ 2024-01-20 ] by card\n    b\n"},
+	{name: "bracketed date with spaces on a comment line below", input: "2024-01-01 t\n    c  = -4 GBP\n    ; [ 2024-01-20 ]\n    b\n"},
+	{name: "bracket split across comment lines", input: "2024-01-01 t\n    c  = -4 GBP  ; ref [\n    ; 2024-01-20] x\n    b\n"},
 	{name: "invalid date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:garbage\n    b\n", invalid: true},
 	{name: "impossible date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:2024-02-30\n    b\n", invalid: true},
 	{name: "empty date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:\n    b\n", invalid: true},
@@ -149,4 +160,136 @@ func TestPostingDateOverride_ReadsCommentLinesBelowAPosting(t *testing.T) {
 	tx := &journal.Transactions[0]
 	assert.Equal(t, 19, registerDate(tx, &tx.Postings[0]).Day)
 	assert.Equal(t, 20, registerDate(tx, &tx.Postings[1]).Day)
+}
+
+// postingDateCases are postings of an ordinary transaction with a comment that may
+// carry a date. wantDay is the day hledger lists the posting at, or 0 for the
+// transaction's own date (2024-01-01).
+var postingDateCases = []struct {
+	name    string
+	posting string
+	wantDay int
+}{
+	{"bracketed date", "    c  4 GBP  ; [2024-01-20]", 20},
+	{"bracketed date with spaces inside", "    c  4 GBP  ; [ 2024-01-20 ]", 0},
+	{"bracketed date with a trailing space", "    c  4 GBP  ; [2024-01-20 ]", 0},
+	{"bracketed date with a leading tab", "    c  4 GBP  ; [\t2024-01-20]", 0},
+	{"bracketed date with spaces inside a note", "    c  4 GBP  ; paid [ 2024-01-20 ] by card", 0},
+	{"bracket split across comment lines", "    c  4 GBP  ; ref [\n    ; 2024-01-20] x", 0},
+	{"double brackets", "    c  4 GBP  ; [[2024-01-20]]", 20},
+	{"two bracketed dates", "    c  4 GBP  ; [2024-01-20] [2024-01-05]", 20},
+	{"bracket with an empty primary date first", "    c  4 GBP  ; [=2024-01-30] [2024-01-20]", 20},
+	{"bracket inside a tag value", "    c  4 GBP  ; foo:x [2024-01-20]", 20},
+	{"bracket before a date tag on one line", "    c  4 GBP  ; [2024-01-20] date:2024-01-05", 20},
+	{"date tag before a bracket on one line", "    c  4 GBP  ; date:2024-01-05 [2024-01-20]", 5},
+	{"date tag before a bracket after a comma", "    c  4 GBP  ; date:2024-01-05, [2024-01-20]", 5},
+	{"bracket before a date tag after commas", "    c  4 GBP  ; foo:1, [2024-01-20], date:2024-01-05", 20},
+	{"bracket on the posting line, date tag below", "    c  4 GBP  ; [2024-01-05]\n    ; date:2024-01-20", 5},
+	{"bracket on the posting line, other date tag below", "    c  4 GBP  ; [2024-01-20]\n    ; date:2024-01-05", 20},
+	{"date tag on a comment line below", "    c  4 GBP  ; note\n    ; date:2024-01-20", 20},
+	{"date tag with trailing text", "    c  4 GBP  ; date:2024-01-20 text", 20},
+	{"capitalised tag name", "    c  4 GBP  ; Date:2024-01-20", 0},
+	{"Cyrillic and CJK text around a tag", "    c  4 GBP  ; заметка, date:2024-01-20 日本", 20},
+}
+
+func postingDateJournal(posting string) string {
+	return "2024-01-01 t\n" + posting + "\n    b\n"
+}
+
+func TestPostingDateOverride_FollowsHledgerOrderAndBrackets(t *testing.T) {
+	for _, tc := range postingDateCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(postingDateJournal(tc.posting))
+			require.Empty(t, errs)
+
+			tx := &journal.Transactions[0]
+			want := tc.wantDay
+			if want == 0 {
+				want = 1
+			}
+			assert.Equal(t, want, registerDate(tx, &tx.Postings[0]).Day)
+		})
+	}
+}
+
+// TestOracle_PostingDatesMatchHledgerRegister compares the date a posting is
+// listed at with `hledger reg`.
+func TestOracle_PostingDatesMatchHledgerRegister(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for _, tc := range postingDateCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := postingDateJournal(tc.posting)
+			cmd := exec.Command(hledgerPath, "-f", "-", "reg", "-O", "csv", "acct:^c$")
+			cmd.Stdin = strings.NewReader(input)
+			output, err := cmd.Output()
+			require.NoError(t, err)
+
+			rows, err := csv.NewReader(strings.NewReader(string(output))).ReadAll()
+			require.NoError(t, err)
+			require.Len(t, rows, 2)
+			want := tc.wantDay
+			if want == 0 {
+				want = 1
+			}
+			assert.Equal(t, fmt.Sprintf("2024-01-%02d", want), rows[1][1], "hledger's date for:\n%s", input)
+		})
+	}
+}
+
+// dateTagCases are ordinary postings whose date tags hledger loads or refuses.
+var dateTagCases = []struct {
+	name    string
+	posting string
+	invalid bool
+}{
+	{"date followed by a letter", "    c  4 GBP  ; date:2024-01-20x", false},
+	{"date followed by text", "    c  4 GBP  ; date:2024-01-20 text", false},
+	{"date followed by a time", "    c  4 GBP  ; date:2024-01-20T10:00", false},
+	{"date followed by a semicolon", "    c  4 GBP  ; date:2024-01-20;more", false},
+	{"date between Cyrillic and CJK text", "    c  4 GBP  ; заметка, date:2024-01-20 日本", false},
+	{"secondary date followed by a letter", "    c  4 GBP  ; date2:2024-01-20x", false},
+	{"capitalised name with a bad value", "    c  4 GBP  ; Date:garbage", false},
+	{"capitalised secondary name with a bad value", "    c  4 GBP  ; DATE2:garbage", false},
+	{"bad value", "    c  4 GBP  ; date:garbage", true},
+	{"impossible date followed by text", "    c  4 GBP  ; date:2024-02-30 text", true},
+	{"month without a day", "    c  4 GBP  ; date:2024-01", true},
+	{"bad secondary value", "    c  4 GBP  ; date2:garbage", true},
+}
+
+func TestAnalyzer_DateTagValuesAreReadLikeHledger(t *testing.T) {
+	for _, tc := range dateTagCases {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(postingDateJournal(tc.posting))
+			require.Empty(t, errs)
+
+			reported := false
+			for _, d := range New().Analyze(journal).Diagnostics {
+				reported = reported || d.Code == "INVALID_DATE_TAG" || d.Code == "EMPTY_DATE_TAG"
+			}
+			assert.Equal(t, tc.invalid, reported)
+		})
+	}
+}
+
+func TestOracle_DateTagVerdictsMatchHledger(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	for _, tc := range dateTagCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, !tc.invalid, hledgerAccepts(t, hledgerPath, postingDateJournal(tc.posting)))
+		})
+	}
 }

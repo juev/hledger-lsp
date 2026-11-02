@@ -648,44 +648,66 @@ func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 	return tx.Date
 }
 
-// postingDateOverride returns the date a posting carries of its own: the first
-// valid date: tag, or the primary date of the first valid bracketed date in its
-// comment or on the comment lines below it. A date: value is read up to its first character that cannot belong to
-// a date, as hledger does, while a bracketed date must be the whole bracket.
-// Names are case sensitive, so Date: is an ordinary tag.
+// postingDateOverride returns the date a posting carries of its own. hledger
+// reads the comment of the posting line and then the comment lines below it, each
+// on its own, and takes the first date it meets: a date: tag, or the primary date
+// of a bracketed date. A date: value is read up to its first character that
+// cannot belong to a date, while a bracketed date must be the whole bracket, so
+// [ 2024-01-20 ] is not one. Names are case sensitive, so Date: is an ordinary
+// tag.
 func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, bool) {
-	tags := posting.Tags
-	comment := posting.Comment
+	if date, ok := commentDate(posting.Comment, tx.Date.Year); ok {
+		return date, true
+	}
 	for _, line := range continuationComments(tx, posting) {
-		tags = append(tags[:len(tags):len(tags)], line.Tags...)
-		comment += " " + line.Text
+		if date, ok := commentDate(line.Text, tx.Date.Year); ok {
+			return date, true
+		}
+	}
+	return ast.Date{}, false
+}
+
+// commentDate returns the first date written in one comment line: the earlier of
+// its date: tag and its first bracketed date.
+func commentDate(comment string, transactionYear int) (ast.Date, bool) {
+	best, bestAt, found := ast.Date{}, 0, false
+	consider := func(date ast.Date, at int) {
+		if !found || at < bestAt {
+			best, bestAt, found = date, at, true
+		}
 	}
 
-	for _, tag := range tags {
-		if tag.Name == "date" {
-			if date, ok := parsePostingDateValue(leadingDateText(tag.Value), tx.Date.Year); ok {
-				return date, true
+	offset := 0
+	for _, part := range strings.Split(comment, ",") {
+		if colon := strings.IndexByte(part, ':'); colon > 0 {
+			nameStart := strings.LastIndexAny(part[:colon], " \t") + 1
+			if part[nameStart:colon] == "date" {
+				if date, ok := parsePostingDateValue(leadingDateText(part[colon+1:]), transactionYear); ok {
+					consider(date, offset+nameStart)
+				}
 			}
 		}
+		offset += len(part) + 1
 	}
 
-	for {
-		start := strings.IndexByte(comment, '[')
-		if start < 0 {
-			break
+	for start := 0; start < len(comment); start++ {
+		if comment[start] != '[' {
+			continue
 		}
-		comment = comment[start+1:]
-		end := strings.IndexByte(comment, ']')
+		end := strings.IndexByte(comment[start+1:], ']')
 		if end < 0 {
 			break
 		}
-		primary, _, _ := strings.Cut(comment[:end], "=")
-		if date, ok := parsePostingDateValue(primary, tx.Date.Year); ok {
-			return date, true
+		primary, _, _ := strings.Cut(comment[start+1:start+1+end], "=")
+		if primary != strings.TrimSpace(primary) {
+			continue
 		}
-		comment = comment[end+1:]
+		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
+			consider(date, start)
+			break
+		}
 	}
-	return ast.Date{}, false
+	return best, found
 }
 
 // continuationComments returns the comment lines written under a posting, which
