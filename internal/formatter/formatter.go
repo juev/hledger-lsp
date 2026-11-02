@@ -243,7 +243,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
-		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings) {
+		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings, commodityFormats) {
 			globalAmountEndCol = opts.AmountAlignmentColumn
 			break
 		}
@@ -255,7 +255,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// MinAlignmentColumn also falls back to start-column —
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
-		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings) {
+		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings, commodityFormats) {
 			if endCol := detectExistingAmountEndColumn(lines, postings, commodityFormats, target); endCol > 0 {
 				naturalEndCol := naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
 				globalAmountEndCol = max(naturalEndCol, endCol)
@@ -614,7 +614,7 @@ func detectExistingAmountEndColumn(lines []string, postings []ast.Posting, commo
 	var columns []int
 	for i := range postings {
 		p := &postings[i]
-		if p.Amount == nil || p.Amount.Commodity.Position != ast.CommodityRight {
+		if p.Amount == nil || !rendersCommodityRight(p.Amount, commodityFormats) {
 			continue
 		}
 		if p.Amount.Range.Start.Column <= 0 {
@@ -662,11 +662,29 @@ func multiplierLen(p *ast.Posting) int {
 	return 0
 }
 
+// rendersCommodityRight reports whether the amount is written with its
+// commodity symbol after the number. It asks how the amount is rendered, not how
+// it was written: the formatter moves a symbol to the side its commodity
+// directive declares, so the written side says nothing about the output and
+// choosing the alignment mode by it makes the second pass lay out differently.
+// An amount without a symbol has no side, except a bare number that inherits
+// the D directive's commodity, which keeps that commodity's position.
+func rendersCommodityRight(amount *ast.Amount, commodityFormats map[string]CommodityFormat) bool {
+	if amount.Commodity.Inferred {
+		return amount.Commodity.Position == ast.CommodityRight
+	}
+	if commoditySymbolDisplay(&amount.Commodity) == "" {
+		return false
+	}
+	position, _ := resolveCommodityDisplay(amount, commodityFormats)
+	return position == ast.CommodityRight
+}
+
 // allAmountsCommodityRight reports whether every posting that carries an
-// amount has a right-position commodity. Used as a guard for end-column
+// amount renders with a right-position commodity. Used as a guard for end-column
 // alignment — mixed positions fall back to start-column semantics so
 // commodity-left amounts (`$10.00`) keep their `$` column aligned.
-func allAmountsCommodityRight(postings []ast.Posting) bool {
+func allAmountsCommodityRight(postings []ast.Posting, commodityFormats map[string]CommodityFormat) bool {
 	seenAny := false
 	for i := range postings {
 		p := &postings[i]
@@ -677,7 +695,7 @@ func allAmountsCommodityRight(postings []ast.Posting) bool {
 		if p.Amount.Commodity.Symbol == "" {
 			continue
 		}
-		if p.Amount.Commodity.Position != ast.CommodityRight {
+		if !rendersCommodityRight(p.Amount, commodityFormats) {
 			return false
 		}
 	}
