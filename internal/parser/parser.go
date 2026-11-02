@@ -1199,7 +1199,13 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 		p.advance()
 	}
 
-	dir.Subdirs = p.parseSubdirectives()
+	hasInlineFormat := number != ""
+	lines := p.parseSubdirectiveLines()
+	dir.Subdirs = make(map[string]string, len(lines))
+	for _, line := range lines {
+		dir.Subdirs[line.name] = line.value
+	}
+	p.checkCommodityFormats(dir.Commodity.Symbol, hasInlineFormat, lines)
 
 	if format, ok := dir.Subdirs["format"]; ok {
 		dir.Format = format
@@ -1225,6 +1231,78 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 	dir.Range.End = toASTPosition(p.current.Pos)
 	return dir
+}
+
+// checkCommodityFormats reports the subdirectives hledger refuses below a
+// commodity directive. A directive that already carries a format on its own
+// line takes no subdirectives at all, and the symbol of a format subdirective
+// must be the directive's symbol.
+func (p *Parser) checkCommodityFormats(symbol string, hasInlineFormat bool, lines []subdirectiveLine) {
+	if hasInlineFormat {
+		if len(lines) > 0 {
+			first := lines[0]
+			p.errorAt(first.namePos, first.nameEnd,
+				"subdirective %q is not allowed after a commodity directive that already has a format; write the format as a \"format\" subdirective instead",
+				first.name)
+		}
+		return
+	}
+	if symbol == "" {
+		return
+	}
+	for _, line := range lines {
+		if line.name != "format" {
+			continue
+		}
+		formatSymbol := symbolInFormat(line.value)
+		if formatSymbol == symbol {
+			continue
+		}
+		if formatSymbol == "" {
+			p.errorAt(line.valuePos, line.valueEnd,
+				"format for commodity %q has no commodity symbol; it must use %q", symbol, symbol)
+			continue
+		}
+		p.errorAt(line.valuePos, line.valueEnd,
+			"commodity directive symbol %q and format directive symbol %q should be the same", symbol, formatSymbol)
+	}
+}
+
+// symbolInFormat returns the commodity symbol written in a format such as
+// "1,000.00 EUR", "EUR 1,000.00", "$1000.00" or `1000.00 "A B"`, or "" when the
+// format has none.
+func symbolInFormat(format string) string {
+	format = strings.TrimLeft(strings.TrimSpace(format), "+-")
+	if strings.HasPrefix(format, `"`) {
+		if end := strings.Index(format[1:], `"`); end >= 0 {
+			return format[1 : 1+end]
+		}
+		return ""
+	}
+	if strings.HasSuffix(format, `"`) {
+		if start := strings.LastIndex(format[:len(format)-1], `"`); start >= 0 {
+			return format[start+1 : len(format)-1]
+		}
+		return ""
+	}
+	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' || r == '+' || r == '-' }
+	start := strings.IndexFunc(format, isNumberRune)
+	switch {
+	case start < 0:
+		return strings.TrimSpace(format)
+	case start > 0:
+		return strings.TrimSpace(format[:start])
+	}
+	end := 0
+	for end < len(format) {
+		r, size := utf8.DecodeRuneInString(format[end:])
+		spaceInNumber := r == ' ' && end+1 < len(format) && format[end+1] >= '0' && format[end+1] <= '9'
+		if !unicode.IsDigit(r) && r != '.' && r != ',' && !spaceInNumber {
+			break
+		}
+		end += size
+	}
+	return strings.TrimSpace(format[end:])
 }
 
 func (p *Parser) parseIncludeDirective(startPos Position) ast.Directive {
@@ -1297,8 +1375,25 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	return dir
 }
 
+// subdirectiveLine is one indented line below a directive, with the positions
+// diagnostics are reported against.
+type subdirectiveLine struct {
+	name               string
+	namePos, nameEnd   Position
+	value              string
+	valuePos, valueEnd Position
+}
+
 func (p *Parser) parseSubdirectives() map[string]string {
 	subdirs := make(map[string]string)
+	for _, line := range p.parseSubdirectiveLines() {
+		subdirs[line.name] = line.value
+	}
+	return subdirs
+}
+
+func (p *Parser) parseSubdirectiveLines() []subdirectiveLine {
+	var lines []subdirectiveLine
 
 	for p.current.Type == TokenNewline {
 		p.advance()
@@ -1319,30 +1414,32 @@ func (p *Parser) parseSubdirectives() map[string]string {
 
 		if p.current.Type == TokenText {
 			line := p.current.Value
+			pos := p.current.Pos
 			p.advance()
 
-			spaceIdx := strings.Index(line, " ")
-			if spaceIdx > 0 {
-				name := line[:spaceIdx]
-				value := strings.TrimSpace(line[spaceIdx+1:])
-				subdirs[name] = value
-			} else {
-				subdirs[line] = ""
-			}
+			name, value, _ := strings.Cut(line, " ")
+			lines = append(lines, subdirectiveLine{
+				name:    name,
+				namePos: pos,
+				nameEnd: advancePosition(pos, name),
+				value:   strings.TrimSpace(value),
+			})
 			continue
 		}
 
-		name := ""
-		if p.current.Type == TokenDirective {
-			name = p.current.Value
-			p.advance()
-		} else {
+		if p.current.Type != TokenDirective {
 			p.skipToNextLine()
 			continue
 		}
+		entry := subdirectiveLine{name: p.current.Value, namePos: p.current.Pos, nameEnd: p.current.End}
+		p.advance()
 
 		var value strings.Builder
 		for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
+			if value.Len() == 0 {
+				entry.valuePos = p.current.Pos
+				entry.valueEnd = advancePosition(p.current.Pos, strings.TrimSpace(p.current.Value))
+			}
 			value.WriteString(p.current.Value)
 			if p.current.Type == TokenNumber || isCommodityToken(p.current.Type) || p.current.Type == TokenText {
 				value.WriteString(" ")
@@ -1350,10 +1447,16 @@ func (p *Parser) parseSubdirectives() map[string]string {
 			p.advance()
 		}
 
-		subdirs[name] = strings.TrimSpace(value.String())
+		entry.value = strings.TrimSpace(value.String())
+		lines = append(lines, entry)
 	}
 
-	return subdirs
+	return lines
+}
+
+// advancePosition returns the position after text written at pos on one line.
+func advancePosition(pos Position, text string) Position {
+	return Position{Line: pos.Line, Column: pos.Column + utf8.RuneCountInString(text), Offset: pos.Offset + len(text)}
 }
 
 func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive {
