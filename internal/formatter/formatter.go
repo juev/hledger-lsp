@@ -1084,6 +1084,17 @@ func appendPostingComment(body string, posting *ast.Posting, alignment Alignment
 }
 
 func resolveCommodityDisplay(amount *ast.Amount, commodityFormats map[string]CommodityFormat) (position ast.CommodityPosition, spaceBetween bool) {
+	position, spaceBetween = commodityDisplayStyle(amount, commodityFormats)
+	// A comma written right after a symbol is part of the symbol, so a number
+	// that starts with the decimal comma keeps the space that separates it.
+	if position == ast.CommodityLeft && !spaceBetween {
+		qty := strings.TrimLeft(formatAmountQuantity(amount, commodityFormats), "+-")
+		spaceBetween = strings.HasPrefix(qty, ",")
+	}
+	return position, spaceBetween
+}
+
+func commodityDisplayStyle(amount *ast.Amount, commodityFormats map[string]CommodityFormat) (position ast.CommodityPosition, spaceBetween bool) {
 	// An amount written without a symbol renders bare, so a declared format for
 	// the inherited commodity must not add a space where the symbol would be.
 	if commoditySymbolDisplay(&amount.Commodity) == "" {

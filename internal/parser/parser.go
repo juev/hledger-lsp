@@ -903,14 +903,14 @@ func (p *Parser) parseAmount() *ast.Amount {
 	if isAmbiguousNumber(rawTokenValue) {
 		mark = amount.DecimalMark
 	}
-	if strings.HasPrefix(rawTokenValue, ".") {
-		// A number without an integer part always uses "." as its mark, even
-		// under a decimal-mark directive that names ",".
+	if strings.HasPrefix(rawTokenValue, ".") || strings.HasPrefix(rawTokenValue, ",") {
+		// A number without an integer part takes the mark it starts with, even
+		// under a decimal-mark directive that names the other one.
 		if !isLeadingDecimalNumber(rawTokenValue) {
 			p.errorAt(numberPos, numberEnd, "invalid number: %s", rawTokenValue)
 			return nil
 		}
-		mark = "."
+		mark = rawTokenValue[:1]
 	}
 	numberStr = normalizeNumber(numberStr, mark)
 
@@ -1607,6 +1607,7 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 	}
 
 	if isCommodityToken(p.current.Type) || p.current.Type == TokenText {
+		commodityStart, commodityEnd := p.current.Pos, p.current.End
 		dir.Commodity = ast.Commodity{
 			Symbol: p.current.Value,
 			Quoted: p.current.Type == TokenQuotedCommodity,
@@ -1615,7 +1616,15 @@ func (p *Parser) parsePriceDirective(startPos Position) ast.Directive {
 				End:   toASTPosition(p.current.End),
 			},
 		}
+		valid := p.current.Type == TokenQuotedCommodity || isSymbolText(p.current.Value)
 		p.advance()
+		// hledger reads the price after at least one space, and a symbol holds
+		// no digit, sign, decimal mark or other syntax character.
+		if !valid || p.current.Pos.Offset == commodityEnd.Offset {
+			p.errorAt(commodityStart, commodityEnd, "invalid commodity %q: a space must separate it from the price, and unless it is in double quotes it holds no digit or any of - + . @ * ; = { }", dir.Commodity.Symbol)
+			p.skipToNextLine()
+			return nil
+		}
 	} else {
 		p.errorCode(CodeExpectedCommodity, "expected commodity")
 		p.skipToNextLine()
@@ -2414,10 +2423,10 @@ func isAmbiguousNumber(number string) bool {
 	return !strings.Contains(number, " ") && strings.Count(number, ".")+strings.Count(number, ",") == 1
 }
 
-var leadingDecimalNumber = regexp.MustCompile(`^\.[0-9]+([eE][+-]?[0-9]+)?$`)
+var leadingDecimalNumber = regexp.MustCompile(`^[.,][0-9]+([eE][+-]?[0-9]+)?$`)
 
 // isLeadingDecimalNumber reports whether number is a decimal mark followed by
-// digits and an optional exponent, such as ".5" or ".5E2".
+// digits and an optional exponent, such as ".5", ",5" or ".5E2".
 func isLeadingDecimalNumber(number string) bool {
 	return leadingDecimalNumber.MatchString(number)
 }
@@ -2587,6 +2596,20 @@ func removeSeparator(s string, sep byte) string {
 		}
 	}
 	return b.String()
+}
+
+// isSymbolText reports whether value is made of characters hledger allows in an
+// unquoted commodity symbol.
+func isSymbolText(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if !isSymbolRune(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func isCommodityToken(t TokenType) bool {
