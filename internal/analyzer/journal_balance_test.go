@@ -1909,6 +1909,299 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: []string{"EUR also holds 5 USD"},
 	},
+	{
+		name: "lone cost-converted balanced virtual posting is unbalanced",
+		input: `2024-01-01 t
+    [b]  2 USD @ 0.25 EUR
+    a  1 USD
+    c
+`,
+		wantMessages: []string{"EUR off by 0.5"},
+	},
+	{
+		name: "costs that differ by a tenth of the cost commodity",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.2 EUR
+`,
+		wantMessages: []string{"EUR off by 0.1"},
+	},
+	{
+		name: "costs that differ by less than a thousandth",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.2499 EUR
+`,
+		wantMessages: []string{"EUR off by 0.0002"},
+	},
+	{
+		name: "costs that differ by a hundred-millionth",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.24999999 EUR
+`,
+		wantMessages: []string{"EUR off by 0.00000002"},
+	},
+	{
+		name: "total costs that differ by a tenth of the cost commodity",
+		input: `2024-01-01 t
+    b  2 USD @@ 0.5 EUR
+    a  -2 USD @@ 0.4 EUR
+`,
+		wantMessages: []string{"EUR off by 0.1"},
+	},
+	{
+		name: "equal costs balance exactly",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.25 EUR
+`,
+	},
+	{
+		name: "cost commodity written once with no decimals gives half a unit",
+		input: `2024-01-01 t
+    b  2 USD @@ 3 EUR
+    a  -2 USD @@ 2.5 EUR
+    c  1 EUR
+    d  -1 EUR
+`,
+	},
+	{
+		name: "cost commodity written once with no decimals does not give more than half a unit",
+		input: `2024-01-01 t
+    b  2 USD @@ 3 EUR
+    a  -2 USD @@ 2.4 EUR
+    c  1 EUR
+    d  -1 EUR
+`,
+		wantMessages: []string{"EUR off by 0.6"},
+	},
+	{
+		name: "cost commodity written with a decimal gives a twentieth",
+		input: `2024-01-01 t
+    b  2 USD @@ 0.5 EUR
+    a  -2 USD @@ 0.451 EUR
+    c  1.0 EUR
+    d  -1.0 EUR
+`,
+	},
+	{
+		name: "cost commodity written with a decimal does not give more than a twentieth",
+		input: `2024-01-01 t
+    b  2 USD @@ 0.5 EUR
+    a  -2 USD @@ 0.449 EUR
+    c  1.0 EUR
+    d  -1.0 EUR
+`,
+		wantMessages: []string{"EUR off by 0.051"},
+	},
+	{
+		name: "precision of the cost commodity comes from the other group of the transaction",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.2 EUR
+    [x]  1 EUR
+    [y]  -1 EUR
+`,
+	},
+	{
+		name: "precision of the cost commodity comes from the balanced virtual group and tightens it",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.24 EUR
+    [x]  1.00 EUR
+    [y]  -1.00 EUR
+`,
+		wantMessages: []string{"EUR off by 0.02"},
+	},
+	{
+		name: "precision of the cost commodity comes from an unbalanced virtual posting",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.24 EUR
+    (x)  1.00 EUR
+`,
+		wantMessages: []string{"EUR off by 0.02"},
+	},
+	{
+		name: "precision of the cost commodity counts an amount of zero",
+		input: `2024-01-01 t
+    b  2 USD @ 0.25 EUR
+    a  -2 USD @ 0.2 EUR
+    c  1 EUR
+    d  -1 EUR
+    e  0.00 EUR
+`,
+		wantMessages: []string{"EUR off by 0.1"},
+	},
+	{
+		name: "lone cost-converted posting on Cyrillic and CJK accounts",
+		input: `2024-01-01 t
+    [касса]  2 USD @ 0.25 EUR
+    現金  1 USD
+    капитал
+`,
+		wantMessages: []string{"EUR off by 0.5"},
+	},
+	{
+		name: "lone converted posting is within half a unit of a unit price without decimals",
+		input: `2024-01-01 t
+    b  -0.1 USD @ 1 EUR
+    [a]
+`,
+	},
+	{
+		name: "lone converted posting is within half a unit of a unit price with a decimal",
+		input: `2024-01-01 t
+    b  -0.1 USD @ 0.2 EUR
+    [a]
+`,
+	},
+	{
+		name: "lone converted posting is outside half a unit of a unit price with two decimals",
+		input: `2024-01-01 t
+    b  -0.1 USD @ 0.25 EUR
+    [a]
+`,
+		wantMessages: []string{"EUR off by -0.025"},
+	},
+	{
+		name: "costs of different precisions take the finest",
+		input: `2024-01-01 t
+    b  1 USD @ 1 EUR
+    a  -1 USD @ 0.96 EUR
+`,
+		wantMessages: []string{"EUR off by 0.04"},
+	},
+	{
+		name: "costs of different precisions take the finest whatever their order",
+		input: `2024-01-01 t
+    b  1 USD @ 0.96 EUR
+    a  -1 USD @ 1 EUR
+`,
+		wantMessages: []string{"EUR off by -0.04"},
+	},
+	{
+		name: "costs of one decimal and none leave a residual of half",
+		input: `2024-01-01 t
+    b  1 USD @ 1 EUR
+    a  -1 USD @ 0.5 EUR
+`,
+		wantMessages: []string{"EUR off by 0.5"},
+	},
+	{
+		name: "balanced virtual cost takes the precision of the amount inferred for an elided real posting",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 2 GBP
+    [w]  -1 USD @ 0.5 GBP
+    b
+`,
+	},
+	{
+		name: "balanced virtual cost is rejected under the finer amount inferred for an elided real posting",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 0.25 GBP
+    [w]  -0.1 USD @ 2 GBP
+    b
+`,
+		wantMessages: []string{"GBP off by -0.2"},
+	},
+	{
+		name: "balanced virtual cost finer than the coarse amount inferred for an elided real posting is accepted",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 2 GBP
+    [w]  -0.1 USD @ 0.25 GBP
+    b
+`,
+	},
+	{
+		name: "balanced virtual cost beyond half a unit of the coarse inferred amount is rejected",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 2 GBP
+    [w]  -1 USD @ 0.55 GBP
+    b
+`,
+		wantMessages: []string{"GBP off by -0.55"},
+	},
+	{
+		name: "balanced virtual costs of one decimal under the coarse inferred amount",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 2 GBP
+    [w]  -1 USD @ 0.5 GBP
+    [v]  1 USD @ 0.4 GBP
+    b
+`,
+	},
+	{
+		name: "balanced virtual cost under the inferred amount of one decimal is rejected",
+		input: `2024-01-01 t
+    a:x  -9 USD @ 2.0 GBP
+    [w]  -1 USD @ 0.25 GBP
+    b
+`,
+		wantMessages: []string{"GBP off by -0.25"},
+	},
+	{
+		name: "each group takes the precision of its own costs",
+		input: `2024-01-01 t
+    [a]  0.10 USD @ 0.50 EUR
+    b  -0.10 USD @ 0.5 EUR
+`,
+		wantMessages: []string{"EUR off by 0.05"},
+	},
+	{
+		name: "each group takes the precision of its own costs, real group finer",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.50 EUR
+    [b]  -0.10 USD @ 0.5 EUR
+`,
+		wantMessages: []string{"EUR off by 0.05"},
+	},
+	{
+		name: "elided virtual posting infers a zero that counts as written",
+		input: `2024-01-01 t
+    [a]  1.0 USD @@ 0 EUR
+    b  -1.0 USD @@ 0.2 EUR
+    [c]
+`,
+	},
+	{
+		name: "elided virtual posting infers a zero in a commodity its group sums to nothing in",
+		input: `2024-01-01 t
+    x  1 USD @@ 0.4 EUR
+    y  -1 USD @@ 0.36 EUR
+    [v]  1 USD @@ 1 EUR
+    [w]  -1 USD @@ 1 EUR
+    [z]
+`,
+	},
+	{
+		name: "elided virtual posting infers the finest precision of what it offsets",
+		input: `2024-01-01 t
+    x  1 USD @@ 0.4 EUR
+    y  -1 USD @@ 0.36 EUR
+    [v]  1 USD @@ 1.00 EUR
+    [w]  -1 USD @@ 1 EUR
+    [z]
+`,
+		wantMessages: []string{"EUR off by 0.04"},
+	},
+	{
+		name: "a cost of zero gives no precision to the other group",
+		input: `2024-01-01 t
+    [a]  1.00 USD @@ 0.50 EUR
+    b  -1.00 USD @@ 0 EUR
+`,
+		wantMessages: []string{"EUR off by 0.5"},
+	},
+	{
+		name: "a cost of zero in a balanced virtual posting gives no precision to the real group",
+		input: `2024-01-01 t
+    a  0 USD @@ 0 EUR
+    [b]  -0 USD @@ 0.020 EUR
+`,
+		wantMessages: []string{"EUR off by 0.02"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {
