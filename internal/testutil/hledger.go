@@ -119,6 +119,10 @@ var NumberDirectives = []string{
 	"D 1 000.00, X\n",
 	"D 1000.00 X\nD 1000.00.00\n",
 	"commodity ,\n    format 1,000.00 ,\n",
+	"commodity ,\n    format , 1.000,\n",
+	"commodity ,\n    format ,1.000,\n",
+	"commodity ,\n    format ,1,000.\n",
+	"commodity ,\n    format 1.000,,\n",
 	"2020-01-01 earlier\n    p  1,000.00 X\n    q\n\n",
 	"2020-01-01 earlier\n    p  1.000,00 X\n    q\n\n",
 }

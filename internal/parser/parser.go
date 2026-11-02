@@ -899,6 +899,9 @@ func (p *Parser) parseAmount() *ast.Amount {
 	// way. `1.234,50` and `1 500,50` say which mark they use, and hledger takes
 	// them at their word whatever the commodity declares.
 	amount.DecimalMark = p.resolveDecimalMark(amount.Commodity.WrittenSymbol())
+	if amount.Commodity.Inferred {
+		amount.SymbolDecimalMark = p.resolveDecimalMark(amount.Commodity.Symbol)
+	}
 	mark := ""
 	if isAmbiguousNumber(rawTokenValue) {
 		mark = amount.DecimalMark
@@ -1317,7 +1320,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 	if format, ok := dir.Subdirs["format"]; ok {
 		dir.Format = format
-		number = numberInFormat(format, dir.Commodity.Symbol)
+		number = numberInFormat(format)
 		formatEnd = p.current.Pos
 	}
 	if note, ok := dir.Subdirs["note"]; ok {
@@ -2445,26 +2448,12 @@ func (p *Parser) resolveDecimalMark(commodity string) string {
 	return p.defaultCommodityDecimalMark
 }
 
-// numberInFormat returns the number written in a commodity format string. The
-// symbol is cut from the end it is written at first, so that a symbol that is a
-// separator itself (`1,000.00 ,`) leaves the number's own separators alone.
-func numberInFormat(format, symbol string) string {
-	trimmed := strings.TrimSpace(format)
-	switch {
-	case symbol != "" && strings.HasSuffix(trimmed, symbol):
-		format = strings.TrimSuffix(trimmed, symbol)
-	case symbol != "" && strings.HasPrefix(trimmed, symbol):
-		format = strings.TrimPrefix(trimmed, symbol)
-	default:
-		format = strings.Replace(format, symbol, "", 1)
-	}
-	isNumberRune := func(r rune) bool { return unicode.IsDigit(r) || r == '.' || r == ',' }
-	start := strings.IndexFunc(format, isNumberRune)
-	end := strings.LastIndexFunc(format, isNumberRune)
-	if start < 0 {
-		return ""
-	}
-	return format[start : end+1]
+// numberInFormat returns the number written in a commodity format string. It
+// is read by the rules of a commodity directive line, so the symbol is taken
+// from the side it is actually written on: in `, 1.000,` the comma before the
+// number is the symbol and the one after it is the decimal mark.
+func numberInFormat(format string) string {
+	return parseCommodityText(format, Position{}).number
 }
 
 // isAmbiguousNumber reports whether a written number could be read with either

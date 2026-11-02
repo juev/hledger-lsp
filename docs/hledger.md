@@ -307,6 +307,7 @@ decimal-mark ,    ; Comma is decimal
 - Directives apply from their position onward, and commodity styles cross `include` in both directions.
 - `commodity` and `D` numbers are read by the same rules and must end up with a decimal mark: `commodity 1000 X` is an error, `commodity 1000. X` is not, and `commodity 1000,00 X` is an error when `.` is already in force. `commodity 1,000 X` declares a comma decimal mark.
 - `commodity X` with no format resets the style.
+- A `format` subdirective is read like a `commodity` line: the symbol is the one on the side it is written on. With the symbol `,` written first, `format , 1.000,` and `format ,1.000,` declare a comma mark (`15,000 ,` is 15); written last and glued, `format 1.000,,` is an invalid number.
 
 ### Digit Group Marks
 

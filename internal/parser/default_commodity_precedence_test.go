@@ -216,25 +216,50 @@ func TestParser_SymbolLessCommodityWithFormatSubdirectiveUnderDefaultCommodity(t
 }
 
 // A format subdirective for a symbol that is a separator itself keeps the
-// number's own separators: hledger 1.52.4 reads `format 1,000.00 ,` as mark `.`
-// and `format 1.000,00 ,` as mark `,`.
+// number's own separators, whichever side the symbol is written on and whether
+// or not a space parts it from the number. A number that ends in the same
+// separator as the symbol keeps that separator as its decimal mark when the
+// symbol comes first (`, 1.000,`); glued after the number (`1.000,,`) it makes
+// the number invalid. The marks come from hledger 1.52.4.
 func TestParser_FormatSubdirectiveOfSeparatorSymbol(t *testing.T) {
-	tests := []struct {
-		format, amount, qty string
-	}{
-		{"1,000.00 ,", "15,000 ,", "15000"},
-		{"1,000.00 ,", "1.500 ,", "1.5"},
-		{"1,000.00 ,", "1,5 ,", "15"},
-		{"1.000,00 ,", "15,000 ,", "15"},
-		{"1.000,00 ,", "1.500 ,", "1500"},
-		{"1.000,00 ,", "1,5 ,", "1.5"},
+	readings := map[string][]struct{ amount, qty string }{
+		",": {{"15,000 ,", "15"}, {", 15,000", "15"}, {"1.500 ,", "1500"}, {"1,5 ,", "1.5"}},
+		".": {{"15,000 ,", "15000"}, {", 15,000", "15000"}, {"1.500 ,", "1.5"}, {"1,5 ,", "15"}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.format+" "+tt.amount, func(t *testing.T) {
-			qty, commodity, errs := firstAmount(t, "commodity ,\n    format "+tt.format+"\n\n2024-01-01 x\n    a  "+tt.amount+"\n    b\n")
-			require.Empty(t, errs)
-			assert.Equal(t, tt.qty, qty)
-			assert.Equal(t, ",", commodity)
+	formats := []struct{ format, mark string }{
+		{", 1.000,", ","},
+		{",1.000,", ","},
+		{", 1000,", ","},
+		{",1000,", ","},
+		{", 1.000,00", ","},
+		{",1.000,00", ","},
+		{", 1,000.", "."},
+		{",1,000.", "."},
+		{", 1,000.00", "."},
+		{"1.000, ,", ","},
+		{"1,000. ,", "."},
+		{"1,000.00 ,", "."},
+		{"1.000,00 ,", ","},
+	}
+	for _, f := range formats {
+		for _, r := range readings[f.mark] {
+			t.Run(f.format+" "+r.amount, func(t *testing.T) {
+				qty, commodity, errs := firstAmount(t, "commodity ,\n    format "+f.format+"\n\n2024-01-01 x\n    a  "+r.amount+"\n    b\n")
+				require.Empty(t, errs)
+				assert.Equal(t, r.qty, qty)
+				assert.Equal(t, ",", commodity)
+			})
+		}
+	}
+
+	for _, format := range []string{"1.000,,", "1,000.,"} {
+		t.Run(format, func(t *testing.T) {
+			_, errs := Parse("commodity ,\n    format " + format + "\n\n2024-01-01 x\n    a  15,000 ,\n    b\n")
+			var messages []string
+			for _, err := range errs {
+				messages = append(messages, err.Message)
+			}
+			assert.Contains(t, messages, "invalid number: "+format)
 		})
 	}
 }
