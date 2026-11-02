@@ -44,10 +44,13 @@ GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -ldflags '-s -w' \
 
 The release configuration (`.goreleaser.yaml`) is set up to publish the module
 as `hledger-lsp_wasip1_wasm.wasm` starting with the next release, listed in
-`checksums.txt` and signed with minisign like the native binaries. Only the
-packaging has been checked so far: a local goreleaser snapshot produced the
-file under that name and its `checksums.txt` entry. Signing is unverified; that
-run used a stand-in for `minisign` that writes placeholder signature files.
+`checksums.txt` and signed with minisign like the native binaries. A local
+GoReleaser snapshot built the WASI module and the native linux/amd64 target,
+ran the WASI smoke test on that built module under both runtimes, and produced
+the expected checksum entries and signatures. The artifact and checksum
+signatures were verified with real minisign and a temporary test key. This
+checks local packaging and signing, not release-key signatures, the full
+native target matrix, or publication of a release.
 
 The server can only open files in directories the host preopens. Preopen the
 journal directory at the same path inside the module, so the `file://` URIs the
@@ -174,9 +177,11 @@ Second run, wasmtime cache filled:
 | 10 files x 1000 tx | wasmtime | 840.8 ms | 5586.7 ms | 4346.7 ms / 6289.2 ms | 1.2 ms | 1015.8 ms | 317 MiB | 1.0% |
 | 10 files x 1000 tx | node | 520.0 ms | 4558.9 ms | 2309.0 ms / 4256.1 ms | 1.2 ms | 907.6 ms | 282 MiB | 2.0% |
 
-On the large journal the WASI build needs roughly 3–5 times the native time for
-analysis-heavy requests and about three times the memory. Formatting stays
-around a millisecond.
+On the large journal the WASI build needs roughly 3–8 times the native time
+for analysis-heavy requests in these samples and about 2–3 times the memory.
+The highest latency ratio is the warm wasmtime completion p50 (4346.7 ms
+versus 549.9 ms, about 7.9 times); the samples are too noisy to promise a
+fixed slowdown. Formatting stays around a millisecond.
 
 ## Browser editors (VS Code for the Web)
 
