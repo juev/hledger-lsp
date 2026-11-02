@@ -77,6 +77,14 @@ type otherReading struct {
 
 	effectsOnce sync.Once
 	effects     []analyzer.PostingEffect
+	indexOnce   sync.Once
+	index       map[analyzer.PostingRef]analyzer.PostingEffect
+}
+
+// postingEffectIndex returns the effects keyed by posting, built at most once.
+func (o *otherReading) postingEffectIndex() map[analyzer.PostingRef]analyzer.PostingEffect {
+	o.indexOnce.Do(func() { o.index = postingEffectIndex(o.postingEffects()) })
+	return o.index
 }
 
 // postingEffects returns the posting effects of the reading's journal, computed
@@ -91,25 +99,44 @@ func (o *otherReading) postingEffects() []analyzer.PostingEffect {
 // same include tree and occurrence. A lone document (tree == nil) is replayed
 // from journal. The result is shared between callers and must not be modified.
 func (s *Server) cachedRunningBalances(docURI uri.URI, content string, tree *include.ResolvedJournal, id include.OccurrenceID) map[analyzer.PostingRef]map[string]decimal.Decimal {
+	return s.cachedRunningBalancesOf(docURI, content, tree, []include.OccurrenceID{id})[id]
+}
+
+// cachedRunningBalancesOf is cachedRunningBalances for several occurrences of
+// one tree: those not replayed yet are replayed together, in one pass over the
+// journal.
+func (s *Server) cachedRunningBalancesOf(docURI uri.URI, content string, tree *include.ResolvedJournal, ids []include.OccurrenceID) map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal {
 	doc := s.cachedParse(docURI, content)
-	key := readingKey{tree: tree, id: id}
 
 	doc.runningMu.Lock()
 	defer doc.runningMu.Unlock()
-	if balances, ok := doc.running[key]; ok {
-		return balances
-	}
-	var balances map[analyzer.PostingRef]map[string]decimal.Decimal
-	if tree != nil {
-		balances = analyzer.RunningBalances(tree.TransactionsWithSource(), id)
-	} else {
-		balances = analyzer.RunningBalances(journalTransactions(doc.journal), 0)
-	}
 	if doc.running == nil {
 		doc.running = make(map[readingKey]map[analyzer.PostingRef]map[string]decimal.Decimal)
 	}
-	doc.running[key] = balances
-	return balances
+	result := make(map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal, len(ids))
+	var missing []include.OccurrenceID
+	for _, id := range ids {
+		if balances, ok := doc.running[readingKey{tree: tree, id: id}]; ok {
+			result[id] = balances
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return result
+	}
+
+	var replayed map[include.OccurrenceID]map[analyzer.PostingRef]map[string]decimal.Decimal
+	if tree != nil {
+		replayed = analyzer.RunningBalancesFor(tree.TransactionsWithSource(), missing)
+	} else {
+		replayed = analyzer.RunningBalancesFor(journalTransactions(doc.journal), missing)
+	}
+	for id, balances := range replayed {
+		doc.running[readingKey{tree: tree, id: id}] = balances
+		result[id] = balances
+	}
+	return result
 }
 
 // keepRunningBalances drops the replays a request did not use. Entries of a

@@ -1,6 +1,8 @@
 package include
 
 import (
+	"maps"
+
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/parser"
@@ -217,6 +219,10 @@ func (r *ResolvedJournal) SourceJournals() []*ast.Journal {
 
 // Occurrence returns the occurrence with id, if present.
 func (r *ResolvedJournal) Occurrence(id OccurrenceID) *JournalOccurrence {
+	// The loader numbers occurrences from 1 in the order it appends them.
+	if index := int(id) - 1; index >= 0 && index < len(r.Occurrences) && r.Occurrences[index].ID == id {
+		return &r.Occurrences[index]
+	}
 	for index := range r.Occurrences {
 		if r.Occurrences[index].ID == id {
 			return &r.Occurrences[index]
@@ -510,6 +516,41 @@ func (r *ResolvedJournal) FormatsAt(id OccurrenceID, sourceOffset int) map[strin
 	}
 
 	return formatter.ExtractCommodityFormats(directives)
+}
+
+// FormatsAtFunc is FormatsAt(id, offset) for many offsets of one occurrence. A
+// child occurrence inherits its formats at the include site once, and offsets
+// that see the same directives of the occurrence share one result, so asking
+// for every posting of a file costs one pass over the tree rather than one per
+// posting. The returned maps must not be modified.
+func (r *ResolvedJournal) FormatsAtFunc(id OccurrenceID) func(sourceOffset int) map[string]formatter.CommodityFormat {
+	occ := r.Occurrence(id)
+	if occ == nil || occ.Journal == nil || occ.Via.ParentID == 0 {
+		return func(sourceOffset int) map[string]formatter.CommodityFormat { return r.FormatsAt(id, sourceOffset) }
+	}
+
+	var inherited map[string]formatter.CommodityFormat
+	byCount := make(map[int]map[string]formatter.CommodityFormat)
+	return func(sourceOffset int) map[string]formatter.CommodityFormat {
+		if inherited == nil {
+			inherited = r.FormatsAt(occ.Via.ParentID, occ.Via.IncludeRange.Start.Offset)
+		}
+		var local []ast.Directive
+		for _, dir := range occ.Journal.Directives {
+			if dir.GetRange().Start.Offset <= sourceOffset {
+				local = append(local, dir)
+			}
+		}
+		if formats, ok := byCount[len(local)]; ok {
+			return formats
+		}
+		formats := maps.Clone(inherited)
+		for k, v := range formatter.ExtractCommodityFormats(local) {
+			formats[k] = v
+		}
+		byCount[len(local)] = formats
+		return formats
+	}
 }
 
 // DefaultCommodityAt returns the default commodity symbol (from the D directive)

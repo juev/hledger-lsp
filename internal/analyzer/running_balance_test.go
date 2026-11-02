@@ -432,3 +432,21 @@ func TestJournalEvaluator_ObserveReportsPricedPerPosting(t *testing.T) {
 	assert.False(t, priced[key{2, 0}], "a plain posting after it carries none")
 	assert.False(t, priced[key{2, 1}])
 }
+
+// One replay answers several occurrences exactly as one replay per occurrence.
+func TestRunningBalancesFor_MatchesOneReplayPerOccurrence(t *testing.T) {
+	resolved := resolvedFromSources(t,
+		journalSource{path: "/a.journal", content: "2024-01-01 seed\n    assets:cash  100 USD\n    equity\n"},
+		journalSource{path: "/b.journal", content: "2024-01-02 счёт 費用\n    assets:cash  -30 USD\n    expenses\n"},
+		journalSource{path: "/c.journal", content: "2024-01-03 later\n    assets:cash  -5 USD\n    expenses\n"},
+	)
+	sourced := resolved.TransactionsWithSource()
+	ids := []include.OccurrenceID{3, 1, 2}
+
+	together := RunningBalancesFor(sourced, ids)
+	require.Len(t, together, 3)
+	for _, id := range ids {
+		assert.Equal(t, RunningBalances(sourced, id), together[id], "occurrence %d", id)
+		assert.NotEmpty(t, together[id])
+	}
+}

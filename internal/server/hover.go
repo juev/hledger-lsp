@@ -137,11 +137,13 @@ func (s *Server) amountHoverAcrossOccurrences(docURI uri.URI, doc string, positi
 				defaultSymbol = readings[i].tree.DefaultCommodityAt(readings[i].id, element.rng.Start.Offset)
 			}
 			formats := readings[i].formatsAt(element.rng.Start.Offset)
-			groups = append(groups, group{content: buildAmountHover(valueOnly(element.amount), valueOnlyCost(element.cost), formats, defaultSymbol)})
+			groups = append(groups, group{content: buildAmountHoverWith(valueOnly(element.amount), valueOnlyCost(element.cost), func(amount *ast.Amount, symbol string) string {
+				return styledAmountForHover(amount, formats, symbol)
+			}, defaultSymbol)})
 			at = len(groups) - 1
 			index[key] = at
 		}
-		for _, label := range readings[i].includedFrom {
+		for _, label := range labelsOf(readings[i].includedFrom) {
 			if label != "" && !slices.Contains(groups[at].labels, label) {
 				groups[at].labels = append(groups[at].labels, label)
 			}
@@ -160,6 +162,19 @@ func (s *Server) amountHoverAcrossOccurrences(docURI uri.URI, doc string, positi
 		parts = append(parts, "_"+heading+"_\n\n"+g.content)
 	}
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// styledAmountForHover writes an amount the way the occurrence's commodity styles
+// write it, as the inlay hints do, so a decimal mark of that occurrence shows in
+// the value: 1.5 under a comma mark reads `1,5`. The ordinary hover keeps the
+// text as written, which is why it cannot tell the readings apart.
+func styledAmountForHover(amount *ast.Amount, formats map[string]formatter.CommodityFormat, defaultSymbol string) string {
+	display := *amount
+	display.Commodity.Inferred = false
+	if display.Commodity.Symbol == "" {
+		display.Commodity.Symbol = defaultSymbol
+	}
+	return formatter.FormatAmount(&display, formats)
 }
 
 // hoverAmountKey identifies what an amount and its cost are worth.
@@ -461,12 +476,20 @@ func defaultCommoditySymbol(directives []ast.Directive) string {
 }
 
 func buildAmountHover(amount *ast.Amount, cost *ast.Cost, commodityFormats map[string]formatter.CommodityFormat, defaultSymbol string) string {
+	return buildAmountHoverWith(amount, cost, func(a *ast.Amount, symbol string) string {
+		return formatAmountForHover(a, commodityFormats, symbol)
+	}, defaultSymbol)
+}
+
+// buildAmountHoverWith lays out the amount hover, rendering each amount with
+// render; the default symbol applies to the amount itself, not to its cost.
+func buildAmountHoverWith(amount *ast.Amount, cost *ast.Cost, render func(*ast.Amount, string) string, defaultSymbol string) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "**Amount:** %s", formatAmountForHover(amount, commodityFormats, defaultSymbol))
+	fmt.Fprintf(&sb, "**Amount:** %s", render(amount, defaultSymbol))
 
 	if cost != nil {
-		costFormatted := formatAmountForHover(&cost.Amount, commodityFormats, "")
+		costFormatted := render(&cost.Amount, "")
 		if cost.IsTotal {
 			fmt.Fprintf(&sb, "\n\n**Total cost:** @@ %s", costFormatted)
 		} else {
