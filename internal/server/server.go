@@ -458,7 +458,7 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	if s.workspace != nil {
 		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(textutil.StripBOM(string(data)))))
 				s.loader.InvalidateFile(path)
 			} else {
 				// A file that cannot be read, whether gone or inaccessible, is not
@@ -480,7 +480,7 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 			if text, ok := s.documents.rope(params.TextDocument.URI); ok {
 				s.workspace.MarkFileDirty(path, text)
 			} else if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(textutil.StripBOM(string(data)))))
 			}
 			s.loader.InvalidateFile(path)
 		}
@@ -940,7 +940,7 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 
 		if change.Type == protocol.FileChangeTypeChanged || change.Type == protocol.FileChangeTypeCreated {
 			if data, err := os.ReadFile(path); err == nil {
-				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
+				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(textutil.StripBOM(string(data)))))
 			}
 		}
 		if change.Type == protocol.FileChangeTypeDeleted {

@@ -137,7 +137,7 @@ func (l *Loader) LoadWithOptions(path string, options LoadOptions) (*ResolvedRul
 	if rootErr != nil {
 		return nil, []LoadError{*rootErr}
 	}
-	rootContent = textutil.NormalizeLineEndings(rootContent)
+	rootContent = textutil.NormalizeLineEndings(textutil.StripBOM(rootContent))
 
 	// Expand textually.
 	expander := &textExpander{

@@ -269,7 +269,7 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 			continue
 		}
 
-		journal, errs := parser.Parse(textutil.NormalizeLineEndings(string(content)))
+		journal, errs := parser.Parse(textutil.NormalizeLineEndings(textutil.StripBOM(string(content))))
 		if len(errs) > 0 {
 			for _, e := range errs {
 				w.parseErrors = append(w.parseErrors, fmt.Sprintf("%s: %s", file, e.Message))
