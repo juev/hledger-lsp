@@ -241,7 +241,7 @@ func (s *Server) quickFixForUnbalanced(
 		return protocol.CodeAction{}, false
 	}
 
-	edit, title, ok := buildUnbalancedFix(uri, doc, mapper, commodityFormats, balanceTolerance, tx)
+	edit, title, ok := s.buildUnbalancedFixForReadings(uri, doc, mapper, journal, commodityFormats, balanceTolerance, tx)
 	if !ok {
 		return protocol.CodeAction{}, false
 	}
@@ -306,6 +306,77 @@ func buildUnbalancedFix(
 			docURI: {lineEdit},
 		},
 	}, title, true
+}
+
+// buildUnbalancedFixForReadings is buildUnbalancedFix for a document that may be
+// read under several include contexts. Each occurrence computes the final
+// posting from what it reads, and the text written is read back at every
+// occurrence, so the fix is offered only when some text balances the transaction
+// at all of them. Candidates are the rendering under each occurrence's own
+// formats and the number as plain digits, which keeps the spelling of the
+// original amounts. tx belongs to journal.
+func (s *Server) buildUnbalancedFixForReadings(
+	docURI uri.URI,
+	doc string,
+	mapper *lsputil.PositionMapper,
+	journal *ast.Journal,
+	commodityFormats map[string]formatter.CommodityFormat,
+	balanceTolerance float64,
+	tx *ast.Transaction,
+) (*protocol.WorkspaceEdit, string, bool) {
+	readings := s.occurrenceReadings(docURI, doc)
+	if len(readings) < 2 {
+		return buildUnbalancedFix(docURI, doc, mapper, commodityFormats, balanceTolerance, tx)
+	}
+
+	index := -1
+	for i := range journal.Transactions {
+		if &journal.Transactions[i] == tx {
+			index = i
+		}
+	}
+	if index < 0 {
+		return nil, "", false
+	}
+
+	type candidate struct {
+		edit  *protocol.WorkspaceEdit
+		title string
+	}
+	var styled, plain []candidate
+	seen := make(map[string]bool)
+	add := func(list *[]candidate, formats map[string]formatter.CommodityFormat, reading *occurrenceReading) {
+		if index >= len(reading.journal.Transactions) {
+			return
+		}
+		edit, title, ok := buildUnbalancedFix(docURI, doc, mapper, formats, balanceTolerance, &reading.journal.Transactions[index])
+		if !ok || seen[title] {
+			return
+		}
+		seen[title] = true
+		*list = append(*list, candidate{edit, title})
+	}
+	for i := range readings {
+		formats := commodityFormats
+		if i > 0 {
+			formats = readings[i].formatsAt(wholeDocument)
+		}
+		add(&styled, formats, &readings[i])
+	}
+	for i := range readings {
+		add(&plain, map[string]formatter.CommodityFormat{}, &readings[i])
+	}
+
+	for _, c := range append(styled, plain...) {
+		balanced := everywhere(doc, readings, c.edit.Changes[docURI], func(edited *ast.Journal) bool {
+			return index < len(edited.Transactions) &&
+				analyzer.CheckBalance(&edited.Transactions[index], decimal.NewFromFloat(balanceTolerance)).Balanced
+		})
+		if balanced {
+			return c.edit, c.title, true
+		}
+	}
+	return nil, "", false
 }
 
 func (s *Server) getCodeActions(uri uri.URI) ([]protocol.CodeAction, error) {
@@ -445,7 +516,7 @@ func (s *Server) executeFixUnbalanced(ctx context.Context, params *protocol.Exec
 		commodityFormats = formatter.ExtractCommodityFormats(journal.Directives)
 	}
 
-	edit, _, ok := buildUnbalancedFix(uri, doc, lsputil.NewPositionMapper(doc), commodityFormats, settings.Diagnostics.BalanceTolerance, tx)
+	edit, _, ok := s.buildUnbalancedFixForReadings(uri, doc, lsputil.NewPositionMapper(doc), journal, commodityFormats, settings.Diagnostics.BalanceTolerance, tx)
 	if !ok {
 		return nil, fmt.Errorf("no balance fix available")
 	}

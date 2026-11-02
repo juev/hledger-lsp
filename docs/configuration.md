@@ -92,6 +92,31 @@ Values the server cannot use (an unknown enum value, a non-positive number) are 
 | `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"left"` (align amount starts), `"right"` (right-align amounts), or `"decimal"` (align on decimal point) |
 | `hledger.formatting.amountAlignmentTarget` | `"cost"` | For postings with cost notation (`@`/`@@`), which amount anchors alignment: `"cost"` (the cost/second amount — hledger 1.x behavior) or `"posting"` (the posting/first amount — hledger 2.x `print` behavior; lot price and cost annotation then trail freely). |
 
+### Files included more than once
+
+hledger reads a file once per `include`, and the inclusions can differ: a
+`decimal-mark`, `apply account`, `alias` or `commodity` directive that comes
+before one include and not before another changes what the same text means. The
+server reads a file under every distinct include context it has in the
+workspace, across all include trees, and an edit it writes must keep the value
+hledger reads at each of them.
+
+- **Format, range formatting and on-type formatting** rewrite a number only when
+  every occurrence renders it to the same text. When they disagree anywhere in
+  the file (for example `10 EUR` would become `10,00 EUR`, which reads as 1010
+  under a `.` decimal mark), the file keeps its numbers as written and only the
+  layout is normalised: indent, spacing and alignment.
+- **Insert inferred amount** and the unbalanced-transaction fix (the quick fix
+  and the code lens command) are offered only when one text balances the
+  transaction at every occurrence. The server tries the rendering of each
+  occurrence and the number as plain digits, and offers the first text that
+  reads correctly everywhere.
+- **Inline completion** drops a suggestion whose amounts the occurrences read as
+  different values.
+
+Occurrences whose contexts are equal count once, so a file included several
+times the same way behaves exactly as a file included once.
+
 ### Pin amounts to a fixed column (opt-in)
 
 By default the server uses the file's natural alignment column (computed from the longest account name). If you prefer all amounts to be aligned to a fixed column for visual consistency across files, set `minAlignmentColumn` to your desired value:
