@@ -136,6 +136,13 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 		opts.IndentSize = defaultIndentSize
 	}
 
+	return formatDocument(journal, content, commodityFormats, opts, nil)
+}
+
+// formatDocument renders every posting of journal. A non-nil alignment replaces
+// the columns computed from the document, so several renderings of the same
+// text can share one layout.
+func formatDocument(journal *ast.Journal, content string, commodityFormats map[string]CommodityFormat, opts Options, alignmentOverride *AlignmentInfo) []protocol.TextEdit {
 	mapper := lsputil.NewPositionMapper(content)
 	var edits []protocol.TextEdit
 
@@ -143,7 +150,12 @@ func FormatDocumentWithOptions(journal *ast.Journal, content string, commodityFo
 
 	postings := AllPostings(journal)
 	if len(postings) > 0 {
-		alignment := ComputeAlignment(journal, content, commodityFormats, opts)
+		var alignment AlignmentInfo
+		if alignmentOverride != nil {
+			alignment = *alignmentOverride
+		} else {
+			alignment = ComputeAlignment(journal, content, commodityFormats, opts)
+		}
 
 		for i := range postings {
 			postingLines[postings[i].Range.Start.Line-1] = true

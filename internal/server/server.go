@@ -981,13 +981,7 @@ func (s *Server) Format(ctx context.Context, params *protocol.DocumentFormatting
 		return nil, nil
 	}
 
-	journal, _ := s.cachedJournal(params.TextDocument.URI, doc)
-	commodityFormats := s.commodityFormatsForDocument(params.TextDocument.URI)
-
-	settings := s.getSettings()
-	opts := formatterOptionsFrom(settings.Formatting)
-
-	return formatter.FormatDocumentWithOptions(journal, doc, commodityFormats, opts), nil
+	return s.formatEdits(params.TextDocument.URI, doc), nil
 }
 
 // commodityFormatsForDocument returns the commodity formats for the document

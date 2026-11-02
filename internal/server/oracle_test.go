@@ -70,6 +70,52 @@ func TestOracle_ServerMatchesHledgerAcrossIncludes(t *testing.T) {
 	}
 }
 
+// TestOracle_FormatKeepsValuesWhenIncludedUnderConflictingMarks formats a file
+// that the journal includes twice, once under `decimal-mark ,` and once under
+// `decimal-mark .`. hledger must read the same amount at both occurrences after
+// Format as before it, whatever the directives in force and however the number
+// is spelled; HledgerReadFile covers the second occurrence, the amounts list both.
+func TestOracle_FormatKeepsValuesWhenIncludedUnderConflictingMarks(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	orders := []struct{ name, first, second string }{
+		{"comma then dot", ",", "."},
+		{"dot then comma", ".", ","},
+	}
+	for _, order := range orders {
+		for _, directive := range testutil.NumberDirectives {
+			for _, spelling := range testutil.NumberSpellings {
+				t.Run(fmt.Sprintf("%s %q reads %q", order.name, directive, spelling), func(t *testing.T) {
+					tx := "2024-01-01 x\n    a  " + spelling + "\n    b\n"
+					dir := t.TempDir()
+					writeJournals(t, dir, map[string]string{
+						"main.journal":   directive + "include first.journal\ninclude second.journal\n",
+						"first.journal":  "decimal-mark " + order.first + "\ninclude tx.journal\n",
+						"second.journal": "decimal-mark " + order.second + "\ninclude tx.journal\n",
+						"tx.journal":     tx,
+					})
+					root := filepath.Join(dir, "main.journal")
+					path := filepath.Join(dir, "tx.journal")
+
+					wantSecond := testutil.HledgerReadFile(t, hledgerPath, root)
+					wantAll, accepted := testutil.HledgerPostingAmounts(t, hledgerPath, root)
+					if !accepted || !wantSecond.Accepted {
+						t.Skip("hledger rejects this journal")
+					}
+
+					ts, docURI := formatServer(t, dir, path, tx)
+					require.NoError(t, os.WriteFile(path, []byte(formatted(t, ts, docURI)), 0o644))
+
+					assert.Equal(t, wantSecond, testutil.HledgerReadFile(t, hledgerPath, root), "second occurrence after Format")
+					gotAll, accepted := testutil.HledgerPostingAmounts(t, hledgerPath, root)
+					require.True(t, accepted, "hledger rejects the journal after Format")
+					assert.Equal(t, wantAll, gotAll, "every occurrence after Format")
+				})
+			}
+		}
+	}
+}
+
 // TestOracle_InsertInferredAmountBalancesInHledger applies the inferred-amount
 // edit and has hledger read the result. A wrong decimal mark makes it read a
 // different quantity and reject the transaction as unbalanced.
