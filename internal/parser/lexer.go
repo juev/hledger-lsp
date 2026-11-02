@@ -120,6 +120,9 @@ func (l *Lexer) scanInLine() Token {
 		return l.scanComment()
 	case ch == '(':
 		if l.looksLikeVirtualAccount() {
+			if !l.accountNameClosesWith(')') {
+				return l.scanAccount()
+			}
 			l.virtualCloser = ')'
 			startPos := l.position()
 			l.advance()
@@ -131,6 +134,9 @@ func (l *Lexer) scanInLine() Token {
 		l.advance()
 		return Token{Type: TokenRParen, Value: ")", Pos: startPos, End: l.position()}
 	case ch == '[':
+		if l.looksLikeVirtualAccount() && !l.accountNameClosesWith(']') {
+			return l.scanAccount()
+		}
 		if l.onPostingLine {
 			l.virtualCloser = ']'
 		}
@@ -360,8 +366,8 @@ func (l *Lexer) scanAccount() Token {
 	for l.pos < len(l.input) {
 		r, size := utf8.DecodeRuneInString(l.input[l.pos:])
 
-		if r == ' ' {
-			if l.pos+1 < len(l.input) && l.input[l.pos+1] == ' ' {
+		if r == ' ' || r == '\t' {
+			if l.pos+1 < len(l.input) && isSpaceOrTab(l.input[l.pos+1]) {
 				break
 			}
 			l.pos += size
@@ -384,21 +390,47 @@ func (l *Lexer) scanAccount() Token {
 		lastNonSpaceColumn = l.column
 	}
 
-	value := l.input[start:lastNonSpace]
+	// hledger reads a lone tab inside an account name as a single space, so
+	// "a:b<TAB>c" and "a:b c" name the same account. The replacement keeps the
+	// byte length, so offsets into the source stay valid.
+	value := strings.ReplaceAll(l.input[start:lastNonSpace], "\t", " ")
 	endPos := Position{Line: startPos.Line, Column: lastNonSpaceColumn, Offset: lastNonSpace}
 	l.afterIndent = false
 	return Token{Type: TokenAccount, Value: value, Pos: startPos, End: endPos}
 }
 
 // isAccountTerminator returns true for characters that end account names in hledger format.
-// Per hledger manual: account names end only at double-space (2+ spaces), tab, or newline.
-// The double-space check is handled in scanAccount() before this function is called.
+// An account name ends at a line break or at two consecutive whitespace
+// characters, where a tab counts as one: a single tab or space is part of the
+// name. scanAccount checks for the whitespace pair before calling this.
 func isAccountTerminator(r rune) bool {
-	switch r {
-	case '\t', '\n', '\r':
-		return true
+	return r == '\n' || r == '\r'
+}
+
+// accountNameClosesWith reports whether the account name that starts at the
+// current position ends with closer. hledger takes a posting as virtual only
+// then; "(a:b) 5" with a single separating space is a regular account named
+// "(a:b) 5".
+func (l *Lexer) accountNameClosesWith(closer byte) bool {
+	last := byte(0)
+	for i := l.pos; i < len(l.input); i++ {
+		ch := l.input[i]
+		if ch == '\n' || ch == '\r' {
+			break
+		}
+		if isSpaceOrTab(ch) {
+			if i+1 < len(l.input) && isSpaceOrTab(l.input[i+1]) {
+				break
+			}
+			continue
+		}
+		last = ch
 	}
-	return false
+	return last == closer
+}
+
+func isSpaceOrTab(ch byte) bool {
+	return ch == ' ' || ch == '\t'
 }
 
 func (l *Lexer) scanNumber() Token {

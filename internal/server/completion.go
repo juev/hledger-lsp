@@ -428,9 +428,12 @@ func postingStartOffset(line string, byteCol int) int {
 	return offset
 }
 
+// findDoublespace returns the index of the first pair of consecutive spaces or
+// tabs, which hledger takes as the end of an account name. A lone tab is part
+// of the name, like a lone space.
 func findDoublespace(s string) int {
 	for i := 0; i < len(s)-1; i++ {
-		if s[i] == ' ' && s[i+1] == ' ' {
+		if (s[i] == ' ' || s[i] == '\t') && (s[i+1] == ' ' || s[i+1] == '\t') {
 			return i
 		}
 	}
@@ -497,7 +500,7 @@ func parsePosting(line string) postingParts {
 
 	parts.account = trimmed[:parts.separatorIdx]
 	afterSeparator := trimmed[parts.separatorIdx:]
-	parts.afterAccount = strings.TrimLeft(afterSeparator, " ")
+	parts.afterAccount = strings.TrimLeft(afterSeparator, " \t")
 	parts.skipSpaces = len(afterSeparator) - len(parts.afterAccount)
 	parts.prefixEnd = findPrefixCommodityEnd(parts.afterAccount)
 	parts.amountEnd = findAmountEnd(parts.afterAccount)
@@ -1168,10 +1171,10 @@ func findTokenEnd(line string, byteCol int, ctxType CompletionContextType) int {
 	switch ctxType {
 	case ContextAccount:
 		for i := 0; i < len(rest); i++ {
-			if rest[i] == '\t' || rest[i] == ';' {
+			if rest[i] == ';' {
 				return byteCol + i
 			}
-			if i+1 < len(rest) && rest[i] == ' ' && rest[i+1] == ' ' {
+			if i+1 < len(rest) && (rest[i] == ' ' || rest[i] == '\t') && (rest[i+1] == ' ' || rest[i+1] == '\t') {
 				return byteCol + i
 			}
 		}
