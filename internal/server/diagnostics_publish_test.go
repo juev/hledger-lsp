@@ -670,3 +670,26 @@ func TestPublishDiagnostics_BracketedSecondaryDateTakesThePrimaryYear(t *testing
 		})
 	}
 }
+
+func TestPublishDiagnostics_AssignmentWithTextBracketIsNotDated(t *testing.T) {
+	// hledger reads [2024-01-05=заметка] as text, so the assignment carries no
+	// posting date and the journal loads.
+	content := "2024-01-01 касса\n    現金:口座  = -4 GBP  ; [2024-01-05=заметка]\n    капитал\n"
+	for _, tc := range []struct {
+		name    string
+		newline string
+	}{
+		{name: "LF", newline: "\n"},
+		{name: "CRLF", newline: "\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := newTestServer()
+			diagnostics, err := ts.openAndWait(uri.URI("file:///assignment-text-bracket.journal"), strings.ReplaceAll(content, "\n", tc.newline))
+			require.NoError(t, err)
+
+			for _, d := range diagnostics {
+				assert.NotEqual(t, protocol.DiagnosticSeverityError, d.Severity, "got %v", codesIn(diagnostics))
+			}
+		})
+	}
+}

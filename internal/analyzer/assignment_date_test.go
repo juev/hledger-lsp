@@ -70,6 +70,10 @@ var assignmentDateCases = []struct {
 	{name: "bracketed date with spaces inside a note", input: "2024-01-01 t\n    c  = -4 GBP  ; paid [ 2024-01-20 ] by card\n    b\n"},
 	{name: "bracketed date with spaces on a comment line below", input: "2024-01-01 t\n    c  = -4 GBP\n    ; [ 2024-01-20 ]\n    b\n"},
 	{name: "bracket split across comment lines", input: "2024-01-01 t\n    c  = -4 GBP  ; ref [\n    ; 2024-01-20] x\n    b\n"},
+	{name: "bracket with text after =", input: "2024-01-01 t\n    c  = -4 GBP  ; [2024-01-05=garbage]\n    b\n"},
+	{name: "bracket with Cyrillic text after =", input: "2024-01-01 касса\n    касса:наличные  = -4 GBP  ; [2024-01-05=заметка]\n    капитал\n"},
+	{name: "bracket with a third part after = that is text", input: "2024-01-01 t\n    c  = -4 GBP  ; [2024-01-05=2024-01-06=x]\n    b\n"},
+	{name: "bracket with text after = on a comment line below", input: "2024-01-01 t\n    c  = -4 GBP\n    ; [2024-01-05=garbage]\n    b\n"},
 	{name: "invalid date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:garbage\n    b\n", invalid: true},
 	{name: "impossible date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:2024-02-30\n    b\n", invalid: true},
 	{name: "empty date tag", input: "2024-01-01 t\n    c  = -4 GBP  ; date:\n    b\n", invalid: true},
@@ -190,6 +194,9 @@ var postingDateCases = []struct {
 	{"date tag with trailing text", "    c  4 GBP  ; date:2024-01-20 text", 20},
 	{"capitalised tag name", "    c  4 GBP  ; Date:2024-01-20", 0},
 	{"Cyrillic and CJK text around a tag", "    c  4 GBP  ; заметка, date:2024-01-20 日本", 20},
+	{"bracket with text after =", "    c  4 GBP  ; [2024-01-20=garbage]", 0},
+	{"text bracket before a bracketed date", "    c  4 GBP  ; [2024-01-05=x] [2024-01-20]", 20},
+	{"bracket with Cyrillic text after = below", "    c  4 GBP\n    ; [2024-01-20=заметка]", 0},
 }
 
 func postingDateJournal(posting string) string {

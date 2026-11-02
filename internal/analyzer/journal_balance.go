@@ -736,8 +736,14 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 		if end < 0 {
 			break
 		}
-		primary, _, _ := strings.Cut(comment[start+1:start+1+end], "=")
-		if primary != strings.TrimSpace(primary) {
+		// hledger reads a bracket as a date only by the grammar validateBracketDates
+		// checks; any other bracket, such as [2024-01-05=garbage], is text.
+		content := comment[start+1 : start+1+end]
+		if !isBracketedDate(content) {
+			continue
+		}
+		primary, _, _ := strings.Cut(content, "=")
+		if _, ok := bracketDateYear(primary, transactionYear); !ok {
 			continue
 		}
 		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
