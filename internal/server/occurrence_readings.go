@@ -37,7 +37,7 @@ type occurrenceReading struct {
 	other *otherReading
 	// includedFrom lists the files that include the document under this context,
 	// in workspace order. An entry is empty for a tree whose root is the document.
-	includedFrom []string
+	includedFrom []occurrenceRef
 }
 
 // wholeDocument is the offset that stands for the end of the document.
@@ -66,7 +66,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 		primary.tree, primary.id = tree, firstOccurrenceIDForPath(tree, path)
 		if occurrence := tree.Occurrence(primary.id); occurrence != nil {
 			primary.context, primary.hasContext = occurrence.InitialContext, true
-			primary.includedFrom = []string{occurrenceLabel(tree, *occurrence)}
+			primary.includedFrom = []occurrenceRef{{tree, *occurrence}}
 		}
 	}
 	readings := []occurrenceReading{primary}
@@ -95,7 +95,7 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 				continue
 			}
 			if index := indexOfEqualReading(readings, tree.Resolved, occurrence.InitialContext); index >= 0 {
-				readings[index].includedFrom = append(readings[index].includedFrom, occurrenceLabel(tree.Resolved, occurrence))
+				readings[index].includedFrom = append(readings[index].includedFrom, occurrenceRef{tree.Resolved, occurrence})
 				continue
 			}
 			key := readingKey{tree.Resolved, occurrence.ID}
@@ -104,19 +104,17 @@ func (s *Server) occurrenceReadings(docURI uri.URI, content string) []occurrence
 				continue
 			}
 			used[key] = true
-			resolved, id := tree.Resolved, occurrence.ID
+			formatsAt := tree.Resolved.FormatsAtFunc(occurrence.ID)
 			readings = append(readings, occurrenceReading{
-				context:    occurrence.InitialContext,
-				hasContext: true,
-				tree:       tree.Resolved,
-				id:         occurrence.ID,
-				journal:    other.journal,
-				parseErrs:  other.parseErrs,
-				other:      other,
-				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
-					return resolved.FormatsAt(id, offset)
-				},
-				includedFrom: []string{occurrenceLabel(tree.Resolved, occurrence)},
+				context:      occurrence.InitialContext,
+				hasContext:   true,
+				tree:         tree.Resolved,
+				id:           occurrence.ID,
+				journal:      other.journal,
+				parseErrs:    other.parseErrs,
+				other:        other,
+				formatsAt:    formatsAt,
+				includedFrom: []occurrenceRef{{tree.Resolved, occurrence}},
 			})
 		}
 	}
@@ -143,38 +141,82 @@ func (s *Server) otherReadingFor(doc *cachedDoc, key readingKey, content string)
 	return other, true
 }
 
-// includeLabel names the include directive that created an occurrence, as
-// `parent.journal:12`. The root of a tree has no directive and an empty label.
-// occurrenceLabel is includeLabel made unambiguous: when another inclusion of
-// the same file sits at the same directive (a file reached through two parents
-// that both include it from line 1), the label also names the parents, nearest
-// first, as `mid.journal:1 via a.journal:1`.
-func occurrenceLabel(tree *include.ResolvedJournal, occurrence include.JournalOccurrence) string {
-	short := includeLabel(occurrence)
-	if short == "" {
-		return short
-	}
-	sameLabel := 0
-	for _, other := range tree.OccurrencesForCanonical(occurrence.Path) {
-		if includeLabel(other) == short {
-			sameLabel++
-		}
-	}
-	if sameLabel < 2 {
-		return short
-	}
-	label := short
-	for parent := tree.Occurrence(occurrence.Via.ParentID); parent != nil && parent.Via.SourcePath != ""; parent = tree.Occurrence(parent.Via.ParentID) {
-		label += " via " + includeLabel(*parent)
-	}
-	return label
+// occurrenceRef is one inclusion of a document. Its label costs file system
+// lookups, so it is computed only for the messages that show it.
+type occurrenceRef struct {
+	tree       *include.ResolvedJournal
+	occurrence include.JournalOccurrence
 }
 
+// labelsOf returns the distinct non-empty labels of the inclusions.
+func labelsOf(refs []occurrenceRef) []string {
+	var labels []string
+	for _, ref := range refs {
+		if label := occurrenceLabel(ref.tree, ref.occurrence); label != "" && !slices.Contains(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	return labels
+}
+
+// includeLabel names the include directive that created an occurrence, as
+// `parent.journal:12`. The root of a tree has no directive and an empty label.
 func includeLabel(occurrence include.JournalOccurrence) string {
 	if occurrence.Via.ParentID == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s:%d", filepath.Base(occurrence.Via.SourcePath), occurrence.Via.IncludeRange.Start.Line)
+}
+
+// occurrenceLabel is includeLabel made unambiguous: when another inclusion of
+// the same file sits at the same directive (a file reached through two parents
+// that both include it from line 1), the label also names as many of the
+// parents, nearest first, as it takes to tell them apart: `mid.journal:1 via
+// a.journal:1`.
+func occurrenceLabel(tree *include.ResolvedJournal, occurrence include.JournalOccurrence) string {
+	short := includeLabel(occurrence)
+	if short == "" {
+		return short
+	}
+
+	var group []include.JournalOccurrence
+	for _, other := range tree.OccurrencesForPath(occurrence.Path) {
+		if includeLabel(other) == short {
+			group = append(group, other)
+		}
+	}
+	if len(group) < 2 {
+		return short
+	}
+
+	ancestry := func(of include.JournalOccurrence) []string {
+		var chain []string
+		for parent := tree.Occurrence(of.Via.ParentID); parent != nil && parent.Via.ParentID != 0; parent = tree.Occurrence(parent.Via.ParentID) {
+			chain = append(chain, includeLabel(*parent))
+		}
+		return chain
+	}
+	own := ancestry(occurrence)
+	for depth := 1; depth <= len(own); depth++ {
+		unique := true
+		for _, other := range group {
+			if other.ID == occurrence.ID {
+				continue
+			}
+			otherChain := ancestry(other)
+			if slices.Equal(own[:depth], otherChain[:min(depth, len(otherChain))]) {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			return short + " via " + strings.Join(own[:depth], " via ")
+		}
+	}
+	if len(own) == 0 {
+		return short
+	}
+	return short + " via " + strings.Join(own, " via ")
 }
 
 // indexOfEqualReading finds the reading of the same include tree whose context
@@ -281,7 +323,7 @@ func mergeReadingDiagnostics(readings []occurrenceReading, perReading [][]protoc
 	}
 	labels := make([][]string, len(readings))
 	for index := range readings {
-		labels[index] = readings[index].includedFrom
+		labels[index] = labelsOf(readings[index].includedFrom)
 	}
 	return mergeQualified(perReading, labels)
 }

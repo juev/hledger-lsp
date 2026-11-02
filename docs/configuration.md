@@ -53,7 +53,8 @@ hover show every distinct value instead of picking one.
   directive. Inferred amounts and cost expansion are shown per distinct include context.
   Running balances are shown per inclusion, in every include tree that owns the file.
 - Hover on an amount lists each distinct reading of the amount and its cost with the
-  includes that give it, written from the parsed value.
+  includes that give it, written from the parsed value in the commodity style of that
+  occurrence, as the hints are (`1,5 USD` under a comma mark, `1,500. USD` under a dot).
 - When several inclusions give the same running balance or the same inferred amount, one value
   is shown and the tooltip is omitted. Inclusions at the same directive (a file reached through
   two parents that both include it from line 1) are told apart by their parents, nearest

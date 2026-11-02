@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,8 @@ func hoverAt(t *testing.T, ts *testServer, docURI uri.URI, line, character uint3
 }
 
 // Hover on an amount lists every value the occurrences read from it, with the
-// include it holds for. `1,500` is 1.5 under a comma mark and 1500 under a dot.
+// include it holds for. `1,500` is 1.5 under a comma mark and 1500 under a dot,
+// and each is written in the style of its occurrence.
 func TestHover_AmountListsEveryReadingOfAnAmbiguousNumber(t *testing.T) {
 	samples := map[string]string{
 		"ascii":    "2024-01-01 x\n    expenses:food  1,500 USD\n    assets:cash\n",
@@ -71,8 +73,10 @@ func TestHover_AmountListsEveryReadingOfAnAmbiguousNumber(t *testing.T) {
 					content := hoverAt(t, ts, docURI, 1, 22)
 
 					symbol := strings.Fields(text)[4]
-					assert.Contains(t, content, "1.5 "+symbol)
-					assert.Contains(t, content, "1500 "+symbol)
+					// Each reading is written in the style of its own occurrence,
+					// like the inlay hints: 1.5 under a comma mark, 1500 under a dot.
+					assert.Contains(t, content, "1,5 "+symbol)
+					assert.Contains(t, content, "1,500. "+symbol)
 					assert.Contains(t, content, "when included from")
 				})
 			}
@@ -203,9 +207,9 @@ func TestInlayHint_TooltipLabelsOfADiamondAreDistinct(t *testing.T) {
 
 	hints := hintsAt(t, ts, docURI)
 	require.NotEmpty(t, hints)
-	tooltip := tooltipString(hints[0].Tooltip)
-	assert.Contains(t, tooltip, "mid.journal:1 via a.journal:1")
-	assert.Contains(t, tooltip, "mid.journal:1 via b.journal:1")
+	assert.Equal(t,
+		"10 USD (when included from mid.journal:1 via a.journal:1)\n20 USD (when included from mid.journal:1 via b.journal:1)",
+		tooltipString(hints[0].Tooltip))
 }
 
 // More inclusions than any fixed cap must still be replayed once, not on every
@@ -242,4 +246,46 @@ func TestInlayHint_RunningBalancesOfManyInclusionsAreReused(t *testing.T) {
 	first := replays()
 	assert.Len(t, first, inclusions)
 	assert.Equal(t, first, replays(), "an unchanged document and tree must reuse every replay")
+}
+
+// Hint requests running while the buffers of the journal are edited must leave
+// the workspace describing the final text: after the burst, the next request
+// sees both edits.
+func TestInlayHint_ConcurrentRequestsDoNotLoseEdits(t *testing.T) {
+	const seedB = "2024-01-01 seed\n    assets:cash  %d USD\n    income:job\n"
+	const spendA = "2024-02-01 x\n    assets:cash  -%d USD\n    expenses:food\n"
+	srv, dir := newInlayWorkspace(t, map[string]string{
+		"all.journal": "include b.journal\ninclude a.journal\n",
+		"a.journal":   fmt.Sprintf(spendA, 1),
+		"b.journal":   fmt.Sprintf(seedB, 100),
+	})
+	enableOnlyRunningBalances(srv)
+	aURI := uri.File(filepath.Join(dir, "a.journal"))
+	bURI := uri.File(filepath.Join(dir, "b.journal"))
+	openDocument(t, srv, aURI, fmt.Sprintf(spendA, 1))
+	openDocument(t, srv, bURI, fmt.Sprintf(seedB, 100))
+
+	for round := range 20 {
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				requestHintLabels(t, srv, aURI)
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			replaceDocument(t, srv, bURI, int32(round*10+2), fmt.Sprintf(seedB, round+1000))
+			replaceDocument(t, srv, aURI, int32(round*10+2), fmt.Sprintf(spendA, round+1))
+		}()
+		wg.Wait()
+
+		want := []protocol.InlayHintLabel{
+			protocol.String(fmt.Sprintf("balance: %d USD", round+1000-(round+1))),
+			protocol.String(fmt.Sprintf("balance: %d USD", round+1)),
+		}
+		require.Equal(t, want, requestHintLabels(t, srv, aURI), "round %d", round)
+	}
 }

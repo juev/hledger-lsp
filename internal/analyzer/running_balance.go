@@ -33,6 +33,13 @@ type PostingRef struct {
 // empty amount, and so does an elided posting whose group holds no other amount.
 // A written or inferred zero is a real amount the register lists.
 func RunningBalances(sourced []include.SourcedTransaction, id include.OccurrenceID) map[PostingRef]map[string]decimal.Decimal {
+	return RunningBalancesFor(sourced, []include.OccurrenceID{id})[id]
+}
+
+// RunningBalancesFor replays the journal once and returns the running balances of
+// each of the occurrences ids, keyed by occurrence. A file included many times
+// costs one replay instead of one per inclusion.
+func RunningBalancesFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID) map[include.OccurrenceID]map[PostingRef]map[string]decimal.Decimal {
 	var entries []registerEntry
 	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
 	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
@@ -54,15 +61,18 @@ func RunningBalances(sourced []include.SourcedTransaction, id include.Occurrence
 
 	hidden := registerHidden(sourced, entries)
 	balances := accountBalances{}
-	result := make(map[PostingRef]map[string]decimal.Decimal)
+	result := make(map[include.OccurrenceID]map[PostingRef]map[string]decimal.Decimal, len(ids))
+	for _, id := range ids {
+		result[id] = make(map[PostingRef]map[string]decimal.Decimal)
+	}
 	for _, step := range entries {
 		source := &sourced[step.sourceOrder]
 		account := source.Transaction.Postings[step.postingIndex].Account.GetResolvedName()
 		for commodity, quantity := range step.contribution {
 			balances.add(account, commodity, quantity)
 		}
-		if source.OccurrenceID == id && !hidden[postingKey{step.sourceOrder, step.postingIndex}] {
-			result[PostingRef{TransactionIndex: source.Index, PostingIndex: step.postingIndex}] = cloneAmounts(balances[account])
+		if wanted, ok := result[source.OccurrenceID]; ok && !hidden[postingKey{step.sourceOrder, step.postingIndex}] {
+			wanted[PostingRef{TransactionIndex: source.Index, PostingIndex: step.postingIndex}] = cloneAmounts(balances[account])
 		}
 	}
 	return result

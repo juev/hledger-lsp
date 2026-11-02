@@ -35,34 +35,7 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	path := uriToPath(params.TextDocument.URI)
 	readings := s.occurrenceReadings(params.TextDocument.URI, content)
-	effectsByReading := make([]map[analyzer.PostingRef]analyzer.PostingEffect, len(readings))
-	var refs []analyzer.PostingRef
-	known := make(map[analyzer.PostingRef]bool)
-	for index := range readings {
-		var effects []analyzer.PostingEffect
-		if readings[index].other == nil {
-			effects = s.cachedPostingEffects(params.TextDocument.URI, content)
-		} else {
-			effects = readings[index].other.postingEffects()
-		}
-		effectsByReading[index] = make(map[analyzer.PostingRef]analyzer.PostingEffect, len(effects))
-		for _, effect := range effects {
-			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
-			effectsByReading[index][ref] = effect
-			if !known[ref] {
-				known[ref] = true
-				refs = append(refs, ref)
-			}
-		}
-	}
-	if len(readings) > 1 {
-		sort.Slice(refs, func(i, j int) bool {
-			if refs[i].TransactionIndex != refs[j].TransactionIndex {
-				return refs[i].TransactionIndex < refs[j].TransactionIndex
-			}
-			return refs[i].PostingIndex < refs[j].PostingIndex
-		})
-	}
+	primaryEffects := s.cachedPostingEffects(params.TextDocument.URI, content)
 
 	// Replaying the balances walks the whole include tree, so it runs only when
 	// the result will be read, and is reused until the document or its tree moves.
@@ -75,21 +48,12 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	for _, ref := range refs {
-		posting, ok := postingOf(readings, effectsByReading, ref)
-		if !ok {
-			continue
-		}
-		// Commodity formats below are rebuilt per posting, so a posting the client
-		// did not ask about must not reach them.
-		if !postingTouchesRange(mapper, posting, params.Range) {
-			continue
-		}
+	emit := func(ref analyzer.PostingRef, posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool)) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
 			var values []hintValue
 			for index := range readings {
-				if effect, ok := effectsByReading[index][ref]; ok && len(effect.InferredAmounts) > 0 {
+				if effect, ok := effectAt(index); ok && len(effect.InferredAmounts) > 0 {
 					values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
 				}
 			}
@@ -105,7 +69,7 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		if settings.InlayHints.CostExpansion && posting.Cost != nil {
 			var values []hintValue
 			for index := range readings {
-				if effect, ok := effectsByReading[index][ref]; ok && len(effect.CostContribution) > 0 {
+				if effect, ok := effectAt(index); ok && len(effect.CostContribution) > 0 {
 					values = addHintValue(values, formatAmounts(effect.CostContribution, readings[index].formatsAt(offset)), readings[index].includedFrom)
 				}
 			}
@@ -116,15 +80,97 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		var values []hintValue
 		for _, occurrence := range occurrences {
 			if amounts := occurrence.balances[ref]; len(amounts) > 0 {
-				formats := occurrence.formatsAt(offset)
-				values = addHintValue(values, formatAmounts(amounts, formats), []string{occurrence.label})
+				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
 		if len(values) > 0 {
 			hints = appendHintInRange(hints, params.Range, valuedHint(mapper.ByteToLSP(posting.Range.End.Offset), "balance: ", values))
 		}
 	}
+
+	if len(readings) == 1 {
+		// The document is read one way: walk its effects directly, and only the
+		// postings the client asked about.
+		for _, effect := range primaryEffects {
+			posting := effectPosting(readings[0].journal, effect)
+			// Commodity formats are rebuilt per posting, so a posting the client
+			// did not ask about must not reach them.
+			if posting == nil || !postingTouchesRange(mapper, posting, params.Range) {
+				continue
+			}
+			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
+			emit(ref, posting, func(int) (analyzer.PostingEffect, bool) { return effect, true })
+		}
+		return hints, nil
+	}
+
+	effectsByReading := make([]map[analyzer.PostingRef]analyzer.PostingEffect, len(readings))
+	var refs []analyzer.PostingRef
+	known := make(map[analyzer.PostingRef]bool)
+	for index := range readings {
+		if readings[index].other == nil {
+			effectsByReading[index] = postingEffectIndex(primaryEffects)
+		} else {
+			effectsByReading[index] = readings[index].other.postingEffectIndex()
+		}
+		for _, ref := range effectOrder(index, primaryEffects, readings) {
+			if !known[ref] {
+				known[ref] = true
+				refs = append(refs, ref)
+			}
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].TransactionIndex != refs[j].TransactionIndex {
+			return refs[i].TransactionIndex < refs[j].TransactionIndex
+		}
+		return refs[i].PostingIndex < refs[j].PostingIndex
+	})
+	for _, ref := range refs {
+		posting, ok := postingOf(readings, effectsByReading, ref)
+		if !ok || !postingTouchesRange(mapper, posting, params.Range) {
+			continue
+		}
+		emit(ref, posting, func(index int) (analyzer.PostingEffect, bool) {
+			effect, ok := effectsByReading[index][ref]
+			return effect, ok
+		})
+	}
 	return hints, nil
+}
+
+// effectPosting returns the posting an effect belongs to, or nil when the effect
+// no longer matches the journal.
+func effectPosting(journal *ast.Journal, effect analyzer.PostingEffect) *ast.Posting {
+	if effect.TransactionIndex >= len(journal.Transactions) {
+		return nil
+	}
+	transaction := &journal.Transactions[effect.TransactionIndex]
+	if effect.PostingIndex >= len(transaction.Postings) {
+		return nil
+	}
+	return &transaction.Postings[effect.PostingIndex]
+}
+
+func postingEffectIndex(effects []analyzer.PostingEffect) map[analyzer.PostingRef]analyzer.PostingEffect {
+	index := make(map[analyzer.PostingRef]analyzer.PostingEffect, len(effects))
+	for _, effect := range effects {
+		index[analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}] = effect
+	}
+	return index
+}
+
+// effectOrder lists the postings reading index has effects for.
+func effectOrder(index int, primaryEffects []analyzer.PostingEffect, readings []occurrenceReading) []analyzer.PostingRef {
+	effects := primaryEffects
+	if readings[index].other != nil {
+		effects = readings[index].other.postingEffects()
+	}
+	refs := make([]analyzer.PostingRef, 0, len(effects))
+	for _, effect := range effects {
+		refs = append(refs, analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex})
+	}
+	return refs
 }
 
 // postingOf returns the posting a ref names, from the first reading that has an
@@ -145,7 +191,7 @@ func postingOf(readings []occurrenceReading, effects []map[analyzer.PostingRef]a
 
 // balanceOccurrence is one inclusion of the document with its replayed balances.
 type balanceOccurrence struct {
-	label     string
+	ref       occurrenceRef
 	balances  map[analyzer.PostingRef]map[string]decimal.Decimal
 	formatsAt func(offset int) map[string]formatter.CommodityFormat
 }
@@ -174,46 +220,40 @@ func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []bala
 			continue
 		}
 		resolved := tree.Resolved
-		for _, occurrence := range resolved.OccurrencesForCanonical(path) {
-			id := occurrence.ID
-			used[readingKey{tree: resolved, id: id}] = true
+		occurrences := resolved.OccurrencesForCanonical(path)
+		ids := make([]include.OccurrenceID, len(occurrences))
+		for index, occurrence := range occurrences {
+			ids[index] = occurrence.ID
+			used[readingKey{tree: resolved, id: occurrence.ID}] = true
+		}
+		replays := s.cachedRunningBalancesOf(docURI, content, resolved, ids)
+		for _, occurrence := range occurrences {
 			result = append(result, balanceOccurrence{
-				label:    occurrenceLabel(resolved, occurrence),
-				balances: s.cachedRunningBalances(docURI, content, resolved, id),
-				formatsAt: func(offset int) map[string]formatter.CommodityFormat {
-					return resolved.FormatsAt(id, offset)
-				},
+				ref:       occurrenceRef{resolved, occurrence},
+				balances:  replays[occurrence.ID],
+				formatsAt: resolved.FormatsAtFunc(occurrence.ID),
 			})
 		}
 	}
 	return result
 }
 
-// hintValue is one value a hint can show, with the includes that give it.
+// hintValue is one value a hint can show, with the inclusions that give it.
 type hintValue struct {
-	text   string
-	labels []string
+	text string
+	refs []occurrenceRef
 }
 
-// addHintValue records value for the includes labelled, merging equal values.
-func addHintValue(values []hintValue, text string, labels []string) []hintValue {
+// addHintValue records value for the inclusions, merging equal values. The
+// inclusions are named only when a tooltip is built.
+func addHintValue(values []hintValue, text string, refs []occurrenceRef) []hintValue {
 	for index := range values {
 		if values[index].text == text {
-			for _, label := range labels {
-				if label != "" && !slices.Contains(values[index].labels, label) {
-					values[index].labels = append(values[index].labels, label)
-				}
-			}
+			values[index].refs = append(values[index].refs, refs...)
 			return values
 		}
 	}
-	kept := make([]string, 0, len(labels))
-	for _, label := range labels {
-		if label != "" {
-			kept = append(kept, label)
-		}
-	}
-	return append(values, hintValue{text: text, labels: kept})
+	return append(values, hintValue{text: text, refs: slices.Clone(refs)})
 }
 
 // maxHintValues is how many distinct values a hint shows before it elides the
@@ -247,8 +287,8 @@ func valuedHint(position protocol.Position, prefix string, values []hintValue) p
 	lines := make([]string, 0, len(values))
 	for _, value := range values {
 		line := value.text
-		if len(value.labels) > 0 {
-			line += " (when included from " + strings.Join(value.labels, ", ") + ")"
+		if labels := labelsOf(value.refs); len(labels) > 0 {
+			line += " (when included from " + strings.Join(labels, ", ") + ")"
 		} else {
 			line += " (when this file is the journal root)"
 		}
