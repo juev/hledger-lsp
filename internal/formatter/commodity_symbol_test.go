@@ -79,3 +79,36 @@ func TestFormatter_CommoditySymbolWithPunctuationInLotPriceKeepsReading(t *testi
 		})
 	}
 }
+
+// A comma that stands for a symbol sits inside the declared number as well, so the
+// format must be read from its ends and the symbol must keep its space.
+func TestFormatter_CommaSymbolSurvivesDeclaredFormats(t *testing.T) {
+	directives := []string{
+		"commodity 1.000,00 ,\n", "commodity 1,000.00 ,\n", "D 1,000.00 ,\n", "D 1.000,00 ,\n", "D 1000.00 ,\n",
+		"commodity 1.000,00 !\n", "commodity ,\n    format 1.000,00 ,\n", "commodity , 1.000,00\n", "commodity 1.000,00 руб,\n",
+	}
+	amounts := []string{"5 ,", "1.234 ,", "1,5 ,", "15,000 ,", "-5 ,", "5 !", "5 руб,", ", 5"}
+	for _, directive := range directives {
+		for _, amount := range amounts {
+			t.Run(directive+amount, func(t *testing.T) {
+				input := directive + "2024-01-01 x\n    a  " + amount + "\n    b\n"
+				before, errs := parser.Parse(input)
+				require.Empty(t, errs)
+
+				once := formatForOracle(t, input)
+				after, errs := parser.Parse(once)
+				require.Empty(t, errs, "formatted journal:\n%s", once)
+
+				want, got := before.Transactions[0].Postings[0].Amount, after.Transactions[0].Postings[0].Amount
+				assert.True(t, want.Quantity.Equal(got.Quantity), "quantity %s became %s in:\n%s", want.Quantity, got.Quantity, once)
+				assert.Equal(t, want.Commodity.Symbol, got.Commodity.Symbol, "formatted journal:\n%s", once)
+				assert.Equal(t, once, formatForOracle(t, once))
+			})
+		}
+	}
+}
+
+func TestFormatter_CommaSymbolKeepsTheDeclaredNumberFormat(t *testing.T) {
+	input := "commodity 1.000,00 ,\n2024-01-01 x\n    a  1234.5 ,\n    b\n"
+	assert.Equal(t, "commodity 1.000,00 ,\n2024-01-01 x\n    a  12.345,00 ,\n    b\n", formatForOracle(t, input))
+}

@@ -1091,6 +1091,11 @@ func resolveCommodityDisplay(amount *ast.Amount, commodityFormats map[string]Com
 		qty := strings.TrimLeft(formatAmountQuantity(amount, commodityFormats), "+-")
 		spaceBetween = strings.HasPrefix(qty, ",")
 	}
+	// Likewise a symbol that starts with a comma, written right after a number,
+	// would read as the number's decimal mark.
+	if position == ast.CommodityRight && !spaceBetween {
+		spaceBetween = strings.HasPrefix(amount.Commodity.Symbol, ",")
+	}
 	return position, spaceBetween
 }
 

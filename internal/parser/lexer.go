@@ -205,6 +205,10 @@ func (l *Lexer) scanInLine() Token {
 		}
 		return l.scanQuotedCommodity()
 	case ch == '-' || ch == '+':
+		// Header line: a sign is part of the description
+		if l.inTransaction && !l.onPostingLine && !l.afterIndent {
+			return l.scanText()
+		}
 		if l.nextIsCurrencySymbol() || l.nextIsLetterCommodity() || l.nextIsDigit() || l.signStartsPostingAmount() {
 			return l.scanSign()
 		}
