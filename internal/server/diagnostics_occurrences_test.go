@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -171,4 +172,116 @@ func TestPublishDiagnostics_ParseErrorOfLaterOccurrenceSurvivesOpeningTheFile(t 
 	require.Len(t, errorsFound, 1, "messages: %v", messages(published))
 	assert.Contains(t, tooltipString(errorsFound[0].Message), "(when included from us.journal:2)")
 	assert.Equal(t, uint32(0), errorsFound[0].Range.Start.Line)
+}
+
+// publishedSets returns, in order, the message sets published for docURI so far.
+func publishedSets(ts *testServer, docURI uri.URI) [][]string {
+	ts.client.mu.Lock()
+	defer ts.client.mu.Unlock()
+	var sets [][]string
+	for _, params := range ts.client.diagnostics {
+		if params.URI == docURI {
+			sets = append(sets, messages(params.Diagnostics))
+		}
+	}
+	return sets
+}
+
+func lastSet(ts *testServer, docURI uri.URI) []string {
+	sets := publishedSets(ts, docURI)
+	if len(sets) == 0 {
+		return nil
+	}
+	return sets[len(sets)-1]
+}
+
+// Another workspace root is its own include tree with its own declarations: a
+// root that declares nothing makes the accounts of the shared file undeclared
+// there, whichever root the server meets first.
+func TestPublishDiagnostics_OccurrenceOfAnotherRootUsesItsOwnDeclarations(t *testing.T) {
+	shared := "2024-01-01 x\n    expenses:food   10 EUR\n    assets:cash\n"
+	declares := "account expenses:food\naccount assets:cash\ninclude shared.journal\n"
+	plain := "include shared.journal\n"
+
+	tests := []struct {
+		name, aRoot, zRoot, label string
+	}{
+		{"declaring root first", declares, plain, "(when included from z-root.journal:1)"},
+		{"declaring root last", plain, declares, "(when included from a-root.journal:1)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJournals(t, dir, map[string]string{"a-root.journal": tt.aRoot, "z-root.journal": tt.zRoot, "shared.journal": shared})
+
+			undeclared := undeclaredAccounts(publishedFor(t, dir, shared, strict))
+			require.Len(t, undeclared, 2, "messages: %v", messages(undeclared))
+			for _, d := range undeclared {
+				assert.Contains(t, fmt.Sprint(d.Message), tt.label)
+			}
+		})
+	}
+}
+
+// An edit to the including file changes what the included file's diagnostics
+// are, so the open included file is published again.
+func TestPublishDiagnostics_EditOfIncludingFileRepublishesOpenIncludedFile(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "2024-01-01 lunch\n    expenses:food   10 EUR\n    assets:cash\n"
+	declared := "account a:expenses:food\naccount a:assets:cash\naccount b:expenses:food\n\n"
+	both := declared + "apply account a\ninclude shared.journal\nend apply account\n\napply account b\ninclude shared.journal\nend apply account\n"
+	fixed := "account b:assets:cash\n" + both
+	oneInclude := declared + "apply account a\ninclude shared.journal\nend apply account\n"
+
+	for name, edited := range map[string]string{"declaration added": fixed, "second include removed": oneInclude} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJournals(t, dir, map[string]string{"main.journal": both, "shared.journal": shared})
+			ts := initWorkspaceTestServer(t, dir)
+			strict(ts)
+			mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+			require.NoError(t, ts.openDocument(mainURI, both))
+			require.NoError(t, ts.openDocument(sharedURI, shared))
+			require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) > 0 }, 2*time.Second, 10*time.Millisecond,
+				"shared.journal reports the undeclared account of the second include")
+
+			_, err := ts.replaceAndWait(mainURI, edited)
+			require.NoError(t, err)
+			require.Eventually(t, func() bool { return len(lastSet(ts, sharedURI)) == 0 }, 2*time.Second, 10*time.Millisecond,
+				"shared.journal still shows %v", lastSet(ts, sharedURI))
+		})
+	}
+}
+
+// What is published for a file does not depend on which file was opened last.
+func TestPublishDiagnostics_IncludedFileSetDoesNotDependOnWhoPublishedLast(t *testing.T) {
+	t.Setenv("LEDGER_FILE", "")
+	t.Setenv("HLEDGER_JOURNAL", "")
+	shared := "; пример 費用\ncommodity 1000,00 費用 ; коммент\n\n2024-01-01 обед\n    расходы:еда   10 費用\n    активы:касса\n"
+	mainText := "include eu.journal\ninclude us.journal\n"
+
+	dir := t.TempDir()
+	writeJournals(t, dir, map[string]string{
+		"main.journal": mainText, "eu.journal": "decimal-mark ,\ninclude shared.journal\n",
+		"us.journal": "decimal-mark .\ninclude shared.journal\n", "shared.journal": shared,
+	})
+	ts := initWorkspaceTestServer(t, dir)
+	strict(ts)
+	mainURI, sharedURI := uri.File(filepath.Join(dir, "main.journal")), uri.File(filepath.Join(dir, "shared.journal"))
+
+	require.NoError(t, ts.openDocument(sharedURI, shared))
+	waitForDocument(t, ts.client, sharedURI)
+	want := lastSet(ts, sharedURI)
+	require.NotEmpty(t, want)
+	assert.Contains(t, strings.Join(want, "\n"), "when included from us.journal:2")
+	seen := len(publishedSets(ts, sharedURI))
+
+	require.NoError(t, ts.openDocument(mainURI, mainText))
+	waitForDocument(t, ts.client, mainURI)
+	time.Sleep(150 * time.Millisecond)
+
+	for _, set := range publishedSets(ts, sharedURI)[seen:] {
+		assert.ElementsMatch(t, want, set, "opening the including file replaced the included file's set")
+	}
 }
