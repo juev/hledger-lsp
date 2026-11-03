@@ -12,6 +12,10 @@ type PostingEffect struct {
 	TransactionIndex int
 	PostingIndex     int
 	InferredAmounts  map[string]decimal.Decimal
+	// InferredZero holds the commodities of an inferred amount that balances to
+	// zero in all of them, each at zero: hledger infers "0 EUR" there, while
+	// InferredAmounts leaves zeros out. It is nil for every other posting.
+	InferredZero     map[string]decimal.Decimal
 	CostContribution map[string]decimal.Decimal
 }
 
@@ -29,12 +33,16 @@ func CalculatePostingEffects(journal *ast.Journal) []PostingEffect {
 
 		for postingIndex := range transaction.Postings {
 			posting := &transaction.Postings[postingIndex]
-			effects = append(effects, PostingEffect{
+			effect := PostingEffect{
 				TransactionIndex: transactionIndex,
 				PostingIndex:     postingIndex,
 				InferredAmounts:  cloneAmounts(inferred[postingIndex]),
 				CostContribution: costContribution(posting),
-			})
+			}
+			if amounts, ok := inferred[postingIndex]; ok && len(amounts) == 0 {
+				effect.InferredZero = inferredZero(transaction.Postings, postingIndex)
+			}
+			effects = append(effects, effect)
 		}
 	}
 
@@ -67,6 +75,25 @@ func inferredAmountsByPosting(postings []ast.Posting) map[int]map[string]decimal
 	}
 
 	return inferred
+}
+
+// inferredZero returns the commodities of the balancing group of a posting whose
+// inferred amount is zero, each at zero.
+func inferredZero(postings []ast.Posting, posting int) map[string]decimal.Decimal {
+	groups := postingGroups(postings)
+	group, ok := groupOf(groups, posting)
+	if !ok {
+		return nil
+	}
+	members := make([]ast.Posting, 0, len(groups[group]))
+	for _, index := range groups[group] {
+		members = append(members, postings[index])
+	}
+	zero := make(map[string]decimal.Decimal)
+	for commodity := range sumByCommodity(members) {
+		zero[commodity] = decimal.Zero
+	}
+	return zero
 }
 
 // dropAssignedGroups removes the inferred amounts of the groups that hold a
