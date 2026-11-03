@@ -77,6 +77,11 @@ type Server struct {
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
 	diagEntries  map[uri.URI]*diagEntry
+	// importWatchKick asks the import watcher loop for another pass; importWatched
+	// is the set of paths it last registered, owned by that loop.
+	importWatchKick chan struct{}
+	importWatchMu   sync.Mutex
+	importWatched   []string
 	// importTimer coalesces republishes after import sources change; diagMu
 	// guards it.
 	importTimer *time.Timer
@@ -101,6 +106,8 @@ func NewServerWithVersion(version string) *Server {
 		diagDebounce: 100 * time.Millisecond,
 		diagEntries:  make(map[uri.URI]*diagEntry),
 		tokenCache:   newSemanticTokensCache(),
+		// One pending pass is enough: the loop reads the newest sources.
+		importWatchKick: make(chan struct{}, 1),
 	}
 	// Honour unsaved editor content for .rules files that are pulled in via
 	// transitive `include` from a currently-open rules file. The loader first
@@ -357,6 +364,7 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 	}
 	if s.clientCapabilities.supportsDynamicFileWatchers {
 		go s.registerFileWatchers()
+		s.scheduleImportWatchers()
 	}
 	return nil
 }
@@ -365,10 +373,10 @@ func (s *Server) registerFileWatchers() {
 	if s.client == nil {
 		return
 	}
-	watchers := make([]protocol.FileSystemWatcher, 0, 9)
-	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.prices", "**/*.rules", "**/*.csv", "**/*.ssv", "**/*.tsv"} {
+	watchers := make([]protocol.FileSystemWatcher, 0, len(watchedExtensions))
+	for _, extension := range watchedExtensions {
 		watchers = append(watchers, protocol.FileSystemWatcher{
-			GlobPattern: protocol.Pattern(pattern),
+			GlobPattern: protocol.Pattern("**/*" + extension),
 		})
 	}
 
