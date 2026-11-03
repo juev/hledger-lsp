@@ -943,6 +943,12 @@ func (p *Parser) parseAmount() *ast.Amount {
 		}
 		mark = rawTokenValue[:1]
 	}
+	if at := invalidSeparatorAt(rawTokenValue); at >= 0 {
+		// Normalizing would drop the stray separator and read 1,000.00. as
+		// 100000, which formatting would then write back.
+		p.errorAt(advancePosition(numberPos, rawTokenValue[:at]), numberEnd, invalidSeparatorMessage)
+		return nil
+	}
 	numberStr = normalizeNumber(numberStr, mark)
 
 	if hasExponent(rawTokenValue) && hasDigitGroupSeparator(rawTokenValue, numberStr) {
@@ -1357,7 +1363,7 @@ func (p *Parser) parseCommodityDirective(startPos Position) ast.Directive {
 
 	if number != "" {
 		switch {
-		case endsInInvalidSeparator(number):
+		case invalidSeparatorAt(number) >= 0:
 			p.errorAt(formatPos, formatEnd, "invalid number: %s", number)
 		case dir.Commodity.Symbol == "" && hasInlineFormat && p.defaultCommodityDecimalMark != "":
 			// hledger reads a number without a symbol as an amount of the D
@@ -1839,7 +1845,7 @@ func (p *Parser) parseDefaultCommodityDirective(startPos Position) ast.Directive
 	// as an amount of that D's commodity in that D's style, so it changes
 	// neither the commodity nor the mark, and needs no decimal mark of its own.
 	if numberStr != "" {
-		if endsInInvalidSeparator(numberStr) {
+		if invalidSeparatorAt(numberStr) >= 0 {
 			p.errorAt(numberPos, numberEnd, "invalid number: %s", numberStr)
 		}
 		if dir.Symbol != "" || p.defaultCommodityDecimalMark == "" {
@@ -2602,20 +2608,67 @@ func numberDecimalMark(number, inForce string) string {
 	return mark
 }
 
-// endsInInvalidSeparator reports whether a number ends in a separator that
-// hledger rejects as an invalid use of separator: one the number already uses
-// before (1.000., 1,000.00.), or one after a decimal mark that a space digit
-// group and the other separator already settle (1 000.00,).
-func endsInInvalidSeparator(number string) bool {
-	last := len(number) - 1
-	if last <= 0 || (number[last] != '.' && number[last] != ',') {
-		return false
+// invalidSeparatorAt returns the byte offset of a separator that hledger rejects
+// as an invalid use of separator, or -1 when the number has none.
+//
+// hledger reads the longest number it can: digits, then digit groups that all
+// use one separator (".", "," or a space), then an optional decimal mark that
+// differs from that separator, with or without digits after it. A "." or ","
+// right after such a number cannot start anything else, so hledger rejects it:
+// 1..0, 1.,0, 1.000., 1,000.00., 1 000.00, all fail at their last separator. The
+// exponent is read after this check, so only the mantissa is examined.
+func invalidSeparatorAt(number string) int {
+	mantissa := number
+	if i := strings.IndexAny(number, "eE"); i >= 0 {
+		mantissa = number[:i]
 	}
-	before := number[:last]
-	mark := number[last : last+1]
-	return strings.Contains(before, mark) ||
-		(strings.Contains(before, " ") && strings.Contains(before, otherDecimalMark(mark)))
+	isMark := func(c byte) bool { return c == '.' || c == ',' }
+	isDigit := func(i int) bool { return i < len(mantissa) && mantissa[i] >= '0' && mantissa[i] <= '9' }
+	i := 0
+	digits := func() bool {
+		start := i
+		for isDigit(i) {
+			i++
+		}
+		return i > start
+	}
+
+	switch {
+	case i < len(mantissa) && isMark(mantissa[i]):
+		// A leading decimal mark needs digits after it; a number without them is
+		// reported elsewhere.
+		i++
+		if !digits() {
+			return -1
+		}
+	case !digits():
+		return -1
+	case i < len(mantissa) && (isMark(mantissa[i]) || mantissa[i] == ' ') && isDigit(i+1):
+		separator := mantissa[i]
+		i++
+		digits()
+		for i < len(mantissa) && mantissa[i] == separator && isDigit(i+1) {
+			i++
+			digits()
+		}
+		if i < len(mantissa) && isMark(mantissa[i]) && mantissa[i] != separator {
+			i++
+			digits()
+		}
+	case i < len(mantissa) && isMark(mantissa[i]):
+		// A decimal mark with no digits after it, as in 10.
+		i++
+	}
+
+	if i < len(mantissa) && isMark(mantissa[i]) {
+		return i
+	}
+	return -1
 }
+
+// invalidSeparatorMessage is the error for a number with a separator hledger
+// cannot read.
+const invalidSeparatorMessage = "invalid number: invalid use of separator"
 
 func otherDecimalMark(mark string) string {
 	if mark == "." {

@@ -200,6 +200,28 @@ func TestMissingFile(t *testing.T) {
 	assert.Contains(t, stderr, "missing.journal")
 }
 
+// A separator after a complete number is an error to hledger. Reading it as a
+// digit group separator would let -w rewrite 1,000.00. as if it were valid.
+func TestRepeatedSeparatorRefusesToFormat(t *testing.T) {
+	for _, journal := range []string{
+		"2024-01-01 x\n  a  1..0 USD\n  b\n",
+		"2024-01-01 x\r\n  a  1..0 USD\r\n  b\r\n",
+		"2024-01-01 касса\n  расходы:еда  1,000.00. ₽\n  現金\n",
+	} {
+		for _, mode := range []string{"-w", "-c"} {
+			path := writeJournal(t, t.TempDir(), "a.journal", journal)
+
+			code, stdout, stderr := run(t, "", mode, path)
+
+			assert.Equal(t, ExitError, code, "%s %q", mode, journal)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, path+":2:")
+			assert.Contains(t, stderr, "invalid use of separator")
+			assert.Equal(t, journal, readFile(t, path))
+		}
+	}
+}
+
 func TestCRLFIsPreserved(t *testing.T) {
 	crlf := func(s string) string { return strings.ReplaceAll(s, "\n", "\r\n") }
 
