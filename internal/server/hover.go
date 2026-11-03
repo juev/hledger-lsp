@@ -551,7 +551,7 @@ func buildPayeeHoverWithTransactions(payee string, transactions []ast.Transactio
 func buildDateHover(tx *ast.Transaction) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "**Date:** %04d-%02d-%02d\n\n", tx.Date.Year, tx.Date.Month, tx.Date.Day)
+	fmt.Fprintf(&sb, "**Date:** %s-%02d-%02d\n\n", tx.Date.YearText(), tx.Date.Month, tx.Date.Day)
 
 	payee := getPayeeOrDescription(tx)
 	if payee != "" {

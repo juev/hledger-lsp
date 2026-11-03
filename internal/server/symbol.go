@@ -66,7 +66,7 @@ func groupTransactionsByMonth(mapper *lsputil.PositionMapper, transactions []ast
 	var order []string
 
 	for _, tx := range transactions {
-		key := fmt.Sprintf("%04d-%02d", tx.Date.Year, tx.Date.Month)
+		key := fmt.Sprintf("%s-%02d", tx.Date.YearText(), tx.Date.Month)
 		g, ok := groups[key]
 		if !ok {
 			g = &monthGroup{label: key, first: tx, last: tx}
@@ -169,7 +169,7 @@ func transactionToSymbol(mapper *lsputil.PositionMapper, tx ast.Transaction) pro
 }
 
 func formatTransactionName(tx ast.Transaction) string {
-	date := fmt.Sprintf("%04d-%02d-%02d", tx.Date.Year, tx.Date.Month, tx.Date.Day)
+	date := fmt.Sprintf("%s-%02d-%02d", tx.Date.YearText(), tx.Date.Month, tx.Date.Day)
 	if tx.Description != "" {
 		return date + " " + tx.Description
 	}
@@ -191,8 +191,8 @@ func directiveToSymbol(mapper *lsputil.PositionMapper, dir ast.Directive) protoc
 		name = "include " + d.Path
 		kind = protocol.SymbolKindModule
 	case ast.PriceDirective:
-		name = fmt.Sprintf("P %04d-%02d-%02d %s",
-			d.Date.Year, d.Date.Month, d.Date.Day, d.Commodity.Symbol)
+		name = fmt.Sprintf("P %s-%02d-%02d %s",
+			d.Date.YearText(), d.Date.Month, d.Date.Day, d.Commodity.Symbol)
 		kind = protocol.SymbolKindConstant
 	default:
 		name = "directive"

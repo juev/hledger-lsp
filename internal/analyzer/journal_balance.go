@@ -2,9 +2,7 @@ package analyzer
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -717,11 +715,11 @@ func registerDates(tx *ast.Transaction) []ast.Date {
 // [ 2024-01-20 ] is not one. Names are case sensitive, so Date: is an ordinary
 // tag.
 func postingDateOverride(tx *ast.Transaction, posting *ast.Posting, lines []ast.Comment) (ast.Date, bool) {
-	if date, ok := commentDate(posting.Comment, tx.Date.Year); ok {
+	if date, ok := commentDate(posting.Comment, tx.Date); ok {
 		return date, true
 	}
 	for _, line := range lines {
-		if date, ok := commentDate(line.Text, tx.Date.Year); ok {
+		if date, ok := commentDate(line.Text, tx.Date); ok {
 			return date, true
 		}
 	}
@@ -729,8 +727,9 @@ func postingDateOverride(tx *ast.Transaction, posting *ast.Posting, lines []ast.
 }
 
 // commentDate returns the first date written in one comment line: the earlier of
-// its date: tag and its first bracketed date.
-func commentDate(comment string, transactionYear int) (ast.Date, bool) {
+// its date: tag and its first bracketed date. A date without a year takes the
+// year of the transaction date.
+func commentDate(comment string, transaction ast.Date) (ast.Date, bool) {
 	best, bestAt, found := ast.Date{}, 0, false
 	consider := func(date ast.Date, at int) {
 		if !found || at < bestAt {
@@ -742,7 +741,7 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 		if tag.Name != "date" {
 			continue
 		}
-		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transactionYear); ok {
+		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transaction); ok {
 			consider(date, tag.NameStart)
 		}
 	}
@@ -762,10 +761,10 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 			continue
 		}
 		primary, _, _ := strings.Cut(content, "=")
-		if _, ok := bracketDateYear(primary, transactionYear); !ok {
+		if _, ok := bracketDateYear(primary, transaction.CalendarYear()); !ok {
 			continue
 		}
-		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
+		if date, ok := parsePostingDateValue(primary, transaction); ok {
 			consider(date, start)
 			break
 		}
@@ -818,7 +817,9 @@ func leadingDateText(value string) string {
 	return strings.TrimRight(value[:end], "-/.")
 }
 
-func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
+// parsePostingDateValue reads a posting date. A value without a year takes the
+// year of the transaction date.
+func parsePostingDateValue(value string, transaction ast.Date) (ast.Date, bool) {
 	value = strings.TrimSpace(value)
 	separator := strings.IndexAny(value, "-/.")
 	if separator < 0 {
@@ -828,28 +829,23 @@ func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
 	if len(parts) != 2 && len(parts) != 3 {
 		return ast.Date{}, false
 	}
-	year, calendarYear, digits := transactionYear, transactionYear, ""
+	date := ast.Date{Year: transaction.Year, YearDigits: transaction.YearDigits}
 	if len(parts) == 3 {
-		parsed, err := strconv.Atoi(parts[0])
-		switch {
-		case err == nil:
-			year, calendarYear = parsed, parsed
-		case errors.Is(err, strconv.ErrRange) && strings.Trim(parts[0], "0123456789") == "":
-			// hledger reads a year of any length. One too large for an int is
-			// kept as its digits, and its leap years come from its place in
-			// the 400-year cycle.
-			year, calendarYear, digits = math.MaxInt, yearNumber(parts[0]), strings.TrimLeft(parts[0], "0")
-		default:
+		// hledger reads a year of any length.
+		year, digits, ok := ast.ParseYear(parts[0])
+		if !ok {
 			return ast.Date{}, false
 		}
+		date.Year, date.YearDigits = year, digits
 		parts = parts[1:]
 	}
 	month, monthErr := strconv.Atoi(parts[0])
 	day, dayErr := strconv.Atoi(parts[1])
-	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(calendarYear, month, day) {
+	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(date.CalendarYear(), month, day) {
 		return ast.Date{}, false
 	}
-	return ast.Date{Year: year, Month: month, Day: day, YearDigits: digits}, true
+	date.Month, date.Day = month, day
+	return date, true
 }
 
 // groupOf returns the index of the balancing group that contains a posting.
@@ -1139,31 +1135,7 @@ func postingRange(p *ast.Posting) ast.Range {
 
 // compareDates orders two journal dates, treating an unset date as the earliest.
 func compareDates(a, b ast.Date) int {
-	if c := compareYears(a, b); c != 0 {
-		return c
-	}
-	if c := cmp.Compare(a.Month, b.Month); c != 0 {
-		return c
-	}
-	return cmp.Compare(a.Day, b.Day)
-}
-
-// compareYears orders the years of two dates, including years too large for an
-// int, which are compared by their digits.
-func compareYears(a, b ast.Date) int {
-	if a.YearDigits == "" && b.YearDigits == "" {
-		return cmp.Compare(a.Year, b.Year)
-	}
-	if a.YearDigits == "" {
-		return -1
-	}
-	if b.YearDigits == "" {
-		return 1
-	}
-	if c := cmp.Compare(len(a.YearDigits), len(b.YearDigits)); c != 0 {
-		return c
-	}
-	return strings.Compare(a.YearDigits, b.YearDigits)
+	return a.Compare(b)
 }
 
 // formatDifferences renders residuals for the UNBALANCED message: sorted by

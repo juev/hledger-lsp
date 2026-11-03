@@ -328,7 +328,7 @@ func formatDate(d ast.Date) string {
 	if d.Month < 1 || d.Month > 12 || d.Day < 1 || d.Day > 31 {
 		return ""
 	}
-	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
+	return fmt.Sprintf("%s-%02d-%02d", d.YearText(), d.Month, d.Day)
 }
 
 func CollectTagValues(journal *ast.Journal) map[string][]string {
