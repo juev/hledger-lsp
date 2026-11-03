@@ -27,8 +27,12 @@ const (
 	maxStderr     = 64 << 10
 	// maxMessage bounds the hledger error text carried into a diagnostic.
 	maxMessage = 2000
-	// cacheEntries bounds the conversions kept.
+	// cacheEntries bounds the conversions kept, except that one used within
+	// cacheIdle is never evicted: every rebuild of a tree asks for all of its
+	// imports, and evicting one of a larger working set would start its
+	// conversion again on every rebuild, forever.
 	cacheEntries = 16
+	cacheIdle    = 2 * time.Minute
 	// attempts is how often a conversion is retried when its inputs change
 	// while hledger reads them.
 	attempts = 2
@@ -88,8 +92,9 @@ type Importer struct {
 }
 
 type cacheEntry struct {
-	key    string
-	result Result
+	key      string
+	result   Result
+	lastUsed time.Time
 }
 
 type call struct {
@@ -163,7 +168,9 @@ func (im *Importer) cached(key string) (Result, bool) {
 		return Result{}, false
 	}
 	im.lru.MoveToFront(element)
-	return element.Value.(*cacheEntry).result, true
+	entry := element.Value.(*cacheEntry)
+	entry.lastUsed = time.Now()
+	return entry.result, true
 }
 
 // startBackground converts request in the background, once per key, and calls
@@ -249,9 +256,10 @@ func (im *Importer) convertOnce(ctx context.Context, key string, client *cli.Cli
 	im.mu.Lock()
 	if element, ok := im.cache[key]; ok {
 		im.lru.MoveToFront(element)
-		result := element.Value.(*cacheEntry).result
+		entry := element.Value.(*cacheEntry)
+		entry.lastUsed = time.Now()
 		im.mu.Unlock()
-		return result, outcomeValid
+		return entry.result, outcomeValid
 	}
 	if pending, ok := im.inflight[key]; ok {
 		im.mu.Unlock()
@@ -285,9 +293,12 @@ func (im *Importer) convertOnce(ctx context.Context, key string, client *cli.Cli
 	im.mu.Lock()
 	delete(im.inflight, key)
 	if verdict == outcomeValid {
-		im.cache[key] = im.lru.PushFront(&cacheEntry{key: key, result: result})
+		im.cache[key] = im.lru.PushFront(&cacheEntry{key: key, result: result, lastUsed: time.Now()})
 		for im.lru.Len() > cacheEntries {
 			oldest := im.lru.Back()
+			if time.Since(oldest.Value.(*cacheEntry).lastUsed) < cacheIdle {
+				break
+			}
 			im.lru.Remove(oldest)
 			delete(im.cache, oldest.Value.(*cacheEntry).key)
 		}
@@ -318,7 +329,7 @@ func (im *Importer) run(ctx context.Context, client *cli.Client, p *plan) (Resul
 	if err != nil {
 		return runFailure(ctx, err)
 	}
-	converted, err := convert(jsonOutput, textOutput, p.data, p.known)
+	converted, err := convert(jsonOutput, textOutput, p.data)
 	if err != nil {
 		return Result{Err: err.Error()}, true
 	}

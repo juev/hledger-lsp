@@ -110,16 +110,20 @@ func (s *Server) importSourceChanged() {
 	s.diagMu.Unlock()
 }
 
-// republishImports republishes the trees that import CSV data, or every open
-// document when there is no workspace to say which those are.
+// republishImports republishes every open document and the trees that import
+// CSV data. An open document no tree owns is loaded on its own, and its import
+// may be the one that changed or finished, so the open documents are always
+// republished, not only the roots the workspace knows.
 func (s *Server) republishImports(ctx context.Context) {
+	s.republishDiagnostics()
 	if s.workspace == nil {
-		s.republishDiagnostics()
 		return
 	}
 	affected := make(map[uri.URI]bool)
 	for _, root := range s.workspace.ImportRoots() {
-		affected[pathToURI(root)] = true
+		if _, open := s.documents.rope(pathToURI(root)); !open {
+			affected[pathToURI(root)] = true
+		}
 	}
 	s.republishFiles(ctx, affected)
 }

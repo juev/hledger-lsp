@@ -123,15 +123,28 @@ func TestOracle_RecordsArePlacedOnTheirLinesInEveryEncoding(t *testing.T) {
 
 		result := New(Config{Enabled: true, Path: binary, Timeout: 30 * time.Second}).Import(context.Background(), Request{Reader: ReaderCSV, Path: data, MaxFileSize: 1 << 20})
 
-		if result.Err != "" {
-			t.Skipf("hledger does not read UTF-32 here: %s", result.Err)
-		}
-		require.Len(t, result.Transactions, 2)
-		for _, transaction := range result.Transactions {
-			assert.Equal(t, 1, transaction.Range.Start.Line)
-			assert.Equal(t, 0, transaction.Range.End.Offset)
-		}
-		require.Len(t, result.Warnings, 1)
-		assert.Contains(t, result.Warnings[0], filepath.Base(data)+" is in an encoding whose lines cannot be told apart")
+		// Neither its lines nor its numbers can be checked, so it is refused
+		// before hledger runs.
+		assert.Empty(t, result.Transactions)
+		assert.Contains(t, result.Err, "data file "+filepath.Base(data)+" is in an encoding the language server cannot read")
 	})
+}
+
+// The guard against numbers hledger would expand into huge values reads the
+// decoded text: in UTF-16 every digit is followed by a zero byte, so the raw
+// bytes hide the digit run.
+func TestBuildPlan_UTF16NumbersAreChecked(t *testing.T) {
+	dir := t.TempDir()
+	const rules = "skip 1\nfields date, desc, amount\ncurrency $\naccount1 a\naccount2 b\nencoding utf-16\n"
+	for name, record := range map[string]string{"exponent": "1E999999999", "digits": strings.Repeat("9", 400)} {
+		data := write(t, dir, name+".csv", utf16Bytes("date,desc,amount\n2024-01-02,a,"+record+"\n", false))
+		write(t, dir, name+".csv.rules", rules)
+		_, err := buildPlan(Request{Reader: ReaderCSV, Path: data, MaxFileSize: 1 << 20})
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "data file "+name+".csv:", name)
+	}
+	data := write(t, dir, "fine.csv", utf16Bytes("date,desc,amount\n2024-01-02,a,1E3\n", false))
+	write(t, dir, "fine.csv.rules", rules)
+	_, err := buildPlan(Request{Reader: ReaderCSV, Path: data, MaxFileSize: 1 << 20})
+	assert.NoError(t, err)
 }
