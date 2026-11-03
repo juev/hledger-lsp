@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/juev/hledger-lsp/internal/csvimport"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -205,6 +206,9 @@ func (r *runner) processFile(file string) (bool, error) {
 	} else {
 		if filetype.IsRules(file) {
 			return false, fmt.Errorf("%s: CSV rules files cannot be formatted", name)
+		}
+		if csvimport.IsDataPath(file) {
+			return false, fmt.Errorf("%s: CSV data files cannot be formatted", name)
 		}
 		if path, err = filepath.Abs(file); err != nil {
 			return false, fmt.Errorf("%s: %w", name, err)

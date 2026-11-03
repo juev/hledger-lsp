@@ -194,6 +194,19 @@ func TestRulesFileRefused(t *testing.T) {
 	assert.Equal(t, content, readFile(t, path))
 }
 
+func TestDataFileRefused(t *testing.T) {
+	for _, name := range []string{"bank.csv", "bank.SSV", "bank.tsv"} {
+		content := "date,desc,amount\n2024-01-02,\"a  b\",1\n"
+		path := writeJournal(t, t.TempDir(), name, content)
+
+		code, _, stderr := run(t, "", "-w", path)
+
+		assert.Equal(t, ExitError, code, name)
+		assert.Contains(t, stderr, "CSV data files cannot be formatted", name)
+		assert.Equal(t, content, readFile(t, path), name)
+	}
+}
+
 func TestMissingFile(t *testing.T) {
 	code, _, stderr := run(t, "", filepath.Join(t.TempDir(), "missing.journal"))
 	assert.Equal(t, ExitError, code)
