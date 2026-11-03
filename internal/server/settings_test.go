@@ -3,6 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -776,6 +779,95 @@ func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *test
 
 		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
 		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Zero(t, client.refreshes.Load())
+	})
+}
+
+// Turning the inlay hints feature off or on changes what an InlayHint request
+// returns, so the client has to be asked to refresh the hints it shows, even
+// when the individual inlayHints options stay as they were.
+func TestRefreshConfiguration_RefreshesInlayHintsWhenTheFeatureToggles(t *testing.T) {
+	refreshSupport := protocol.ClientCapabilities{Workspace: &protocol.WorkspaceClientCapabilities{
+		Configuration: boolPtr(true),
+		InlayHint:     &protocol.InlayHintWorkspaceClientCapabilities{RefreshSupport: boolPtr(true)},
+	}}
+	featureOff := func(t *testing.T) protocol.LSPAny {
+		return mustMarshalLSPAny(t, map[string]any{"features": map[string]any{"inlayHints": false}})
+	}
+	featureOn := func(t *testing.T) protocol.LSPAny {
+		return mustMarshalLSPAny(t, map[string]any{"features": map[string]any{"inlayHints": true}})
+	}
+
+	for _, newline := range []string{"\n", "\r\n"} {
+		t.Run(fmt.Sprintf("newline %q", newline), func(t *testing.T) {
+			srv := NewServer()
+			_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: refreshSupport})
+			require.NoError(t, err)
+			client := &configClient{settings: featureOn(t)}
+			srv.SetClient(client)
+
+			docURI := uri.File(filepath.Join(t.TempDir(), "main.journal"))
+			text := strings.ReplaceAll("2024-01-15 продукты\n    расходы:еда  500 RUB\n    активы:наличные\n", "\n", newline)
+			openDocument(t, srv, docURI, text)
+			hints := func() []protocol.InlayHint {
+				t.Helper()
+				result, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+					Range:        protocol.Range{End: protocol.Position{Line: 10}},
+				})
+				require.NoError(t, err)
+				return result
+			}
+
+			srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+			require.NotEmpty(t, hints())
+			assert.Zero(t, client.refreshes.Load(), "the defaults already enable the feature")
+
+			client.settings = featureOff(t)
+			srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+			assert.Empty(t, hints())
+			assert.Equal(t, int32(1), client.refreshes.Load(), "turning the feature off hides the hints")
+
+			srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+			assert.Equal(t, int32(1), client.refreshes.Load(), "an unchanged feature needs no refresh")
+
+			client.settings = featureOn(t)
+			srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+			assert.NotEmpty(t, hints())
+			assert.Equal(t, int32(2), client.refreshes.Load(), "turning the feature on shows the hints again")
+		})
+	}
+
+	t.Run("option changes while the feature is off", func(t *testing.T) {
+		srv := NewServer()
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: refreshSupport})
+		require.NoError(t, err)
+		client := &configClient{settings: featureOff(t)}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+		assert.Equal(t, int32(1), client.refreshes.Load())
+
+		client.settings = mustMarshalLSPAny(t, map[string]any{
+			"features":   map[string]any{"inlayHints": false},
+			"inlayHints": map[string]any{"runningBalances": true},
+		})
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Equal(t, int32(1), client.refreshes.Load(), "no hints are shown, so none change")
+	})
+
+	t.Run("client without refresh support", func(t *testing.T) {
+		srv := NewServer()
+		capabilities := refreshSupport
+		capabilities.Workspace = &protocol.WorkspaceClientCapabilities{Configuration: boolPtr(true)}
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: capabilities})
+		require.NoError(t, err)
+		client := &configClient{settings: featureOff(t)}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
+		assert.False(t, srv.getSettings().Features.InlayHints)
 		assert.Zero(t, client.refreshes.Load())
 	})
 }
