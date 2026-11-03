@@ -9,6 +9,8 @@ import (
 	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/csvimport"
+	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/textutil"
 )
@@ -65,6 +67,21 @@ func (s *Server) documentSource(docURI uri.URI) (string, bool) {
 // mapperFor builds a position mapper for a journal the server may not have
 // open. Returns nil when the file cannot be read.
 func (s *Server) mapperFor(docURI uri.URI) *lsputil.PositionMapper {
+	// The import located its records in the saved file, decoded the way
+	// csvimport.CoordinateText decodes it, so the offsets are mapped through
+	// that text, not through the editor buffer: a byte order mark or UTF-16
+	// would shift them there.
+	if path := uriToPath(docURI); path != "" && !filetype.IsRules(path) && s.isImportSource(path) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		text, ok := csvimport.CoordinateText(string(raw))
+		if !ok {
+			text = ""
+		}
+		return lsputil.NewPositionMapper(text)
+	}
 	content, ok := s.documentSource(docURI)
 	if !ok {
 		return nil

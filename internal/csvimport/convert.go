@@ -91,7 +91,7 @@ type converted struct {
 // convert reads hledger's two outputs into transactions whose ranges point at
 // the records in the data file. data holds the normalized content of every
 // file hledger may have read.
-func convert(jsonOutput, textOutput []byte, data map[string]string) (converted, error) {
+func convert(jsonOutput, textOutput []byte, data map[string]string, known map[string]bool) (converted, error) {
 	decoded, err := decodeJSON(jsonOutput)
 	if err != nil {
 		return converted{}, err
@@ -130,15 +130,21 @@ func convert(jsonOutput, textOutput []byte, data map[string]string) (converted, 
 		} else if path != result.dataPath {
 			return converted{}, fmt.Errorf("hledger read transactions from both %s and %s", filepath.Base(result.dataPath), filepath.Base(path))
 		}
-		content, ok := data[path]
-		if !ok {
+		if !known[path] {
 			return converted{}, fmt.Errorf("hledger read %s, which the import did not check", filepath.Base(path))
 		}
+		content, located := data[path]
 		transaction, err := merge(written.Transactions[i], source)
 		if err != nil {
 			return converted{}, fmt.Errorf("transaction at %s line %d: %w", filepath.Base(path), source.SourcePos[0].Line, err)
 		}
-		placeTransaction(&transaction, recordRange(content, source.SourcePos))
+		// A file whose lines cannot be told apart gets no claimed position: the
+		// records point at its start, and the plan warns about it.
+		rng := ast.Range{Start: ast.Position{Line: 1, Column: 1}, End: ast.Position{Line: 1, Column: 1}}
+		if located {
+			rng = recordRange(content, source.SourcePos)
+		}
+		placeTransaction(&transaction, rng)
 		transactions = append(transactions, ordered{index: source.Index, transaction: transaction})
 	}
 	// print sorts by date; the journal keeps hledger's reading order, which the
