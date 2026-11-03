@@ -44,6 +44,14 @@ type Config struct {
 	Enabled bool
 	Path    string
 	Timeout time.Duration
+	// Background makes Import return at once when the conversion is not
+	// cached: it starts hledger in the background and reports the result as
+	// Pending. The language server uses it so that no request, and no rebuild
+	// of the workspace under its lock, waits up to hledger.cli.timeout for a
+	// subprocess. OnReady is called when such a conversion has finished, so the
+	// caller can load again and find it cached.
+	Background bool
+	OnReady    func()
 }
 
 // Result is one conversion. Sources is filled even when the conversion
@@ -58,6 +66,9 @@ type Result struct {
 	Err string
 	// Warnings are problems that do not stop the conversion.
 	Warnings []string
+	// Pending marks a conversion that runs in the background (Config.Background):
+	// there are no transactions yet, and no verdict on the file either.
+	Pending bool
 }
 
 // Importer runs conversions for one CLI configuration. It is safe for
@@ -72,6 +83,8 @@ type Importer struct {
 	cache    map[string]*list.Element
 	lru      *list.List
 	inflight map[string]*call
+	// background holds the keys of the conversions started for Config.Background.
+	background map[string]bool
 }
 
 type cacheEntry struct {
@@ -88,11 +101,12 @@ type call struct {
 
 func New(config Config) *Importer {
 	return &Importer{
-		config:   config,
-		workers:  make(chan struct{}, maxWorkers),
-		cache:    make(map[string]*list.Element),
-		lru:      list.New(),
-		inflight: make(map[string]*call),
+		config:     config,
+		workers:    make(chan struct{}, maxWorkers),
+		cache:      make(map[string]*list.Element),
+		lru:        list.New(),
+		inflight:   make(map[string]*call),
+		background: make(map[string]bool),
 	}
 }
 
@@ -128,6 +142,63 @@ func (im *Importer) Import(ctx context.Context, request Request) Result {
 		return result
 	}
 
+	if im.config.Background {
+		key := cacheKey(identity, version, im.config.Timeout, p.material)
+		if converted, ok := im.cached(key); ok {
+			return withPlan(converted, result)
+		}
+		im.startBackground(key, request)
+		result.Pending = true
+		return result
+	}
+	return im.convert(ctx, request, p, result, client, identity, version)
+}
+
+// cached returns the conversion stored under key.
+func (im *Importer) cached(key string) (Result, bool) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	element, ok := im.cache[key]
+	if !ok {
+		return Result{}, false
+	}
+	im.lru.MoveToFront(element)
+	return element.Value.(*cacheEntry).result, true
+}
+
+// startBackground converts request in the background, once per key, and calls
+// OnReady when the conversion is done. The run is bounded by the CLI timeout,
+// not by any request: the requests that asked for it have long been answered.
+func (im *Importer) startBackground(key string, request Request) {
+	im.mu.Lock()
+	if im.background[key] {
+		im.mu.Unlock()
+		return
+	}
+	im.background[key] = true
+	im.mu.Unlock()
+
+	go func() {
+		ctx := context.Background()
+		if p, err := buildPlan(request); err == nil {
+			client, identity := im.currentClient()
+			if client.Available() {
+				im.convert(ctx, request, p, Result{Sources: p.sources, Warnings: p.warnings}, client, identity, client.Version())
+			}
+		}
+		im.mu.Lock()
+		delete(im.background, key)
+		im.mu.Unlock()
+		if im.config.OnReady != nil {
+			im.config.OnReady()
+		}
+	}()
+}
+
+// convert runs the conversion for a plan, waiting for hledger, and plans again
+// when the inputs change while hledger reads them.
+func (im *Importer) convert(ctx context.Context, request Request, p *plan, result Result, client *cli.Client, identity, version string) Result {
+	var err error
 	for attempt := 0; ; attempt++ {
 		key := cacheKey(identity, version, im.config.Timeout, p.material)
 		converted, outcome := im.convertOnce(ctx, key, client, p, request)

@@ -131,6 +131,10 @@ func (s *loadState) loadImport(site parser.IncludeSite, provenance IncludeProven
 			s.result.ImportSources = append(s.result.ImportSources, source)
 		}
 	}
+	if result.Pending {
+		s.result.PendingImports++
+		return
+	}
 	for _, warning := range result.Warnings {
 		s.errors = append(s.errors, LoadError{Kind: ErrorImportUnsaved, Path: path, SourcePath: basePath, Message: warning, Range: site.Include.Range, Provenance: provenance})
 	}
