@@ -12,6 +12,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/csvimport"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/parser"
 	"github.com/juev/hledger-lsp/internal/textutil"
@@ -45,6 +46,12 @@ type Loader struct {
 	// occurrenceMu guards occurrenceParses; see occurrence_parse.go.
 	occurrenceMu     sync.Mutex
 	occurrenceParses map[string]*occurrenceParse
+
+	// importMu guards importer, buffer and protected; see import.go.
+	importMu  sync.RWMutex
+	importer  Importer
+	buffer    func(path string) (string, bool)
+	protected map[string]os.FileInfo
 }
 
 func NewLoader() *Loader {
@@ -56,6 +63,7 @@ func NewLoader() *Loader {
 		parseLRU:  list.New(),
 
 		occurrenceParses: make(map[string]*occurrenceParse),
+		protected:        make(map[string]os.FileInfo),
 	}
 }
 
@@ -124,7 +132,7 @@ func (l *Loader) FileSizeError(content string) *LoadError {
 func (l *Loader) load(path, content string, options LoadOptions) (*ResolvedJournal, []LoadError) {
 	result := NewResolvedJournal(nil)
 	result.Items = make([]ResolvedItem, 0)
-	state := loadState{loader: l, options: options, result: result, limits: l.getLimits(), children: make(map[OccurrenceID]map[int][]OccurrenceID)}
+	state := loadState{loader: l, options: options, result: result, limits: l.getLimits(), children: make(map[OccurrenceID]map[int][]OccurrenceID), importer: l.currentImporter()}
 	state.loadOccurrence(path, l.canonicalPath(path), content, parser.Context{}, IncludeProvenance{SourcePath: path}, 0)
 	result.Items = state.inlineItems(1)
 	result.Errors = state.errors
@@ -139,6 +147,9 @@ type loadState struct {
 	errors   []LoadError
 	active   []string
 	children map[OccurrenceID]map[int][]OccurrenceID
+	// importer converts included separated data; nil keeps the hledger 1
+	// behaviour of refusing it as not a journal.
+	importer Importer
 }
 
 func (s *loadState) loadOccurrence(path, canonical, content string, context parser.Context, via IncludeProvenance, depth int) parser.ContextExports {
@@ -228,7 +239,12 @@ func (s *loadState) inlineItems(id OccurrenceID) []ResolvedItem {
 
 func (s *loadState) resolveInclude(parentID OccurrenceID, basePath string, site parser.IncludeSite, depth int, children map[int][]OccurrenceID, includeIndex int) parser.ContextExports {
 	provenance := IncludeProvenance{ParentID: parentID, SourcePath: basePath, IncludeRange: site.Include.Range, Range: site.Include.Range, RawPattern: site.Include.Path, Depth: depth + 1}
-	matches, err := s.includePaths(basePath, site.Include.Path)
+	reader, pattern := csvimport.SplitReader(site.Include.Path)
+	s.loader.protectPrefixed(basePath, reader, pattern)
+	if s.importer == nil {
+		reader, pattern = "", site.Include.Path
+	}
+	matches, err := s.includePaths(basePath, pattern)
 	if err != nil {
 		kind := ErrorFileNotFound
 		if strings.HasPrefix(err.Error(), "path traversal detected:") {
@@ -244,6 +260,17 @@ func (s *loadState) resolveInclude(parentID OccurrenceID, basePath string, site 
 	runningContext := site.Context
 	for matchIndex, path := range matches {
 		provenance.MatchIndex = matchIndex
+		matchReader := reader
+		if matchReader == "" {
+			matchReader = csvimport.ReaderForPath(path)
+		}
+		if matchReader != "" {
+			s.loader.protect(path)
+			if s.importer != nil {
+				s.loadImport(site, provenance, path, matchReader, runningContext, depth, children, includeIndex)
+				continue
+			}
+		}
 		if !filetype.IsJournalPath(path) {
 			s.errors = append(s.errors, LoadError{Kind: ErrorNotJournal, Path: path, SourcePath: basePath, Message: fmt.Sprintf("included file is not a journal file: %s", filepath.Base(path)), Range: site.Include.Range, Provenance: provenance})
 			continue
@@ -437,10 +464,10 @@ func resolveCanonicalPath(path string) string {
 
 func (l *Loader) snapshotLoadOptions(options LoadOptions) LoadOptions {
 	if len(options.Overlays) == 0 {
-		return LoadOptions{}
+		return LoadOptions{Context: options.Context}
 	}
 
-	snapshot := LoadOptions{Overlays: make(map[string]OverlayEntry, len(options.Overlays))}
+	snapshot := LoadOptions{Overlays: make(map[string]OverlayEntry, len(options.Overlays)), Context: options.Context}
 	for key, entry := range options.Overlays {
 		canonical := l.canonicalPath(key)
 		entry.SourcePath = absoluteClean(entry.SourcePath)

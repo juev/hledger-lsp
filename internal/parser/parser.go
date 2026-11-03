@@ -2328,8 +2328,19 @@ func (p *Parser) resolveAccountName(name string) string {
 	if prefix := p.getAccountPrefix(); prefix != "" {
 		resolvedName = prefix + ":" + resolvedName
 	}
-	for i := len(p.basicAliases) - 1; i >= 0; i-- {
-		alias := p.basicAliases[i]
+	return applyAliases(p.basicAliases, resolvedName)
+}
+
+// ApplyAliases rewrites an account name with the aliases in force in context.
+// hledger applies them, but not `apply account`, to the transactions of an
+// included CSV file (checked on 1.99.5).
+func ApplyAliases(context Context, name string) string {
+	return applyAliases(context.basicAliases, name)
+}
+
+func applyAliases(aliases []basicAlias, resolvedName string) string {
+	for i := len(aliases) - 1; i >= 0; i-- {
+		alias := aliases[i]
 		if resolvedName == alias.original {
 			resolvedName = alias.alias
 			continue

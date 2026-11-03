@@ -1,6 +1,7 @@
 package include
 
 import (
+	"context"
 	"maps"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -19,6 +20,12 @@ const (
 	ErrorPathTraversal
 	ErrorNotJournal
 	ErrorDepthExceeded
+	// ErrorImport is an included CSV, SSV, TSV or rules file that produced no
+	// transactions: the CLI is missing or refused, or hledger failed.
+	ErrorImport
+	// ErrorImportUnsaved is an import source whose editor buffer differs from
+	// the saved file the import read.
+	ErrorImportUnsaved
 )
 
 type LoadError struct {
@@ -61,6 +68,10 @@ func (e LoadError) ErrorCode() string {
 		return "INCLUDE_NOT_JOURNAL"
 	case ErrorDepthExceeded:
 		return "INCLUDE_DEPTH_EXCEEDED"
+	case ErrorImport:
+		return "INCLUDE_IMPORT_ERROR"
+	case ErrorImportUnsaved:
+		return "INCLUDE_IMPORT_UNSAVED"
 	default:
 		return "INCLUDE_ERROR"
 	}
@@ -80,6 +91,9 @@ type OverlayEntry struct {
 // LoadOptions provides a per-load immutable editor-content snapshot.
 type LoadOptions struct {
 	Overlays map[string]OverlayEntry
+	// Context bounds the hledger runs of included CSV files; nil means none
+	// beyond the CLI timeout.
+	Context context.Context
 }
 
 // overlay looks up editor content for path. The canonical form must come from
@@ -118,6 +132,19 @@ type JournalOccurrence struct {
 	Exports        parser.ContextExports
 	Via            IncludeProvenance
 	Items          []ResolvedItem
+	// Import is set for transactions hledger converted from separated data. Its
+	// Path is the data file, which is not journal text: nothing may parse it as
+	// one or edit it.
+	Import *ImportedSource
+}
+
+// ImportedSource describes the include that produced an imported occurrence.
+type ImportedSource struct {
+	// Target is the included file: the data file, or the rules file naming it.
+	Target string
+	Reader string
+	// Sources are the files the conversion depends on.
+	Sources []string
 }
 
 // Occurrence is retained as a concise alias for JournalOccurrence.
@@ -167,6 +194,10 @@ type ResolvedJournal struct {
 	Files     map[string]*ast.Journal
 	FileOrder []string
 	Errors    []LoadError
+
+	// ImportSources lists every file an import of this load depends on, failed
+	// imports included, for watching and for protection from journal edits.
+	ImportSources []string
 }
 
 func NewResolvedJournal(primary *ast.Journal) *ResolvedJournal {
@@ -237,10 +268,11 @@ func (r *ResolvedJournal) Occurrence(id OccurrenceID) *JournalOccurrence {
 // unsaved edits reads its amounts the way the tree would. An include added since
 // the tree was resolved has no occurrence yet and contributes nothing.
 //
-// The bool reports whether the occurrence exists.
+// The bool reports whether the occurrence exists and is journal text; an
+// imported occurrence is not.
 func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast.Journal, []parser.ParseError, bool) {
 	occurrence := r.Occurrence(id)
-	if occurrence == nil {
+	if occurrence == nil || occurrence.Import != nil {
 		return nil, nil, false
 	}
 	result, errs := parser.ParseWithContext(content, occurrence.InitialContext, func(site parser.IncludeSite) parser.ContextExports {
