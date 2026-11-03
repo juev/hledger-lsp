@@ -292,3 +292,45 @@ func TestRuneCount(t *testing.T) {
 		})
 	}
 }
+
+func TestPositionMapper_ApplyEdits(t *testing.T) {
+	edit := func(line, startChar, endChar uint32, text string) protocol.TextEdit {
+		return protocol.TextEdit{
+			Range: protocol.Range{
+				Start: protocol.Position{Line: line, Character: startChar},
+				End:   protocol.Position{Line: line, Character: endChar},
+			},
+			NewText: text,
+		}
+	}
+
+	t.Run("positions refer to the original content in any order", func(t *testing.T) {
+		got, err := NewPositionMapper("aaa\nbbb\n").ApplyEdits([]protocol.TextEdit{
+			edit(1, 0, 1, "XXXX"),
+			edit(0, 1, 2, ""),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "aa\nXXXXbb\n", got)
+	})
+
+	t.Run("UTF-16 columns with CJK and emoji", func(t *testing.T) {
+		got, err := NewPositionMapper("買😀い\n").ApplyEdits([]protocol.TextEdit{edit(0, 3, 4, "物")})
+		require.NoError(t, err)
+		assert.Equal(t, "買😀物\n", got)
+	})
+
+	t.Run("adjacent edits and insertions keep their order", func(t *testing.T) {
+		got, err := NewPositionMapper("abc").ApplyEdits([]protocol.TextEdit{
+			edit(0, 1, 1, "1"),
+			edit(0, 1, 1, "2"),
+			edit(0, 1, 2, "3"),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "a123c", got)
+	})
+
+	t.Run("overlap is an error", func(t *testing.T) {
+		_, err := NewPositionMapper("abcdef").ApplyEdits([]protocol.TextEdit{edit(0, 0, 3, "x"), edit(0, 2, 4, "y")})
+		assert.Error(t, err)
+	})
+}

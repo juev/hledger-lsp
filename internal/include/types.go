@@ -2,7 +2,11 @@ package include
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"maps"
+	"os"
+	"slices"
 
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/formatter"
@@ -286,6 +290,100 @@ func (r *ResolvedJournal) ParseOccurrence(id OccurrenceID, content string) (*ast
 		return parser.MergeContextExports(exports...)
 	})
 	return result.Journal, errs, true
+}
+
+// FormattingContext is what the formatter needs to rewrite a document: one
+// reading per distinct parse context the tree includes it under, for
+// formatter.FormatDocumentInReadings, which only rewrites a number when every
+// reading keeps its value.
+type FormattingContext struct {
+	Readings []formatter.Reading
+	// ParseErrors joins the errors of every reading, each reported once.
+	ParseErrors []parser.ParseError
+}
+
+// ErrNotIncluded reports that a file is not part of the include tree.
+var ErrNotIncluded = errors.New("not part of the include tree")
+
+// ErrImportedData reports that the tree reads a file as separated data or CSV
+// rules, which is not journal text and must not be formatted as one.
+var ErrImportedData = errors.New("read as imported CSV data, not as a journal")
+
+// FormattingContext reads content as each occurrence of the file at path, with
+// the context the occurrence inherited (see ParseOccurrence). Occurrences with
+// equal contexts read content alike and share a reading. It returns
+// ErrNotIncluded when the tree does not include the file.
+func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingContext, error) {
+	occurrences, err := r.OccurrencesOfFile(path)
+	if err != nil {
+		return FormattingContext{}, err
+	}
+	if len(occurrences) == 0 {
+		return FormattingContext{}, ErrNotIncluded
+	}
+
+	for _, occurrence := range occurrences {
+		if occurrence.Import != nil {
+			return FormattingContext{}, ErrImportedData
+		}
+	}
+
+	var ctx FormattingContext
+	var contexts []parser.Context
+	for _, occurrence := range occurrences {
+		if slices.ContainsFunc(contexts, occurrence.InitialContext.Equal) {
+			continue
+		}
+		journal, parseErrs, ok := r.ParseOccurrence(occurrence.ID, content)
+		if !ok {
+			continue
+		}
+		contexts = append(contexts, occurrence.InitialContext)
+		// A large offset collects all directives and merge-forward commodity
+		// declarations for the whole document.
+		ctx.Readings = append(ctx.Readings, formatter.Reading{Journal: journal, Formats: r.FormatsAt(occurrence.ID, 1<<30)})
+		for _, parseErr := range parseErrs {
+			if !slices.Contains(ctx.ParseErrors, parseErr) {
+				ctx.ParseErrors = append(ctx.ParseErrors, parseErr)
+			}
+		}
+	}
+	return ctx, nil
+}
+
+// OccurrencesOfFile returns every occurrence that reads the file at path, under
+// any name: a symlink or a hard link includes the same file, and only the file
+// system can tell a hard link from another file. A name that no longer exists
+// does not reach the file. A name that cannot be compared is an error rather
+// than a guess, because a missed occurrence lets the formatter change what a
+// number is worth there.
+func (r *ResolvedJournal) OccurrencesOfFile(path string) ([]JournalOccurrence, error) {
+	file, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Content with no file behind it, such as standard input, has no other name.
+		return r.OccurrencesForPath(path), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	same := make(map[string]bool)
+	var occurrences []JournalOccurrence
+	for _, occurrence := range r.Occurrences {
+		isSame, known := same[occurrence.Path]
+		if !known {
+			info, err := os.Stat(occurrence.Path)
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return nil, err
+			}
+			isSame = err == nil && os.SameFile(file, info)
+			same[occurrence.Path] = isSame
+		}
+		if isSame {
+			occurrences = append(occurrences, occurrence)
+		}
+	}
+	return occurrences, nil
 }
 
 // OccurrencesForPath returns all occurrences for an exact source path.

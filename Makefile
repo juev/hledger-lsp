@@ -1,14 +1,16 @@
 .PHONY: all build test lint bench perf clean install local help
 
 BINARY := hledger-lsp
+FMT_BINARY := hledger-fmt
 BIN_DIR := ./bin
 CMD_DIR := ./cmd/hledger-lsp
+FMT_CMD_DIR := ./cmd/hledger-fmt
 
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  build    Build binary to $(BIN_DIR)/$(BINARY)"
+	@echo "  build    Build binaries to $(BIN_DIR)/"
 	@echo "  test     Run all tests"
 	@echo "  lint     Run golangci-lint with autofix"
 	@echo "  bench    Run benchmarks"
@@ -20,6 +22,7 @@ help:
 
 build:
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD_DIR)
+	go build -o $(BIN_DIR)/$(FMT_BINARY) $(FMT_CMD_DIR)
 
 test:
 	go test ./...
@@ -40,7 +43,7 @@ clean:
 	rm -rf $(BIN_DIR)
 
 install:
-	go install $(CMD_DIR)
+	go install $(CMD_DIR) $(FMT_CMD_DIR)
 
 local:
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD_DIR)

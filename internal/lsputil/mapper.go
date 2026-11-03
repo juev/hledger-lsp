@@ -11,6 +11,7 @@
 package lsputil
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -125,6 +126,35 @@ func (m *PositionMapper) ApplyChange(r protocol.Range, text string) string {
 	}
 
 	return m.content[:startByte] + text + m.content[endByte:]
+}
+
+// ApplyEdits returns the content with all edits applied. Positions refer to the
+// original content, as in an LSP TextEdit array; overlapping edits are an error.
+func (m *PositionMapper) ApplyEdits(edits []protocol.TextEdit) (string, error) {
+	type byteEdit struct {
+		start, end int
+		text       string
+	}
+
+	sorted := make([]byteEdit, 0, len(edits))
+	for _, edit := range edits {
+		sorted = append(sorted, byteEdit{m.LSPToByte(edit.Range.Start), m.LSPToByte(edit.Range.End), edit.NewText})
+	}
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].start < sorted[j].start })
+
+	var b strings.Builder
+	b.Grow(len(m.content))
+	cursor := 0
+	for _, edit := range sorted {
+		if edit.start < cursor || edit.end < edit.start {
+			return "", errors.New("overlapping text edits")
+		}
+		b.WriteString(m.content[cursor:edit.start])
+		b.WriteString(edit.text)
+		cursor = edit.end
+	}
+	b.WriteString(m.content[cursor:])
+	return b.String(), nil
 }
 
 func UTF16Len(s string) int {
