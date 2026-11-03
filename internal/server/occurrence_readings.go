@@ -264,10 +264,49 @@ func formatReadings(readings []occurrenceReading) []formatter.Reading {
 }
 
 // formatEdits is the document's formatting under every occurrence. The edits
-// keep each occurrence's values; see formatter.FormatDocumentInReadings.
+// keep each occurrence's values; see formatter.FormatDocumentInReadings. When
+// the occurrences cannot all be found, there are no edits.
 func (s *Server) formatEdits(docURI uri.URI, content string) []protocol.TextEdit {
 	settings := s.getSettings()
-	return formatter.FormatDocumentInReadings(formatReadings(s.occurrenceReadings(docURI, content)), content, formatterOptionsFrom(settings.Formatting))
+	readings := formatReadings(s.occurrenceReadings(docURI, content))
+	aliases, err := s.aliasReadings(docURI, content)
+	if err != nil {
+		s.warnOnce(docURI, "format-names", fmt.Sprintf("Not formatting %s: %v", uriToPath(docURI), err))
+		return nil
+	}
+	return formatter.FormatDocumentInReadings(append(readings, aliases...), content, formatterOptionsFrom(settings.Formatting))
+}
+
+// aliasReadings reads content at the occurrences that include the document's
+// file under another name, a symlink or a hard link, in any include tree.
+// occurrenceReadings finds occurrences by name, but hledger reads the same
+// bytes at these too, possibly under another decimal mark.
+func (s *Server) aliasReadings(docURI uri.URI, content string) ([]formatter.Reading, error) {
+	path := uriToPath(docURI)
+	if s.workspace == nil || path == "" {
+		return nil, nil
+	}
+	var readings []formatter.Reading
+	for _, tree := range s.workspace.AllTrees() {
+		if tree.Resolved == nil {
+			continue
+		}
+		occurrences, err := tree.Resolved.OccurrencesOfFile(path)
+		if err != nil {
+			return nil, err
+		}
+		for _, occurrence := range occurrences {
+			if occurrence.Path == path {
+				continue
+			}
+			journal, _, ok := tree.Resolved.ParseOccurrence(occurrence.ID, content)
+			if !ok {
+				continue
+			}
+			readings = append(readings, formatter.Reading{Journal: journal, Formats: tree.Resolved.FormatsAt(occurrence.ID, wholeDocument)})
+		}
+	}
+	return readings, nil
 }
 
 // applyEdits applies non-overlapping edits to content, last first so earlier

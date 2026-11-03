@@ -11,6 +11,7 @@ hledger-lsp is a Language Server Protocol (LSP) server for hledger journal files
 ```bash
 # Build
 go build -o ./bin/hledger-lsp ./cmd/hledger-lsp
+go build -o ./bin/hledger-fmt ./cmd/hledger-fmt
 
 # Test
 go test ./...
@@ -26,6 +27,7 @@ golangci-lint run --fix ./...
 
 ```plain
 cmd/hledger-lsp/main.go     LSP server entry point, protocol dispatcher
+cmd/hledger-fmt/main.go     Standalone formatter entry point
 internal/
   ast/types.go              AST types: Journal, Transaction, Posting, Amount, etc.
   parser/
@@ -34,6 +36,8 @@ internal/
     parser.go               Parser with error recovery
   formatter/
     formatter.go            Document formatting: alignment (right/decimal), indentation
+  fmtcmd/
+    fmtcmd.go               hledger-fmt command line, on top of formatter and include
   server/
     server.go               LSP server: document sync, diagnostics
     completion.go           Completion: context detection, item generation, fuzzy scoring
