@@ -170,6 +170,12 @@ func (s *Server) publishCoverage(ctx context.Context, round *publishRound, versi
 	}
 
 	for _, target := range ordered {
+		// A file this tree shares with another one that still waits for a
+		// conversion would be judged without the missing records; it keeps what
+		// it last showed until that tree is built again.
+		if pendingImport(round.sourcesFor(target)) {
+			continue
+		}
 		set := round.setFor(target)
 		if ctx.Err() != nil {
 			return
