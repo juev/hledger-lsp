@@ -2429,6 +2429,44 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: []string{"EUR off by -0.04"},
 	},
+	{
+		name: "an inclusive assignment takes the literal of an emptied subaccount key",
+		input: `2024-01-01 p
+    x:a  1 USD @ 1.0001 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 p
+    x:a  -1 USD @ 1.0001 EUR
+    x  0.2 USD @ 1.00010 EUR
+    y  = 0 GBP
+    e
+
+2024-01-03 q
+    x  =* 0 USD
+    w  0.2 USD @ 1.0000 EUR
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "an inclusive assignment takes the finer literal of an emptied subaccount key",
+		input: `2024-01-01 p
+    x:a  1 USD @ 1.00010 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 p
+    x:a  -1 USD @ 1.00010 EUR
+    x  0.2 USD @ 1.0001 EUR
+    y  = 0 GBP
+    e
+
+2024-01-03 q
+    x  =* 0 USD
+    w  0.2 USD @ 1.0000 EUR
+`,
+		wantMessages: []string{"EUR off by -0.00002"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {

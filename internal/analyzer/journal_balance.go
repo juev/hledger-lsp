@@ -291,9 +291,8 @@ func (b pricedBalances) collect(account, commodity string, scope pricedScope) ma
 			sum := collected[key]
 			sum.quantity, sum.value = sum.quantity.Add(held.quantity), sum.value.Add(held.value)
 			collected[key] = sum
-			if held.empty() {
-				continue
-			}
+			// An emptied entry still holds its literal in hledger's running
+			// balance, so it is a candidate like any other.
 			if own {
 				ownPlaces[key] = held
 				continue
