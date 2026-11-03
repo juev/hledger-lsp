@@ -90,7 +90,9 @@ under `$XDG_CACHE_HOME/wasmtime`); later starts load the cache.
   command fails with "hledger-lsp: hledger is not available at "hledger"". An
   `include` of a CSV, SSV, TSV or rules file under `hledger.targetVersion` `"2"`
   or `"auto"` reports `INCLUDE_IMPORT_ERROR` ("WASI has no subprocesses") and
-  contributes no transactions. All other features work without the CLI.
+  contributes no transactions, so a balance assertion that needs them is
+  reported as failing rather than passed. The smoke test checks this under
+  wasmtime 50.0.1 and Node. All other features work without the CLI.
 - **No environment.** The runners above pass no environment variables, so an
   `include ~/…` path has no home directory to expand. This case was not tested.
 - **File error wording** comes from WASI: `No such file or directory` instead of
