@@ -2305,6 +2305,130 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: nil,
 	},
+	{
+		name: "a key emptied by postings keeps its first cost literal",
+		input: `2024-01-01 t1
+    a  1 USD @ 0.5 EUR
+    x  = 0 GBP
+    e
+
+2024-01-02 t2
+    a  -1 USD @ 0.5 EUR
+    x  = 0 GBP
+    e
+
+2024-01-03 t3
+    a  2 USD @ 0.500 EUR
+    x  = 0 GBP
+    e
+
+2024-01-04 t4
+    a  = 0 USD
+    b  0.96 GBP @ 1 EUR
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "a key emptied by postings keeps its first finer cost literal",
+		input: `2024-01-01 t1
+    a  1 USD @ 0.500 EUR
+    x  = 0 GBP
+    e
+
+2024-01-02 t2
+    a  -1 USD @ 0.5 EUR
+    x  = 0 GBP
+    e
+
+2024-01-03 t3
+    a  2 USD @ 0.5 EUR
+    x  = 0 GBP
+    e
+
+2024-01-04 t4
+    a  = 0 USD
+    b  0.96 GBP @ 1 EUR
+`,
+		wantMessages: []string{"EUR off by -0.04"},
+	},
+	{
+		name: "an assignment with a cost replaces the literal of the balance",
+		input: `2024-01-01 t1
+    a  2 USD @ 0.5 EUR
+    x  = 0 GBP
+    e
+
+2024-01-02 t2
+    a  = 1 USD @ 0.500 EUR
+    e
+
+2024-01-04 t4
+    a  = 0 USD
+    b  0.46 GBP @ 1 EUR
+`,
+		wantMessages: []string{"EUR off by -0.04"},
+	},
+	{
+		name: "an assignment with a coarser cost replaces the literal of the balance",
+		input: `2024-01-01 t1
+    a  2 USD @ 0.500 EUR
+    x  = 0 GBP
+    e
+
+2024-01-02 t2
+    a  = 1 USD @ 0.5 EUR
+    e
+
+2024-01-04 t4
+    a  = 0 USD
+    b  0.46 GBP @ 1 EUR
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "an inclusive assignment empties the own balance and its literal",
+		input: `2024-01-01 t1
+    x  1 USD @ 0.500 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 t2
+    x  =* 0 USD
+    e
+
+2024-01-03 t3
+    x  2 USD @ 0.5 EUR
+    y  = 0 GBP
+    e
+
+2024-01-04 t4
+    x  = 0 USD
+    b  0.96 GBP @ 1 EUR
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "after an inclusive assignment the next posting brings the literal",
+		input: `2024-01-01 t1
+    x  1 USD @ 0.5 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 t2
+    x  =* 0 USD
+    e
+
+2024-01-03 t3
+    x  2 USD @ 0.500 EUR
+    y  = 0 GBP
+    e
+
+2024-01-04 t4
+    x  = 0 USD
+    b  0.96 GBP @ 1 EUR
+`,
+		wantMessages: []string{"EUR off by -0.04"},
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {

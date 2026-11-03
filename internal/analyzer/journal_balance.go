@@ -203,7 +203,9 @@ func (a pricedAmount) empty() bool {
 type pricedBalances map[string]map[pricedKey]pricedAmount
 
 // add adds an amount under a key. The key keeps the cost literal of the first
-// amount added under it, until it holds nothing again.
+// amount added under it, even once the amounts cancel out: hledger keeps the
+// emptied entry, and its literal, in the running balance. Only an assignment
+// replaces it (settleAssignment).
 func (b pricedBalances) add(account string, key pricedKey, amount pricedAmount) {
 	if account == "" {
 		return
@@ -214,11 +216,44 @@ func (b pricedBalances) add(account string, key pricedKey, amount pricedAmount) 
 		b[account] = byKey
 	}
 	held, ok := byKey[key]
-	if !ok || held.empty() {
+	if !ok {
 		held.places, held.uncertain = amount.places, amount.uncertain
 	}
 	held.quantity, held.value = held.quantity.Add(amount.quantity), held.value.Add(amount.value)
 	byKey[key] = held
+}
+
+// settlePricedAssignment gives an account's priced balance the cost literals it
+// has after a balance assignment. hledger does not add the change to the
+// balance: it replaces the balance in the asserted commodity (in every
+// commodity for ==) with the asserted amount, or for =* with the asserted
+// amount less what the subaccounts hold. So a key the replacement leaves empty
+// is gone, the asserted cost brings its own literal, and a key the subaccounts
+// hold takes theirs.
+func (e *journalEvaluator) settlePricedAssignment(account string, assertion *ast.BalanceAssertion) {
+	byKey := e.priced[account]
+	if len(byKey) == 0 {
+		return
+	}
+	asserted, hasAsserted := assertionPricedPart(assertion)
+	commodity := assertion.Amount.Commodity.Symbol
+	for key, held := range byKey {
+		if key.commodity != commodity && !assertion.IsStrict {
+			continue
+		}
+		switch {
+		case held.empty():
+			delete(byKey, key)
+			continue
+		case hasAsserted && key == asserted.pricedKey:
+			held.places, held.uncertain = asserted.places, nil
+		case assertion.IsInclusive:
+			if sub, ok := e.priced.collect(account, key.commodity, scopeSubaccounts)[key]; ok && !sub.empty() {
+				held.places, held.uncertain = sub.places, sub.uncertain
+			}
+		}
+		byKey[key] = held
+	}
 }
 
 // pricedScope selects which accounts an assignment reads priced balances from.
@@ -483,6 +518,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 			for _, part := range priced {
 				e.priced.add(p.Account.GetResolvedName(), part.pricedKey, part.amount())
 			}
+			e.settlePricedAssignment(p.Account.GetResolvedName(), p.BalanceAssertion)
 		default:
 			if group, ok := groupOf(groups, i); ok {
 				inferredPerGroup[group]++
