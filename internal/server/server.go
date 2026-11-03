@@ -59,7 +59,12 @@ type Server struct {
 	supportsConfiguration bool
 	// configReady is closed once the configuration fetched after initialized
 	// has been applied; nil when no fetch is pending. settingsMu guards it.
-	configReady         chan struct{}
+	configReady chan struct{}
+	// configRequested numbers the configuration fetches in the order the
+	// notifications asking for them arrived; configApplied is the number of the
+	// newest fetch whose reply has been applied. settingsMu guards both.
+	configRequested     uint64
+	configApplied       uint64
 	payeeTemplatesCache sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
 	alignmentCache      sync.Map // map[uri.URI]int
 	tokenCache          *semanticTokensCache
@@ -339,8 +344,9 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 		s.settingsMu.Lock()
 		s.configReady = ready
 		s.settingsMu.Unlock()
+		request := s.nextConfigurationRequest()
 		go func() {
-			refreshHints := s.applyConfiguration(context.Background())
+			refreshHints := s.applyConfiguration(context.Background(), request)
 			// The client may ask for the hints again before it answers the
 			// refresh, so the waiting requests go first.
 			close(ready)

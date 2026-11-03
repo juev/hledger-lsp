@@ -470,7 +470,7 @@ func collectTransactions(path string, journal *ast.Journal) []TransactionEntry {
 }
 
 func buildTransactionKey(tx ast.Transaction) string {
-	date := fmt.Sprintf("%04d-%02d-%02d", tx.Date.Year, tx.Date.Month, tx.Date.Day)
+	date := fmt.Sprintf("%s-%02d-%02d", tx.Date.YearText(), tx.Date.Month, tx.Date.Day)
 	payee := tx.Payee
 	if payee == "" {
 		payee = tx.Description

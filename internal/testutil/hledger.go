@@ -123,6 +123,11 @@ var NumberDirectives = []string{
 	"commodity ,\n    format ,1.000,\n",
 	"commodity ,\n    format ,1,000.\n",
 	"commodity ,\n    format 1.000,,\n",
+	"commodity 1..0 X\n",
+	"commodity 1.,0 X\n",
+	"commodity X\n    format 1,000..00 X\n",
+	"D 1..0 X\n",
+	"D 1,000.,00 X\n",
 	"2020-01-01 earlier\n    p  1,000.00 X\n    q\n\n",
 	"2020-01-01 earlier\n    p  1.000,00 X\n    q\n\n",
 }
@@ -373,6 +378,35 @@ var AmountSyntaxSpellings = []string{
 	"٣5",
 	"5 ５",
 	"５5",
+
+	// a separator after a complete number: hledger reports an invalid use of
+	// separator instead of reading the rest as digit groups
+	"1..0 X",
+	"1,,0 X",
+	"1.,0 X",
+	"1,.0 X",
+	"1.. X",
+	"1,, X",
+	"1...0 X",
+	"1.0.. X",
+	"1,000..00 X",
+	"1,000.,00 X",
+	"1.000,,00 X",
+	"1 000..00 X",
+	"1.000. X",
+	"1,000. X",
+	"1,000.00. X",
+	"1.000,00, X",
+	"1 000,00, X",
+	"1 000.00, X",
+	"1..0E2 X",
+	"-1..0 X",
+	"X 1..0",
+	"X -1,000.00.",
+	"1..0",
+	"1..0 руб",
+	"1,000,000.00 X",
+	"1.000.000,00 X",
 }
 
 // NumberCase is one journal prefix and one amount written after it.

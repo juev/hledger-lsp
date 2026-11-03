@@ -237,11 +237,18 @@ func normalizeServerSettingsWithIssues(settings serverSettings) (serverSettings,
 }
 
 func (s *Server) setSettings(settings serverSettings) {
-	settings = normalizeServerSettings(settings)
 	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.setSettingsLocked(settings)
+}
+
+// setSettingsLocked replaces the settings and the state derived from them. The
+// caller holds settingsMu, so two replacements cannot interleave and leave, say,
+// the analyzer with the tolerance of the one that lost.
+func (s *Server) setSettingsLocked(settings serverSettings) {
+	settings = normalizeServerSettings(settings)
 	oldSettings := s.settings
 	s.settings = settings
-	s.settingsMu.Unlock()
 	if s.loader != nil {
 		s.loader.SetLimits(settings.Limits)
 	}
@@ -288,15 +295,27 @@ func (s *Server) getSettings() serverSettings {
 	return s.settings
 }
 
-func (s *Server) refreshConfiguration(ctx context.Context) {
-	if s.applyConfiguration(ctx) {
+// nextConfigurationRequest numbers a configuration fetch. The notification
+// handlers call it themselves, and the connection runs them in the order the
+// notifications arrive, so the numbers follow the order of the client's changes
+// rather than the order in which the fetching goroutines get to run.
+func (s *Server) nextConfigurationRequest() uint64 {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.configRequested++
+	return s.configRequested
+}
+
+func (s *Server) refreshConfiguration(ctx context.Context, request uint64) {
+	if s.applyConfiguration(ctx, request) {
 		_ = s.client.InlayHintRefresh(ctx)
 	}
 }
 
-// applyConfiguration fetches and applies the client's settings and reports
-// whether the client should be asked to refresh its inlay hints.
-func (s *Server) applyConfiguration(ctx context.Context) bool {
+// applyConfiguration fetches and applies the client's settings for the given
+// fetch and reports whether the client should be asked to refresh its inlay
+// hints.
+func (s *Server) applyConfiguration(ctx context.Context, request uint64) bool {
 	if s.client == nil || !s.supportsConfiguration {
 		return false
 	}
@@ -309,14 +328,35 @@ func (s *Server) applyConfiguration(ctx context.Context) bool {
 		return false
 	}
 
-	previous := s.getSettings()
+	s.settingsMu.Lock()
+	// Replies may arrive in any order. A reply to a fetch older than one already
+	// applied describes settings the client has changed since, so it is dropped.
+	// A failed newer fetch applies nothing, which leaves an older reply the
+	// newest settings known.
+	if request <= s.configApplied {
+		s.settingsMu.Unlock()
+		return false
+	}
+	s.configApplied = request
+	previous := s.settings
 	settings, issues := parseSettingsFromLSPAnyWithIssues(previous, result[0])
+	s.setSettingsLocked(settings)
+	current := s.settings
+	s.settingsMu.Unlock()
 	s.reportSettingsIssues(issues)
-	s.setSettings(settings)
 
 	// The client asks for the hints of the buffers it opened before the
 	// configuration arrived, and shows those until it has a reason to ask again.
-	return s.clientCapabilities.supportsInlayHintRefresh && s.getSettings().InlayHints != previous.InlayHints
+	return s.clientCapabilities.supportsInlayHintRefresh && effectiveInlayHints(current) != effectiveInlayHints(previous)
+}
+
+// effectiveInlayHints is what the settings make an InlayHint request show: no
+// hints at all while the feature is off, whatever the individual options say.
+func effectiveInlayHints(settings serverSettings) inlayHintSettings {
+	if !settings.Features.InlayHints {
+		return inlayHintSettings{}
+	}
+	return settings.InlayHints
 }
 
 // initialConfigurationTimeout bounds how long a request waits for the
@@ -355,7 +395,8 @@ func (s *Server) reportSettingsIssues(issues []string) {
 // DidChangeConfiguration refreshes cached settings but cannot change
 // registered capabilities — feature flag changes require a server restart.
 func (s *Server) DidChangeConfiguration(_ context.Context, _ *protocol.DidChangeConfigurationParams) error {
-	go s.refreshConfiguration(context.Background())
+	request := s.nextConfigurationRequest()
+	go s.refreshConfiguration(context.Background(), request)
 	return nil
 }
 

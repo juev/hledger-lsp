@@ -136,7 +136,7 @@ func buildPayeeResolveDoc(payee string, transactions []ast.Transaction) string {
 
 	fmt.Fprintf(&sb, "**Transactions:** %d", count)
 	if lastDate != nil {
-		fmt.Fprintf(&sb, "\n\n**Last:** %04d-%02d-%02d", lastDate.Year, lastDate.Month, lastDate.Day)
+		fmt.Fprintf(&sb, "\n\n**Last:** %s-%02d-%02d", lastDate.YearText(), lastDate.Month, lastDate.Day)
 	}
 
 	return sb.String()

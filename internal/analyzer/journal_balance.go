@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,6 +247,8 @@ type journalEvaluator struct {
 	// observe, when set, receives each posting's contribution as the replay
 	// applies it, and whether it carries a cost.
 	observe func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool)
+	// dates holds the register dates of each transaction's postings once worked out.
+	dates map[*ast.Transaction][]ast.Date
 }
 
 // postingEffective is the amount a posting contributes to the journal once
@@ -386,7 +390,7 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 	elidedByGroup := make(map[int]int) // group index -> posting index
 	inferredPerGroup := make(map[int]int)
 
-	for _, i := range postingsInDateOrder(tx) {
+	for _, i := range e.postingsInDateOrder(tx) {
 		p := &tx.Postings[i]
 		switch {
 		case p.Amount != nil:
@@ -604,7 +608,9 @@ func (e *journalEvaluator) recordEvent(tx *ast.Transaction, path string, sourceO
 		return
 	}
 	e.events = append(e.events, postingBalanceEvent{
-		date:         primaryPostingDate(tx, &tx.Postings[postingIndex]),
+		// A transaction without balance assignments lists every posting at
+		// its own date, so the register date is the primary posting date.
+		date:         e.registerDates(tx)[postingIndex],
 		tx:           tx,
 		path:         path,
 		sourceOrder:  sourceOrder,
@@ -654,12 +660,11 @@ func (e *journalEvaluator) replay() []SourcedDiagnostic {
 
 // postingsInDateOrder returns the indices of a transaction's postings ordered by
 // date, keeping parse order within a date.
-func postingsInDateOrder(tx *ast.Transaction) []int {
+func (e *journalEvaluator) postingsInDateOrder(tx *ast.Transaction) []int {
 	order := make([]int, len(tx.Postings))
-	dates := make([]ast.Date, len(tx.Postings))
+	dates := e.registerDates(tx)
 	for i := range tx.Postings {
 		order[i] = i
-		dates[i] = registerDate(tx, &tx.Postings[i])
 	}
 	sort.SliceStable(order, func(i, j int) bool {
 		return compareDates(dates[order[i]], dates[order[j]]) < 0
@@ -667,23 +672,39 @@ func postingsInDateOrder(tx *ast.Transaction) []int {
 	return order
 }
 
-// registerDate returns the date a posting is listed at. hledger refuses date: on
-// an assignment posting, so that one has no date of its own to honour.
-func registerDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
-	if posting.Amount == nil && posting.BalanceAssertion != nil {
-		return tx.Date
+// registerDates returns the date each posting of a transaction is listed at,
+// worked out once per transaction and kept for the rest of the run.
+func (e *journalEvaluator) registerDates(tx *ast.Transaction) []ast.Date {
+	if dates, ok := e.dates[tx]; ok {
+		return dates
 	}
-	return primaryPostingDate(tx, posting)
+	dates := registerDates(tx)
+	if e.dates == nil {
+		e.dates = make(map[*ast.Transaction][]ast.Date)
+	}
+	e.dates[tx] = dates
+	return dates
 }
 
-// primaryPostingDate returns a posting's date: or bracketed-date override. A
-// yearless value inherits the transaction year. Invalid date: values have their
-// own diagnostic and fall back to the transaction date here.
-func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
-	if date, ok := postingDateOverride(tx, posting); ok {
-		return date
+// registerDates returns the date each posting of a transaction is listed at: its
+// date: or bracketed-date override, else the transaction date. A yearless value
+// inherits the transaction year; an invalid one has its own diagnostic and falls
+// back to the transaction date. hledger refuses date: on an assignment posting,
+// so that one has no date of its own to honour.
+func registerDates(tx *ast.Transaction) []ast.Date {
+	dates := make([]ast.Date, len(tx.Postings))
+	lines := postingCommentLines(tx.Postings, tx.Comments)
+	for i := range tx.Postings {
+		posting := &tx.Postings[i]
+		dates[i] = tx.Date
+		if posting.Amount == nil && posting.BalanceAssertion != nil {
+			continue
+		}
+		if date, ok := postingDateOverride(tx, posting, lines[i]); ok {
+			dates[i] = date
+		}
 	}
-	return tx.Date
+	return dates
 }
 
 // postingDateOverride returns the date a posting carries of its own. hledger
@@ -693,12 +714,12 @@ func primaryPostingDate(tx *ast.Transaction, posting *ast.Posting) ast.Date {
 // cannot belong to a date, while a bracketed date must be the whole bracket, so
 // [ 2024-01-20 ] is not one. Names are case sensitive, so Date: is an ordinary
 // tag.
-func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, bool) {
-	if date, ok := commentDate(posting.Comment, tx.Date.Year); ok {
+func postingDateOverride(tx *ast.Transaction, posting *ast.Posting, lines []ast.Comment) (ast.Date, bool) {
+	if date, ok := commentDate(posting.Comment, tx.Date); ok {
 		return date, true
 	}
-	for _, line := range continuationComments(tx, posting) {
-		if date, ok := commentDate(line.Text, tx.Date.Year); ok {
+	for _, line := range lines {
+		if date, ok := commentDate(line.Text, tx.Date); ok {
 			return date, true
 		}
 	}
@@ -706,8 +727,9 @@ func postingDateOverride(tx *ast.Transaction, posting *ast.Posting) (ast.Date, b
 }
 
 // commentDate returns the first date written in one comment line: the earlier of
-// its date: tag and its first bracketed date.
-func commentDate(comment string, transactionYear int) (ast.Date, bool) {
+// its date: tag and its first bracketed date. A date without a year takes the
+// year of the transaction date.
+func commentDate(comment string, transaction ast.Date) (ast.Date, bool) {
 	best, bestAt, found := ast.Date{}, 0, false
 	consider := func(date ast.Date, at int) {
 		if !found || at < bestAt {
@@ -719,7 +741,7 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 		if tag.Name != "date" {
 			continue
 		}
-		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transactionYear); ok {
+		if date, ok := parsePostingDateValue(leadingDateText(tag.Value), transaction); ok {
 			consider(date, tag.NameStart)
 		}
 	}
@@ -739,10 +761,10 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 			continue
 		}
 		primary, _, _ := strings.Cut(content, "=")
-		if _, ok := bracketDateYear(primary, transactionYear); !ok {
+		if _, ok := bracketDateYear(primary, transaction.CalendarYear()); !ok {
 			continue
 		}
-		if date, ok := parsePostingDateValue(primary, transactionYear); ok {
+		if date, ok := parsePostingDateValue(primary, transaction); ok {
 			consider(date, start)
 			break
 		}
@@ -750,32 +772,38 @@ func commentDate(comment string, transactionYear int) (ast.Date, bool) {
 	return best, found
 }
 
-// continuationComments returns the comment lines written under a posting, which
-// belong to that posting: the parser keeps them with the transaction.
-func continuationComments(tx *ast.Transaction, posting *ast.Posting) []ast.Comment {
-	return postingCommentLines(tx.Postings, tx.Comments, posting)
-}
-
-// postingCommentLines returns the ; lines among comments that are written under
-// the posting, before the next one of postings.
-func postingCommentLines(postings []ast.Posting, comments []ast.Comment, posting *ast.Posting) []ast.Comment {
-	if len(comments) == 0 {
-		return nil
+// postingCommentLines returns, for each posting, the ; lines among comments that
+// are written under it, before the next posting. The parser keeps these lines
+// with the transaction; lines above the first posting belong to none. Postings
+// and comments are in source order, so one pass over both assigns every line.
+func postingCommentLines(postings []ast.Posting, comments []ast.Comment) [][]ast.Comment {
+	owned := make([][]ast.Comment, len(postings))
+	if len(comments) == 0 || len(postings) == 0 {
+		return owned
 	}
-	next := int(^uint(0) >> 1)
-	for i := range postings {
-		if &postings[i] == posting && i+1 < len(postings) {
-			next = postingRange(&postings[i+1]).Start.Line
-		}
+	if !slices.IsSortedFunc(comments, func(a, b ast.Comment) int {
+		return cmp.Compare(a.Range.Start.Line, b.Range.Start.Line)
+	}) {
+		comments = slices.Clone(comments)
+		slices.SortStableFunc(comments, func(a, b ast.Comment) int {
+			return cmp.Compare(a.Range.Start.Line, b.Range.Start.Line)
+		})
 	}
-	first := postingRange(posting).Start.Line
-	var lines []ast.Comment
+	owner := -1
 	for _, line := range comments {
-		if line.Marker == ';' && line.Range.Start.Line > first && line.Range.Start.Line < next {
-			lines = append(lines, line)
+		at := line.Range.Start.Line
+		for owner+1 < len(postings) && postingRange(&postings[owner+1]).Start.Line < at {
+			owner++
 		}
+		if line.Marker != ';' || owner < 0 {
+			continue
+		}
+		if owner+1 < len(postings) && postingRange(&postings[owner+1]).Start.Line == at {
+			continue
+		}
+		owned[owner] = append(owned[owner], line)
 	}
-	return lines
+	return owned
 }
 
 // leadingDateText returns the part of a tag value that reads as a date: digits
@@ -789,7 +817,9 @@ func leadingDateText(value string) string {
 	return strings.TrimRight(value[:end], "-/.")
 }
 
-func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
+// parsePostingDateValue reads a posting date. A value without a year takes the
+// year of the transaction date.
+func parsePostingDateValue(value string, transaction ast.Date) (ast.Date, bool) {
 	value = strings.TrimSpace(value)
 	separator := strings.IndexAny(value, "-/.")
 	if separator < 0 {
@@ -799,21 +829,23 @@ func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
 	if len(parts) != 2 && len(parts) != 3 {
 		return ast.Date{}, false
 	}
-	year := transactionYear
+	date := ast.Date{Year: transaction.Year, YearDigits: transaction.YearDigits}
 	if len(parts) == 3 {
-		parsed, err := strconv.Atoi(parts[0])
-		if err != nil {
+		// hledger reads a year of any length.
+		year, digits, ok := ast.ParseYear(parts[0])
+		if !ok {
 			return ast.Date{}, false
 		}
-		year = parsed
+		date.Year, date.YearDigits = year, digits
 		parts = parts[1:]
 	}
 	month, monthErr := strconv.Atoi(parts[0])
 	day, dayErr := strconv.Atoi(parts[1])
-	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(year, month, day) {
+	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(date.CalendarYear(), month, day) {
 		return ast.Date{}, false
 	}
-	return ast.Date{Year: year, Month: month, Day: day}, true
+	date.Month, date.Day = month, day
+	return date, true
 }
 
 // groupOf returns the index of the balancing group that contains a posting.
@@ -1103,14 +1135,7 @@ func postingRange(p *ast.Posting) ast.Range {
 
 // compareDates orders two journal dates, treating an unset date as the earliest.
 func compareDates(a, b ast.Date) int {
-	switch {
-	case a.Year != b.Year:
-		return a.Year - b.Year
-	case a.Month != b.Month:
-		return a.Month - b.Month
-	default:
-		return a.Day - b.Day
-	}
+	return a.Compare(b)
 }
 
 // formatDifferences renders residuals for the UNBALANCED message: sorted by

@@ -137,6 +137,7 @@ func (a *Analyzer) analyzeInternal(journal *ast.Journal, external ExternalDeclar
 		result.Diagnostics = append(result.Diagnostics, validateBracketDates(tx)...)
 	}
 	result.Diagnostics = append(result.Diagnostics, validateRuleBracketDates(journal)...)
+	result.Diagnostics = append(result.Diagnostics, validateRuleDateTags(journal)...)
 
 	return result
 }
@@ -698,6 +699,14 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 }
 
 func validateDateTags(tx *ast.Transaction) []Diagnostic {
+	return postingDateTagDiagnostics(tx.Postings, tx.Comments, tx.Date.CalendarYear())
+}
+
+// postingDateTagDiagnostics reports the date: and date2: tags hledger refuses on
+// postings and on the comment lines below them. A value without a year is read
+// in the given year; with unknownYear, the year of an auto posting rule, hledger
+// cannot read it at all.
+func postingDateTagDiagnostics(postings []ast.Posting, comments []ast.Comment, year int) []Diagnostic {
 	var diags []Diagnostic
 
 	checkTag := func(tag ast.Tag) {
@@ -717,7 +726,18 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 			return
 		}
 
-		if !isValidDateValueIn(leadingDateText(tag.Value), tx.Date.Year) {
+		value := leadingDateText(tag.Value)
+		if year == unknownYear && isValidDateValueIn(value, 0) && strings.Count(value, "-")+strings.Count(value, "/")+strings.Count(value, ".") == 1 {
+			diags = append(diags, Diagnostic{
+				Range:    tag.Range,
+				Severity: SeverityError,
+				Code:     "INVALID_DATE_TAG",
+				Message:  fmt.Sprintf("tag '%s' needs a year in an auto posting rule, which has no year to read %s in", tag.Name, tag.Value),
+				Data:     map[string]any{"kind": "dateTag", "tag": tag.Name, "value": tag.Value},
+			})
+			return
+		}
+		if !isValidDateValueIn(value, year) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
 				Severity: SeverityError,
@@ -731,8 +751,8 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	// hledger reads a posting date only from a posting: its comment and the
 	// comment lines below it. In the header comment and on the comment lines
 	// before the first posting a date: tag is prose, whatever its value.
-	for i := range tx.Postings {
-		for _, line := range continuationComments(tx, &tx.Postings[i]) {
+	for _, lines := range postingCommentLines(postings, comments) {
+		for _, line := range lines {
 			for _, tag := range line.Tags {
 				checkTag(tag)
 			}
@@ -740,7 +760,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	}
 
 	// Check posting tags
-	for _, posting := range tx.Postings {
+	for _, posting := range postings {
 		for _, tag := range posting.Tags {
 			checkTag(tag)
 		}
@@ -755,12 +775,16 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 // secondary date (date2: or a bracket with only the part after =) is allowed.
 func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
+	var lines [][]ast.Comment
 	for i := range tx.Postings {
 		p := &tx.Postings[i]
 		if p.Amount != nil || p.BalanceAssertion == nil {
 			continue
 		}
-		if _, ok := postingDateOverride(tx, p); !ok {
+		if lines == nil {
+			lines = postingCommentLines(tx.Postings, tx.Comments)
+		}
+		if _, ok := postingDateOverride(tx, p, lines[i]); !ok {
 			continue
 		}
 		diags = append(diags, Diagnostic{
@@ -783,7 +807,7 @@ func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 // Every bracket of the comment of a posting and of the comment lines below it is
 // checked.
 func validateBracketDates(tx *ast.Transaction) []Diagnostic {
-	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.Year)
+	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.CalendarYear())
 }
 
 // validateRuleBracketDates reports the bracketed posting dates hledger refuses in
@@ -803,12 +827,29 @@ func validateRuleBracketDates(journal *ast.Journal) []Diagnostic {
 	return diags
 }
 
+// validateRuleDateTags reports the date: and date2: tags hledger refuses on the
+// postings of periodic transactions and auto posting rules, read in the same
+// years as their bracketed dates.
+func validateRuleDateTags(journal *ast.Journal) []Diagnostic {
+	var diags []Diagnostic
+	for i := range journal.PeriodicTransactions {
+		periodic := &journal.PeriodicTransactions[i]
+		diags = append(diags, postingDateTagDiagnostics(periodic.Postings, periodic.Comments, periodic.Year)...)
+	}
+	for i := range journal.AutoPostingRules {
+		rule := &journal.AutoPostingRules[i]
+		diags = append(diags, postingDateTagDiagnostics(rule.Postings, rule.Comments, unknownYear)...)
+	}
+	return diags
+}
+
 func postingBracketDateDiagnostics(postings []ast.Posting, comments []ast.Comment, year int) []Diagnostic {
 	var diags []Diagnostic
+	lines := postingCommentLines(postings, comments)
 	for i := range postings {
 		posting := &postings[i]
 		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, year)
-		for _, line := range postingCommentLines(postings, comments, posting) {
+		for _, line := range lines[i] {
 			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, year)
 		}
 	}

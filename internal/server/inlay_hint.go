@@ -55,20 +55,36 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
 			// the replay gave it, since the transaction alone cannot tell it.
-			var values []hintValue
+			// A reading that infers zero shows no hint of its own, but when
+			// another reading infers an amount, the zero is one of the values,
+			// so the amount is not taken to hold in every inclusion.
+			var values, zeros []hintValue
 			assigned := false
 			for index, occurrence := range occurrences {
-				amounts, ok := assignedFor(posting, assignedAt(index))
+				raw := assignedAt(index)
+				amounts, ok := assignedFor(posting, raw)
 				assigned = assigned || ok
-				if ok && len(amounts) > 0 {
+				switch {
+				case ok && len(amounts) > 0:
 					values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
+				case ok:
+					zeros = addHintValue(zeros, zeroAmounts(raw, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 				}
 			}
 			if !assigned {
 				for index := range readings {
-					if effect, ok := effectAt(index); ok && len(effect.InferredAmounts) > 0 {
+					effect, ok := effectAt(index)
+					switch {
+					case ok && len(effect.InferredAmounts) > 0:
 						values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
+					case ok && effect.InferredZero != nil:
+						zeros = addHintValue(zeros, zeroAmounts(effect.InferredZero, readings[index].formatsAt(offset)), readings[index].includedFrom)
 					}
+				}
+			}
+			if len(values) > 0 {
+				for _, zero := range zeros {
+					values = addHintValue(values, zero.text, zero.refs)
 				}
 			}
 			if len(values) > 0 && posting.BalanceAssertion != nil {
@@ -240,6 +256,15 @@ func assignedFor(posting *ast.Posting, amounts map[string]decimal.Decimal) (map[
 		}
 	}
 	return nonZero, true
+}
+
+// zeroAmounts writes an amount of zero in the commodities it has, or a bare 0
+// when it has none.
+func zeroAmounts(amounts map[string]decimal.Decimal, formats map[string]formatter.CommodityFormat) string {
+	if len(amounts) == 0 {
+		return "0"
+	}
+	return formatAmounts(amounts, formats)
 }
 
 // locatedEffect is a posting effect with the posting it belongs to.
