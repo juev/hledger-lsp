@@ -336,8 +336,13 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 		s.configReady = ready
 		s.settingsMu.Unlock()
 		go func() {
-			defer close(ready)
-			s.refreshConfiguration(context.Background())
+			refreshHints := s.applyConfiguration(context.Background())
+			// The client may ask for the hints again before it answers the
+			// refresh, so the waiting requests go first.
+			close(ready)
+			if refreshHints {
+				_ = s.client.InlayHintRefresh(context.Background())
+			}
 		}()
 	}
 	if s.clientCapabilities.supportsDynamicFileWatchers {

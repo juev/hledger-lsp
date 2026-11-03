@@ -264,8 +264,16 @@ func (s *Server) getSettings() serverSettings {
 }
 
 func (s *Server) refreshConfiguration(ctx context.Context) {
+	if s.applyConfiguration(ctx) {
+		_ = s.client.InlayHintRefresh(ctx)
+	}
+}
+
+// applyConfiguration fetches and applies the client's settings and reports
+// whether the client should be asked to refresh its inlay hints.
+func (s *Server) applyConfiguration(ctx context.Context) bool {
 	if s.client == nil || !s.supportsConfiguration {
-		return
+		return false
 	}
 	result, err := s.client.Configuration(ctx, &protocol.ConfigurationParams{
 		Items: []protocol.ConfigurationItem{
@@ -273,7 +281,7 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 		},
 	})
 	if err != nil || len(result) == 0 {
-		return
+		return false
 	}
 
 	previous := s.getSettings()
@@ -283,9 +291,7 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 
 	// The client asks for the hints of the buffers it opened before the
 	// configuration arrived, and shows those until it has a reason to ask again.
-	if s.clientCapabilities.supportsInlayHintRefresh && s.getSettings().InlayHints != previous.InlayHints {
-		_ = s.client.InlayHintRefresh(ctx)
-	}
+	return s.clientCapabilities.supportsInlayHintRefresh && s.getSettings().InlayHints != previous.InlayHints
 }
 
 // initialConfigurationTimeout bounds how long a request waits for the
