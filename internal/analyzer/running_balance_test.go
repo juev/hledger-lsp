@@ -469,3 +469,30 @@ func TestRunningBalances_AssertionCostIsInferredInTheCostCommodity(t *testing.T)
 	assert.NotContains(t, balances, PostingRef{TransactionIndex: 1, PostingIndex: 0})
 	assert.NotContains(t, balances, PostingRef{TransactionIndex: 1, PostingIndex: 1})
 }
+
+// An assignment moves its account by the difference from the balance before it,
+// and the elided posting balances that difference: `hledger print -x` writes
+// 4,700 and -4,700 for the second transaction, not 522,000.
+func TestReplayFor_AssignedAmountsAreTheChange(t *testing.T) {
+	resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: `2026-07-31 Zestimate
+    активы:дом  =517300 USD
+    equity:gains
+
+2026-08-03 Zestimate
+    активы:дом  =522000 USD
+    equity:gains
+
+2026-08-04 plain
+    активы:дом  1 USD
+    equity:gains
+`})
+	sourced := resolved.TransactionsWithSource()
+	replay := ReplayFor(sourced, []include.OccurrenceID{sourced[0].OccurrenceID})[sourced[0].OccurrenceID]
+
+	assert.Equal(t, "517300", replay.Assigned[PostingRef{0, 0}]["USD"].String())
+	assert.Equal(t, "-517300", replay.Assigned[PostingRef{0, 1}]["USD"].String())
+	assert.Equal(t, "4700", replay.Assigned[PostingRef{1, 0}]["USD"].String())
+	assert.Equal(t, "-4700", replay.Assigned[PostingRef{1, 1}]["USD"].String())
+	assert.Len(t, replay.Assigned, 4, "a transaction without an assignment has no assigned amounts")
+	assert.Equal(t, "522001", runningBalanceAt(t, replay.Balances, 2, 0, "USD"))
+}

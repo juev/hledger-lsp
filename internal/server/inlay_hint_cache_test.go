@@ -139,8 +139,8 @@ func TestInlayHint_RunningBalancesAreReusedWhileNothingChanges(t *testing.T) {
 		require.True(t, ok)
 		replays := cached.(*cachedDoc).running
 		require.Len(t, replays, 1)
-		for _, balances := range replays {
-			return reflect.ValueOf(balances).Pointer()
+		for _, replay := range replays {
+			return reflect.ValueOf(replay.Balances).Pointer()
 		}
 		return 0
 	}

@@ -40,6 +40,28 @@ func RunningBalances(sourced []include.SourcedTransaction, id include.Occurrence
 // each of the occurrences ids, keyed by occurrence. A file included many times
 // costs one replay instead of one per inclusion.
 func RunningBalancesFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID) map[include.OccurrenceID]map[PostingRef]map[string]decimal.Decimal {
+	replays := ReplayFor(sourced, ids)
+	result := make(map[include.OccurrenceID]map[PostingRef]map[string]decimal.Decimal, len(replays))
+	for id, replay := range replays {
+		result[id] = replay.Balances
+	}
+	return result
+}
+
+// Replay is what one replay of the journal says about the postings of an
+// occurrence.
+type Replay struct {
+	// Balances is each posting's running balance, as RunningBalances returns it.
+	Balances map[PostingRef]map[string]decimal.Decimal
+	// Assigned is the amount hledger gives each amount-less posting of a
+	// transaction with a balance assignment: the change that makes the
+	// assignment hold, and the elided amount that balances it. Both depend on the
+	// balance the account had before, so the transaction alone cannot tell them.
+	Assigned map[PostingRef]map[string]decimal.Decimal
+}
+
+// ReplayFor is RunningBalancesFor with the assigned amounts of each occurrence.
+func ReplayFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID) map[include.OccurrenceID]Replay {
 	var entries []registerEntry
 	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
 	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
@@ -61,18 +83,30 @@ func RunningBalancesFor(sourced []include.SourcedTransaction, ids []include.Occu
 
 	hidden := registerHidden(sourced, entries)
 	balances := accountBalances{}
-	result := make(map[include.OccurrenceID]map[PostingRef]map[string]decimal.Decimal, len(ids))
+	result := make(map[include.OccurrenceID]Replay, len(ids))
 	for _, id := range ids {
-		result[id] = make(map[PostingRef]map[string]decimal.Decimal)
+		result[id] = Replay{
+			Balances: make(map[PostingRef]map[string]decimal.Decimal),
+			Assigned: make(map[PostingRef]map[string]decimal.Decimal),
+		}
 	}
 	for _, step := range entries {
 		source := &sourced[step.sourceOrder]
-		account := source.Transaction.Postings[step.postingIndex].Account.GetResolvedName()
+		posting := &source.Transaction.Postings[step.postingIndex]
+		account := posting.Account.GetResolvedName()
 		for commodity, quantity := range step.contribution {
 			balances.add(account, commodity, quantity)
 		}
-		if wanted, ok := result[source.OccurrenceID]; ok && !hidden[postingKey{step.sourceOrder, step.postingIndex}] {
-			wanted[PostingRef{TransactionIndex: source.Index, PostingIndex: step.postingIndex}] = cloneAmounts(balances[account])
+		wanted, ok := result[source.OccurrenceID]
+		if !ok {
+			continue
+		}
+		ref := PostingRef{TransactionIndex: source.Index, PostingIndex: step.postingIndex}
+		if !hidden[postingKey{step.sourceOrder, step.postingIndex}] {
+			wanted.Balances[ref] = cloneAmounts(balances[account])
+		}
+		if posting.Amount == nil && HasBalanceAssignment(&source.Transaction) {
+			wanted.Assigned[ref] = cloneAmounts(step.contribution)
 		}
 	}
 	return result

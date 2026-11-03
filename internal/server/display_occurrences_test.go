@@ -237,8 +237,8 @@ func TestInlayHint_RunningBalancesOfManyInclusionsAreReused(t *testing.T) {
 		doc.runningMu.Lock()
 		defer doc.runningMu.Unlock()
 		pointers := make(map[readingKey]uintptr)
-		for key, balances := range doc.running {
-			pointers[key] = reflect.ValueOf(balances).Pointer()
+		for key, replay := range doc.running {
+			pointers[key] = reflect.ValueOf(replay.Balances).Pointer()
 		}
 		return pointers
 	}

@@ -40,24 +40,43 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 	// Replaying the balances walks the whole include tree, so it runs only when
 	// the result will be read, and is reused until the document or its tree moves.
 	// A balance depends on where in the journal the file sits, so every inclusion
-	// of the file has its own, not one per include context.
+	// of the file has its own, not one per include context. The amounts of a
+	// transaction with a balance assignment depend on it too.
 	var occurrences []balanceOccurrence
-	if settings.InlayHints.RunningBalances {
+	if settings.InlayHints.RunningBalances || (settings.InlayHints.InferredAmounts && hasBalanceAssignment(readings)) {
 		occurrences = s.balanceOccurrences(params.TextDocument.URI, content, path)
 	}
 
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt func(occurrence int) map[string]decimal.Decimal) {
+	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
+			// A posting of a transaction with a balance assignment has the amount
+			// the replay gave it, since the transaction alone cannot tell it.
 			var values []hintValue
-			for index := range readings {
-				if effect, ok := effectAt(index); ok && len(effect.InferredAmounts) > 0 {
-					values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
+			assigned := false
+			for index, occurrence := range occurrences {
+				amounts, ok := assignedFor(posting, assignedAt(index))
+				assigned = assigned || ok
+				if ok && len(amounts) > 0 {
+					values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 				}
 			}
-			if len(values) > 0 {
+			if !assigned {
+				for index := range readings {
+					if effect, ok := effectAt(index); ok && len(effect.InferredAmounts) > 0 {
+						values = addHintValue(values, formatAmounts(effect.InferredAmounts, readings[index].formatsAt(offset)), readings[index].includedFrom)
+					}
+				}
+			}
+			if len(values) > 0 && posting.BalanceAssertion != nil {
+				// The amount an assignment moves is written where the amount would
+				// be, just before the assignment: `account  5 USD=100 USD`.
+				hint := valuedHint(mapper.ByteToLSP(posting.BalanceAssertion.Range.Start.Offset), "", values)
+				hint.PaddingLeft = nil
+				hints = appendHintInRange(hints, params.Range, hint)
+			} else if len(values) > 0 {
 				// Anchored past the end of the line rather than after the account
 				// name: an inlay hint takes up room in the rendered line, so a hint
 				// placed mid-line pushes the alignment padding — and the cursor
@@ -80,6 +99,9 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		var values []hintValue
 		var transacted []string
 		for index, occurrence := range occurrences {
+			if !settings.InlayHints.RunningBalances {
+				break
+			}
 			if amounts := balanceAt(index); len(amounts) > 0 {
 				if transacted == nil {
 					transacted = transactedCommodities(posting, len(readings), effectAt)
@@ -104,7 +126,8 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
 			emit(posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
-				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].balances[ref] })
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Balances[ref] },
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] })
 		}
 		return hints, nil
 	}
@@ -130,9 +153,9 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		}
 	}
 	slices.Sort(offsets)
-	balancesByOffset := make([]map[int]map[string]decimal.Decimal, len(occurrences))
+	replaysByOffset := make([]offsetReplay, len(occurrences))
 	for index, occurrence := range occurrences {
-		balancesByOffset[index] = s.balancesByOffset(params.TextDocument.URI, content, occurrence)
+		replaysByOffset[index] = s.replayByOffset(params.TextDocument.URI, content, occurrence)
 	}
 	for _, offset := range offsets {
 		posting := known[offset]
@@ -142,7 +165,8 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 		emit(posting, func(index int) (analyzer.PostingEffect, bool) {
 			entry, ok := located[index][offset]
 			return entry.effect, ok
-		}, func(occurrence int) map[string]decimal.Decimal { return balancesByOffset[occurrence][offset] })
+		}, func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].balances[offset] },
+			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] })
 	}
 	return hints, nil
 }
@@ -193,6 +217,39 @@ func transactedCommodities(posting *ast.Posting, readings int, effectAt func(rea
 	return commodities
 }
 
+// hasBalanceAssignment reports whether any reading of the document has a
+// transaction with a balance assignment.
+func hasBalanceAssignment(readings []occurrenceReading) bool {
+	for index := range readings {
+		for transaction := range readings[index].journal.Transactions {
+			if analyzer.HasBalanceAssignment(&readings[index].journal.Transactions[transaction]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// assignedFor returns the amount a replay gave a posting of a transaction with a
+// balance assignment, and whether it gave one. An elided posting leaves out the
+// commodities it balances to zero, as an inferred amount does; the assignment
+// itself keeps a zero, since moving nothing is what it did.
+func assignedFor(posting *ast.Posting, amounts map[string]decimal.Decimal) (map[string]decimal.Decimal, bool) {
+	if amounts == nil {
+		return nil, false
+	}
+	if posting.BalanceAssertion != nil {
+		return amounts, true
+	}
+	nonZero := make(map[string]decimal.Decimal, len(amounts))
+	for commodity, quantity := range amounts {
+		if !quantity.IsZero() {
+			nonZero[commodity] = quantity
+		}
+	}
+	return nonZero, true
+}
+
 // locatedEffect is a posting effect with the posting it belongs to.
 type locatedEffect struct {
 	posting *ast.Posting
@@ -210,10 +267,10 @@ func locateEffects(journal *ast.Journal, effects []analyzer.PostingEffect) map[i
 	return located
 }
 
-// balancesByOffset keys the running balances of an inclusion by the offset their
-// posting starts at in the inclusion's own journal, reusing the result until the
+// replayByOffset keys the replay of an inclusion by the offset each posting
+// starts at in the inclusion's own journal, reusing the result until the
 // document or its tree moves.
-func (s *Server) balancesByOffset(docURI uri.URI, content string, occurrence balanceOccurrence) map[int]map[string]decimal.Decimal {
+func (s *Server) replayByOffset(docURI uri.URI, content string, occurrence balanceOccurrence) offsetReplay {
 	doc := s.cachedParse(docURI, content)
 	key := readingKey{tree: occurrence.ref.tree, id: occurrence.ref.occurrence.ID}
 
@@ -222,16 +279,20 @@ func (s *Server) balancesByOffset(docURI uri.URI, content string, occurrence bal
 	if byOffset, ok := doc.runningOffsets[key]; ok {
 		return byOffset
 	}
-	byOffset := make(map[int]map[string]decimal.Decimal, len(occurrence.balances))
 	journal := occurrence.ref.occurrence.Journal
-	for ref, amounts := range occurrence.balances {
-		if journal == nil || ref.TransactionIndex >= len(journal.Transactions) || ref.PostingIndex >= len(journal.Transactions[ref.TransactionIndex].Postings) {
-			continue
+	keyed := func(byRef map[analyzer.PostingRef]map[string]decimal.Decimal) map[int]map[string]decimal.Decimal {
+		result := make(map[int]map[string]decimal.Decimal, len(byRef))
+		for ref, amounts := range byRef {
+			if journal == nil || ref.TransactionIndex >= len(journal.Transactions) || ref.PostingIndex >= len(journal.Transactions[ref.TransactionIndex].Postings) {
+				continue
+			}
+			result[journal.Transactions[ref.TransactionIndex].Postings[ref.PostingIndex].Range.Start.Offset] = amounts
 		}
-		byOffset[journal.Transactions[ref.TransactionIndex].Postings[ref.PostingIndex].Range.Start.Offset] = amounts
+		return result
 	}
+	byOffset := offsetReplay{balances: keyed(occurrence.replay.Balances), assigned: keyed(occurrence.replay.Assigned)}
 	if doc.runningOffsets == nil {
-		doc.runningOffsets = make(map[readingKey]map[int]map[string]decimal.Decimal)
+		doc.runningOffsets = make(map[readingKey]offsetReplay)
 	}
 	doc.runningOffsets[key] = byOffset
 	return byOffset
@@ -253,7 +314,7 @@ func effectPosting(journal *ast.Journal, effect analyzer.PostingEffect) *ast.Pos
 // balanceOccurrence is one inclusion of the document with its replayed balances.
 type balanceOccurrence struct {
 	ref       occurrenceRef
-	balances  map[analyzer.PostingRef]map[string]decimal.Decimal
+	replay    analyzer.Replay
 	formatsAt func(offset int) map[string]formatter.CommodityFormat
 }
 
@@ -267,7 +328,7 @@ func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []bala
 	if s.workspace == nil {
 		used[readingKey{}] = true
 		return []balanceOccurrence{{
-			balances: s.cachedRunningBalances(docURI, content, nil, 0),
+			replay: s.cachedReplay(docURI, content, nil, 0),
 			// The same formats as the inferred amount of the line, so the two hints
 			// of one posting are written alike.
 			formatsAt: func(offset int) map[string]formatter.CommodityFormat {
@@ -289,11 +350,11 @@ func (s *Server) balanceOccurrences(docURI uri.URI, content, path string) []bala
 			ids[index] = occurrence.ID
 			used[readingKey{tree: resolved, id: occurrence.ID}] = true
 		}
-		replays := s.cachedRunningBalancesOf(docURI, content, resolved, ids)
+		replays := s.cachedReplaysOf(docURI, content, resolved, ids)
 		for _, occurrence := range occurrences {
 			result = append(result, balanceOccurrence{
 				ref:       occurrenceRef{resolved, occurrence},
-				balances:  replays[occurrence.ID],
+				replay:    replays[occurrence.ID],
 				formatsAt: resolved.FormatsAtFunc(occurrence.ID),
 			})
 		}
