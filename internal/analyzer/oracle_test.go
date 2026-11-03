@@ -484,8 +484,9 @@ func assertRunningBalancesMatchRegister(t *testing.T, hledgerPath, input string)
 					candidates = append(candidates, i)
 				}
 			}
+			dates := registerDates(tx)
 			sort.SliceStable(candidates, func(i, j int) bool {
-				return compareDates(registerDate(tx, &tx.Postings[candidates[i]]), registerDate(tx, &tx.Postings[candidates[j]])) < 0
+				return compareDates(dates[candidates[i]], dates[candidates[j]]) < 0
 			})
 			require.Less(t, seen[row[0]], len(candidates), "register has more rows than postings for %s", account)
 			posting := candidates[seen[row[0]]]

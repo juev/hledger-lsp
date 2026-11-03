@@ -164,8 +164,8 @@ func TestPostingDateOverride_ReadsADateTagLikeHledger(t *testing.T) {
 	journal, errs := parser.Parse("2024-01-01 t\n    c  4 GBP  ; date:2024-01-19x\n    b\n\n2024-01-02 t\n    c  4 GBP  ; date:2024-01-20 text\n    b\n")
 	require.Empty(t, errs)
 
-	assert.Equal(t, 19, registerDate(&journal.Transactions[0], &journal.Transactions[0].Postings[0]).Day)
-	assert.Equal(t, 20, registerDate(&journal.Transactions[1], &journal.Transactions[1].Postings[0]).Day)
+	assert.Equal(t, 19, registerDates(&journal.Transactions[0])[0].Day)
+	assert.Equal(t, 20, registerDates(&journal.Transactions[1])[0].Day)
 }
 
 func TestPostingDateOverride_ReadsCommentLinesBelowAPosting(t *testing.T) {
@@ -173,8 +173,8 @@ func TestPostingDateOverride_ReadsCommentLinesBelowAPosting(t *testing.T) {
 	require.Empty(t, errs)
 
 	tx := &journal.Transactions[0]
-	assert.Equal(t, 19, registerDate(tx, &tx.Postings[0]).Day)
-	assert.Equal(t, 20, registerDate(tx, &tx.Postings[1]).Day)
+	assert.Equal(t, 19, registerDates(tx)[0].Day)
+	assert.Equal(t, 20, registerDates(tx)[1].Day)
 }
 
 // postingDateCases are postings of an ordinary transaction with a comment that may
@@ -236,7 +236,7 @@ func TestPostingDateOverride_FollowsHledgerOrderAndBrackets(t *testing.T) {
 			if want == 0 {
 				want = 1
 			}
-			assert.Equal(t, want, registerDate(tx, &tx.Postings[0]).Day)
+			assert.Equal(t, want, registerDates(tx)[0].Day)
 		})
 	}
 }
