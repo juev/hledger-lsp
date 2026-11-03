@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/hledger-lsp
+  - id: hledger-lsp
+    main: ./cmd/hledger-lsp
     binary: hledger-lsp
     env:
       - CGO_ENABLED=0
@@ -68,10 +69,53 @@ builds:
             - HLEDGER_WASI_WASM={{ abs .Path }}
           output: true
 
+  - id: hledger-fmt
+    main: ./cmd/hledger-fmt
+    binary: hledger-fmt
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm64
+      - 386
+      - arm
+    ignore:
+      # macOS only supports 64-bit
+      - goos: darwin
+        goarch: 386
+      - goos: darwin
+        goarch: arm
+      # Windows: focus on modern systems (64-bit only)
+      - goos: windows
+        goarch: 386
+      - goos: windows
+        goarch: arm
+      # FreeBSD: 64-bit only
+      - goos: freebsd
+        goarch: 386
+      - goos: freebsd
+        goarch: arm
+      # OpenBSD: 64-bit only
+      - goos: openbsd
+        goarch: 386
+      - goos: openbsd
+        goarch: arm
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Version}}
+      - -X main.Commit={{.ShortCommit}}
+      - -X main.Date={{.Date}}
+
 archives:
   - formats:
       - binary
-    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

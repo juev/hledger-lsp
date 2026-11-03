@@ -6,6 +6,7 @@
 *.dylib
 
 /hledger-lsp
+/hledger-fmt
 
 # Test binary, build artifacts
 *.test
