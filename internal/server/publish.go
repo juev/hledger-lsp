@@ -116,6 +116,8 @@ func (s *Server) publishTreesOf(ctx context.Context, docURI uri.URI, forget bool
 // coverage is replaced by the current one afterwards, or dropped when the
 // document is gone, so it never holds more than the last publish saw.
 func (s *Server) publishCoverage(ctx context.Context, round *publishRound, version *uint32, forget bool) {
+	// The trees were just read, and an include may now import other files.
+	defer s.scheduleImportWatchers()
 	docURI := round.docURI
 	docSources := round.sourcesFor(docURI)
 	current := map[uri.URI]bool{docURI: true}
