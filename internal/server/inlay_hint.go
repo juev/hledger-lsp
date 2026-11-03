@@ -20,10 +20,11 @@ import (
 // InlayHint returns amount inference and optional balance and cost facts for a
 // journal document. Semantic facts are cached per exact document content; LSP
 // ranges and settings are applied for each request.
-func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) ([]protocol.InlayHint, error) {
+func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams) ([]protocol.InlayHint, error) {
 	if params == nil {
 		return nil, nil
 	}
+	s.awaitInitialConfiguration(ctx)
 	settings := s.getSettings()
 	if !settings.Features.InlayHints {
 		return nil, nil

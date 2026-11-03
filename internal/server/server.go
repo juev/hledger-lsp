@@ -56,14 +56,17 @@ type Server struct {
 	settingsMu            sync.RWMutex
 	clientCapabilities    clientCapabilities
 	supportsConfiguration bool
-	payeeTemplatesCache   sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
-	alignmentCache        sync.Map // map[uri.URI]int
-	tokenCache            *semanticTokensCache
-	parseCache            sync.Map   // map[uri.URI]*cachedDoc
-	publishMu             sync.Mutex // serialises publishAffected, so the last run to finish holds the newest state
-	publishedMu           sync.Mutex
-	published             map[uri.URI][]protocol.Diagnostic // the non-empty set last published for each file
-	affected              map[uri.URI]map[uri.URI]bool      // files a document's last publish covered
+	// configReady is closed once the configuration fetched after initialized
+	// has been applied; nil when no fetch is pending. settingsMu guards it.
+	configReady         chan struct{}
+	payeeTemplatesCache sync.Map // map[uri.URI]map[string][]analyzer.PostingTemplate
+	alignmentCache      sync.Map // map[uri.URI]int
+	tokenCache          *semanticTokensCache
+	parseCache          sync.Map   // map[uri.URI]*cachedDoc
+	publishMu           sync.Mutex // serialises publishAffected, so the last run to finish holds the newest state
+	publishedMu         sync.Mutex
+	published           map[uri.URI][]protocol.Diagnostic // the non-empty set last published for each file
+	affected            map[uri.URI]map[uri.URI]bool      // files a document's last publish covered
 
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
@@ -327,7 +330,21 @@ func (s *Server) Initialized(_ context.Context, _ *protocol.InitializedParams) e
 			s.logMessage(protocol.MessageTypeWarning, "hledger-lsp: workspace initialization failed: "+err.Error())
 		}
 	}
-	go s.refreshConfiguration(context.Background())
+	if s.client != nil && s.supportsConfiguration {
+		ready := make(chan struct{})
+		s.settingsMu.Lock()
+		s.configReady = ready
+		s.settingsMu.Unlock()
+		go func() {
+			refreshHints := s.applyConfiguration(context.Background())
+			// The client may ask for the hints again before it answers the
+			// refresh, so the waiting requests go first.
+			close(ready)
+			if refreshHints {
+				_ = s.client.InlayHintRefresh(context.Background())
+			}
+		}()
+	}
 	if s.clientCapabilities.supportsDynamicFileWatchers {
 		go s.registerFileWatchers()
 	}
