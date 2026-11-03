@@ -276,9 +276,41 @@ func (s *Server) refreshConfiguration(ctx context.Context) {
 		return
 	}
 
-	settings, issues := parseSettingsFromLSPAnyWithIssues(s.getSettings(), result[0])
+	previous := s.getSettings()
+	settings, issues := parseSettingsFromLSPAnyWithIssues(previous, result[0])
 	s.reportSettingsIssues(issues)
 	s.setSettings(settings)
+
+	// The client asks for the hints of the buffers it opened before the
+	// configuration arrived, and shows those until it has a reason to ask again.
+	if s.clientCapabilities.supportsInlayHintRefresh && s.getSettings().InlayHints != previous.InlayHints {
+		_ = s.client.InlayHintRefresh(ctx)
+	}
+}
+
+// initialConfigurationTimeout bounds how long a request waits for the
+// configuration fetched after initialized.
+const initialConfigurationTimeout = 2 * time.Second
+
+// awaitInitialConfiguration waits until the configuration fetched after
+// initialized has been applied, the timeout passes, or ctx is done. A client
+// asks for the hints of the buffer it opens first straight away; answered with
+// the default settings, they stay on screen even after a refresh, because
+// Neovim marks the visible lines drawn again before the refreshed hints arrive.
+func (s *Server) awaitInitialConfiguration(ctx context.Context) {
+	s.settingsMu.RLock()
+	ready := s.configReady
+	s.settingsMu.RUnlock()
+	if ready == nil {
+		return
+	}
+	timer := time.NewTimer(initialConfigurationTimeout)
+	defer timer.Stop()
+	select {
+	case <-ready:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // reportSettingsIssues tells the user about settings values the server rejected.

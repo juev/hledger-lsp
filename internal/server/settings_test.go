@@ -1,10 +1,15 @@
 package server
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.lsp.dev/protocol"
+	"go.lsp.dev/uri"
 
 	"github.com/juev/hledger-lsp/internal/include"
 )
@@ -707,4 +712,116 @@ func TestSettings_LegacyUndeclaredAccountsFalseDisablesTheCheck(t *testing.T) {
 		"diagnostics": map[string]interface{}{"undeclaredAccounts": true},
 	})
 	assert.Equal(t, accountCheckLint, enabled.Diagnostics.AccountCheck)
+}
+
+// configClient answers workspace/configuration with fixed settings and counts
+// workspace/inlayHint/refresh requests.
+type configClient struct {
+	protocol.UnimplementedClient
+	settings  protocol.LSPAny
+	refreshes atomic.Int32
+}
+
+func (c *configClient) Configuration(context.Context, *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+	return []protocol.LSPAny{c.settings}, nil
+}
+
+func (c *configClient) InlayHintRefresh(context.Context) error {
+	c.refreshes.Add(1)
+	return nil
+}
+
+// The client asks for the hints of the first buffer before the server has
+// fetched its configuration, so a setting that changes the hints must make the
+// client ask again, or they stay as the defaults made them until another
+// request comes along.
+func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *testing.T) {
+	enabled := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"runningBalances": true}})
+	refreshSupport := &protocol.ClientCapabilities{Workspace: &protocol.WorkspaceClientCapabilities{
+		Configuration: boolPtr(true),
+		InlayHint:     &protocol.InlayHintWorkspaceClientCapabilities{RefreshSupport: boolPtr(true)},
+	}}
+
+	t.Run("changed", func(t *testing.T) {
+		srv := NewServer()
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: *refreshSupport})
+		require.NoError(t, err)
+		client := &configClient{settings: enabled}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background())
+		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Equal(t, int32(1), client.refreshes.Load())
+
+		srv.refreshConfiguration(context.Background())
+		assert.Equal(t, int32(1), client.refreshes.Load(), "unchanged hint settings need no refresh")
+	})
+
+	t.Run("client without refresh support", func(t *testing.T) {
+		srv := NewServer()
+		capabilities := *refreshSupport
+		capabilities.Workspace = &protocol.WorkspaceClientCapabilities{Configuration: boolPtr(true)}
+		_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: capabilities})
+		require.NoError(t, err)
+		client := &configClient{settings: enabled}
+		srv.SetClient(client)
+
+		srv.refreshConfiguration(context.Background())
+		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
+		assert.Zero(t, client.refreshes.Load())
+	})
+}
+
+// heldConfigClient answers workspace/configuration only once release is closed.
+type heldConfigClient struct {
+	configClient
+	release chan struct{}
+}
+
+func (c *heldConfigClient) Configuration(ctx context.Context, params *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+	<-c.release
+	return c.configClient.Configuration(ctx, params)
+}
+
+// The hints of the first buffer are asked for before the configuration arrives.
+// Answered with the defaults they would leave out the running balances the
+// configuration turns on, and Neovim keeps showing those stale hints on the
+// visible lines even after a refresh, so the request waits for the settings.
+func TestInlayHint_WaitsForTheInitialConfiguration(t *testing.T) {
+	srv := NewServer()
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: protocol.ClientCapabilities{
+		Workspace: &protocol.WorkspaceClientCapabilities{Configuration: boolPtr(true)},
+	}})
+	require.NoError(t, err)
+	client := &heldConfigClient{
+		configClient: configClient{settings: mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"runningBalances": true}})},
+		release:      make(chan struct{}),
+	}
+	srv.SetClient(client)
+	require.NoError(t, srv.Initialized(context.Background(), &protocol.InitializedParams{}))
+
+	docURI := uri.URI("file:///test.journal")
+	srv.StoreDocument(docURI, "2024-01-15 Покупка\n    expenses:еда  $50\n    assets:cash\n")
+	answered := make(chan []protocol.InlayHint)
+	go func() {
+		hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+			TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+			Range:        protocol.Range{End: protocol.Position{Line: 10}},
+		})
+		assert.NoError(t, err)
+		answered <- hints
+	}()
+
+	select {
+	case <-answered:
+		t.Fatal("inlay hints were answered before the configuration arrived")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(client.release)
+
+	var labels []protocol.InlayHintLabel
+	for _, hint := range <-answered {
+		labels = append(labels, hint.Label)
+	}
+	assert.Contains(t, labels, protocol.String("balance: 50 $"))
 }
