@@ -198,8 +198,8 @@ func merge(written ast.Transaction, source jsonTransaction) (ast.Transaction, er
 			if err != nil {
 				return ast.Transaction{}, fmt.Errorf("account %q: %w", posting.Account.Name, err)
 			}
-			if (cost == nil) != (posting.Cost == nil) {
-				return ast.Transaction{}, fmt.Errorf("account %q: the printed cost differs from hledger's", posting.Account.Name)
+			if cost, err = writtenCost(posting.Cost, cost); err != nil {
+				return ast.Transaction{}, fmt.Errorf("account %q: %w", posting.Account.Name, err)
 			}
 			amount.Commodity.Quoted = posting.Amount.Commodity.Quoted
 			posting.Amount = &amount
@@ -280,12 +280,33 @@ func balanceAssertion(written ast.BalanceAssertion, source jsonAssertion) (ast.B
 	if err != nil {
 		return ast.BalanceAssertion{}, err
 	}
-	if (cost == nil) != (written.Cost == nil) {
-		return ast.BalanceAssertion{}, errors.New("the printed assertion cost differs from hledger's")
+	if cost, err = writtenCost(written.Cost, cost); err != nil {
+		return ast.BalanceAssertion{}, err
 	}
 	written.Amount = amount
 	written.Cost = cost
 	return written, nil
+}
+
+// writtenCost is the cost as the text writes it, with hledger's exact value.
+// A cost the text does not write was inferred by hledger from the CSV data
+// alone and is left to the analyzer to infer in context. hledger stores a total
+// cost with the sign of the amount, so the value's sign comes from the text.
+func writtenCost(written, value *ast.Cost) (*ast.Cost, error) {
+	switch {
+	case written == nil:
+		return nil, nil
+	case value == nil || written.IsTotal != value.IsTotal:
+		return nil, errors.New("the printed cost differs from hledger's")
+	}
+	quantity := value.Amount.Quantity.Abs()
+	if written.Amount.Quantity.IsNegative() {
+		quantity = quantity.Neg()
+	}
+	cost := *value
+	cost.Amount.Quantity = quantity
+	cost.Amount.RawQuantity = quantity.String()
+	return &cost, nil
 }
 
 func simpleAmount(source jsonAmount) (ast.Amount, error) {
