@@ -330,13 +330,18 @@ func restoreLineEndings(formatted, original string) string {
 // something the target has, so it has to be written in place.
 var errKeepFile = errors.New("the file has to be written in place")
 
+// keptMode is the part of a file's mode that a write keeps: the permissions and
+// the set-user-ID, set-group-ID and sticky bits.
+const keptMode = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
 // replaceFile replaces the contents of path. Symlinks are followed rather than
 // replaced, and a file that cannot be written is refused, as by gofmt -w.
 //
 // The new contents are renamed over the file, so an interrupted run cannot
 // truncate a journal. A rename makes a new file, though, so a file with other
-// hard links, or whose owner the new file cannot be given, is written in place
-// instead, with a backup of its old contents kept until the write succeeds.
+// hard links, extended attributes, or an owner or mode the new file cannot be
+// given is written in place instead, with a backup of its old contents kept
+// until the write succeeds.
 func replaceFile(path, content string) error {
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -354,7 +359,7 @@ func replaceFile(path, content string) error {
 	}
 	_ = f.Close()
 
-	if hasOtherLinks(info) {
+	if hasOtherLinks(info) || mayHaveExtendedAttributes(target) {
 		return writeInPlace(target, content, info)
 	}
 	err = renameOver(target, content, info)
@@ -379,9 +384,9 @@ func renameOver(target, content string, info os.FileInfo) (err error) {
 	return os.Rename(tmp, target)
 }
 
-// writeInPlace overwrites target with content. Its old contents are copied to a
-// backup first, which is removed once the write succeeds and named in the error
-// when it does not.
+// writeInPlace overwrites target with content and restores the mode bits the
+// write cleared. Its old contents are copied to a backup first, which is
+// removed once the write succeeds and named in the error when it does not.
 func writeInPlace(target, content string, info os.FileInfo) error {
 	old, err := os.ReadFile(target)
 	if err != nil {
@@ -395,6 +400,9 @@ func writeInPlace(target, content string, info os.FileInfo) error {
 	f, err := os.OpenFile(target, os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
 	if err == nil {
 		_, err = f.WriteString(content)
+		if err == nil {
+			err = restoreMode(f, info)
+		}
 		if syncErr := f.Sync(); err == nil {
 			err = syncErr
 		}
@@ -408,9 +416,22 @@ func writeInPlace(target, content string, info os.FileInfo) error {
 	return os.Remove(backup)
 }
 
+// restoreMode gives f the mode bits of info back. Writing to a file clears its
+// set-user-ID bit, and its set-group-ID bit when it is group-executable.
+func restoreMode(f *os.File, info os.FileInfo) error {
+	now, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if now.Mode()&keptMode == info.Mode()&keptMode {
+		return nil
+	}
+	return f.Chmod(info.Mode() & keptMode)
+}
+
 // createSibling writes content to a new file in target's directory and returns
-// its name. With info, the file gets the mode and owner of target; errKeepFile
-// means the owner could not be given.
+// its name. With info, the file gets the owner and mode of target; errKeepFile
+// means either could not be given.
 func createSibling(target, content string, info os.FileInfo) (name string, err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".hledger-fmt-*")
 	if err != nil {
@@ -427,10 +448,20 @@ func createSibling(target, content string, info os.FileInfo) (name string, err e
 		return "", err
 	}
 	if info != nil {
-		if err = tmp.Chmod(info.Mode().Perm()); err != nil {
+		// The owner goes first: changing it can clear the set-ID bits.
+		if err = keepOwner(tmp, info); err != nil {
 			return "", err
 		}
-		if err = keepOwner(tmp, info); err != nil {
+		if err = tmp.Chmod(info.Mode() & keptMode); err != nil {
+			return "", err
+		}
+		// A set-ID bit the user may not set is dropped without an error.
+		var created os.FileInfo
+		if created, err = tmp.Stat(); err != nil {
+			return "", err
+		}
+		if created.Mode()&keptMode != info.Mode()&keptMode {
+			err = errKeepFile
 			return "", err
 		}
 	}

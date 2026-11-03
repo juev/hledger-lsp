@@ -70,13 +70,18 @@ func TestWriteKeepsGroup(t *testing.T) {
 	gid := otherGroup(t, dir)
 	require.NoError(t, os.Chown(path, -1, gid))
 	inode := statOf(t, path).Ino
+	// Extended attributes, which also hold security labels, are kept by
+	// writing in place.
+	renamed := !mayHaveExtendedAttributes(path)
 
 	code, _, stderr := run(t, "", "-w", path)
 
 	require.Equal(t, ExitOK, code, stderr)
 	assert.Equal(t, formatted, readFile(t, path))
 	assert.Equal(t, uint32(gid), statOf(t, path).Gid)
-	assert.NotEqual(t, inode, statOf(t, path).Ino, "a file whose owner can be kept is replaced by rename")
+	if renamed {
+		assert.NotEqual(t, inode, statOf(t, path).Ino, "a file whose owner can be kept is replaced by rename")
+	}
 	assertNoLeftovers(t, dir, 1)
 }
 
@@ -101,6 +106,35 @@ func TestWriteInPlaceWhenOwnerCannotBeKept(t *testing.T) {
 	assert.Equal(t, inode, statOf(t, path).Ino)
 	assert.Equal(t, uint32(gid), statOf(t, path).Gid)
 	assert.Equal(t, uint32(0o640), statOf(t, path).Mode&0o777)
+	assertNoLeftovers(t, dir, 1)
+}
+
+// specialMode sets the set-user-ID and set-group-ID bits on path, or skips the
+// test where the system does not let the current user set them.
+func specialMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	const mode = os.ModeSetuid | os.ModeSetgid | 0o640
+	require.NoError(t, os.Chmod(path, mode))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModePerm) != mode {
+		t.Skipf("the system did not set mode %v, got %v", mode, info.Mode())
+	}
+	return mode
+}
+
+func TestWriteKeepsSpecialModeBits(t *testing.T) {
+	dir := t.TempDir()
+	path := writeJournal(t, dir, "a.journal", unformatted)
+	mode := specialMode(t, path)
+
+	code, _, stderr := run(t, "", "-w", path)
+
+	require.Equal(t, ExitOK, code, stderr)
+	assert.Equal(t, formatted, readFile(t, path))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, mode, info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky|os.ModePerm))
 	assertNoLeftovers(t, dir, 1)
 }
 
