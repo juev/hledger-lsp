@@ -266,3 +266,79 @@ func TestParser_NumberSyntax_PriceDirectiveLetterCommodityBeforeNumber(t *testin
 		})
 	}
 }
+
+// hledger reads the longest number it can and rejects a "." or "," right after
+// it as an invalid use of separator, pointing at that separator. Dropping it as
+// a digit group separator instead reads 1,000.00. as 100000.
+func TestParse_SeparatorAfterACompleteNumberIsRejected(t *testing.T) {
+	cases := []struct {
+		amount string
+		column int // of the rejected separator, as hledger 1.52.4 reports it
+	}{
+		{"1..0 USD", 8},
+		{"1,,0 USD", 8},
+		{"1.,0 USD", 8},
+		{"1,.0 USD", 8},
+		{"1.. USD", 8},
+		{"1...0 USD", 8},
+		{"1.0.. USD", 9},
+		{"1,000..00 USD", 12},
+		{"1,000.,00 USD", 12},
+		{"1 000..00 USD", 12},
+		{"1.000. USD", 11},
+		{"1,000.00. USD", 14},
+		{"1..0E2 USD", 8},
+		{"-1..0 USD", 9},
+		{"USD 1..0", 12},
+		{"1 USD = 1..0 USD", 16},
+	}
+	for _, c := range cases {
+		for _, newline := range []string{"\n", "\r\n"} {
+			for _, account := range []string{"a", "расходы:еда", "支出"} {
+				// The server normalizes line endings before parsing, as here.
+				input := textutil.NormalizeLineEndings(strings.ReplaceAll("2024-01-01 x\n  "+account+"  "+c.amount+"\n  b\n", "\n", newline))
+				t.Run(fmt.Sprintf("%s %q %q", account, c.amount, newline), func(t *testing.T) {
+					_, errs := Parse(input)
+					require.Len(t, errs, 1, "input %q", input)
+					assert.Equal(t, invalidSeparatorMessage, errs[0].Message)
+					assert.Equal(t, 2, errs[0].Pos.Line)
+					// The column counts characters, so the account shifts it by
+					// the characters it has beyond "a".
+					shift := len([]rune(account)) - 1
+					assert.Equal(t, c.column+shift, errs[0].Pos.Column)
+					assert.Contains(t, ".,", string(input[errs[0].Pos.Offset]), "the error points at a separator")
+				})
+			}
+		}
+	}
+}
+
+func TestParse_ValidSeparatorsStillRead(t *testing.T) {
+	for amount, want := range map[string]string{
+		"1,000.00 USD":     "1000",
+		"1.000,50 USD":     "1000.5",
+		"1 000,50 USD":     "1000.5",
+		"1,000,000.00 USD": "1000000",
+		"1.000.000,00 USD": "1000000",
+		"10. USD":          "10",
+		"10, USD":          "10",
+		".5 USD":           "0.5",
+		"1.5E3 USD":        "1500",
+	} {
+		t.Run(amount, func(t *testing.T) {
+			qty, _, errs := firstAmount(t, "2024-01-01 x\n  a  "+amount+"\n  b\n")
+			require.Empty(t, errs)
+			assert.Equal(t, want, qty)
+		})
+	}
+}
+
+func TestInvalidSeparatorAt(t *testing.T) {
+	for number, want := range map[string]int{
+		"1..0": 2, "1.,0": 2, "1,000..00": 6, "1 000.00,": 8, "1.000.": 5, "1.0..": 3,
+		"1,000.00": -1, "1.000,50": -1, "1 000": -1, "10.": -1, ".5": -1, "1.000.000": -1,
+		"1..0E2": 2, "1.5E3": -1, "": -1, ".": -1, "..5": -1,
+	} {
+		assert.Equal(t, want, invalidSeparatorAt(number), "%q", number)
+	}
+}
