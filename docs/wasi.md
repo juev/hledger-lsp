@@ -1,8 +1,9 @@
 # WebAssembly (WASI) Build
 
-hledger-lsp can also be built as a WebAssembly module for WASI preview 1
-(`GOOS=wasip1 GOARCH=wasm`). No published release contains this module yet;
-until one does, build it from source (see [Running](#running)). The module is the same language server: it speaks
+hledger-lsp is also published as a WebAssembly module for WASI preview 1
+(`GOOS=wasip1 GOARCH=wasm`): since v0.3.0 every release carries
+`hledger-lsp_wasip1_wasm.wasm` next to the native binaries (see
+[Running](#running)). The module is the same language server: it speaks
 LSP over stdin and stdout and reads journals through the files its host lets it
 open. The native binaries remain the recommended choice for desktop editors;
 the WASI module is slower, larger in memory and depends on the host runtime.
@@ -20,8 +21,8 @@ for what an integration would need.
 
 Both runtimes run the same automated session in CI (`TestWASISmoke` in
 `cmd/hledger-lsp/wasi_smoke_test.go`). The release configuration also runs it
-against the built module before publishing; no real release has exercised
-that step yet. The session opens a
+against the built module before publishing, as the v0.3.0 release did. The
+session opens a
 four-file journal with an explicit `include` and a glob `include`, Cyrillic and
 CJK account names, and CRLF line endings. It checks initialization,
 diagnostics, completion, formatting, go to definition, references, document
@@ -35,22 +36,16 @@ Other WASI runtimes were not tested.
 
 ## Running
 
-Build the module from source:
+Download `hledger-lsp_wasip1_wasm.wasm` from the
+[releases page](https://github.com/juev/hledger-lsp/releases) (v0.3.0 or
+newer). It is listed in `checksums.txt` and signed with minisign like the
+native binaries, and the release build runs the smoke test above against the
+module before publishing it. To build the module from source instead:
 
 ```bash
 GOOS=wasip1 GOARCH=wasm CGO_ENABLED=0 go build -ldflags '-s -w' \
   -o hledger-lsp_wasip1_wasm.wasm ./cmd/hledger-lsp
 ```
-
-The release configuration (`.goreleaser.yaml`) is set up to publish the module
-as `hledger-lsp_wasip1_wasm.wasm` starting with the next release, listed in
-`checksums.txt` and signed with minisign like the native binaries. A local
-GoReleaser snapshot built the WASI module and the native linux/amd64 target,
-ran the WASI smoke test on that built module under both runtimes, and produced
-the expected checksum entries and signatures. The artifact and checksum
-signatures were verified with real minisign and a temporary test key. This
-checks local packaging and signing, not release-key signatures, the full
-native target matrix, or publication of a release.
 
 The server can only open files in directories the host preopens. Preopen the
 journal directory at the same path inside the module, so the `file://` URIs the
