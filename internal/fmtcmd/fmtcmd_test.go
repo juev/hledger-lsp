@@ -429,6 +429,70 @@ func TestAmountValuesKeptUnderEveryInclusion(t *testing.T) {
 	assert.Equal(t, "2024-01-01 a\n    e:x  1,000 EUR\n    a:y\n", readFile(t, path))
 }
 
+// aliasKinds give a journal a second name: a symlink, or a hard link, which no
+// path comparison can tell from another file.
+var aliasKinds = []struct {
+	name string
+	make func(t *testing.T, target, alias string)
+}{
+	{"symlink", func(t *testing.T, target, alias string) {
+		if err := os.Symlink(filepath.Base(target), alias); err != nil {
+			t.Skipf("symlinks are not available: %v", err)
+		}
+	}},
+	{"hard link", func(t *testing.T, target, alias string) {
+		if err := os.Link(target, alias); err != nil {
+			t.Skipf("hard links are not available: %v", err)
+		}
+	}},
+}
+
+const aliasedJournal = "2024-01-01 покупка 買い物\n  расходы:食品  1,000 EUR\n  активы\n"
+
+// aliasedLayout includes tx.journal under two decimal marks, once by its own name
+// and once through alias.journal, and returns tx.journal, the alias and the root.
+func aliasedLayout(t *testing.T, dir, newline string, makeAlias func(t *testing.T, target, alias string)) (tx, alias, root string) {
+	t.Helper()
+	crlf := func(s string) string { return strings.ReplaceAll(s, "\n", newline) }
+	tx = writeJournal(t, dir, "tx.journal", crlf(aliasedJournal))
+	alias = filepath.Join(dir, "alias.journal")
+	makeAlias(t, tx, alias)
+	root = writeJournal(t, dir, "main.journal", crlf(
+		"commodity 1000.00 EUR\ndecimal-mark .\ninclude tx.journal\ndecimal-mark ,\ninclude alias.journal\n"))
+	return tx, alias, root
+}
+
+// A file included again through another name is still read at that inclusion:
+// there 1,000 EUR is 1 EUR, so the number keeps its written form.
+func TestAmountValuesKeptThroughAliases(t *testing.T) {
+	for _, kind := range aliasKinds {
+		for _, named := range []string{"real name", "alias"} {
+			for _, newline := range []string{"\n", "\r\n"} {
+				name := kind.name + "/" + named
+				if newline == "\r\n" {
+					name += "/CRLF"
+				}
+				t.Run(name, func(t *testing.T) {
+					tx, alias, root := aliasedLayout(t, t.TempDir(), newline, kind.make)
+					path := tx
+					if named == "alias" {
+						path = alias
+					}
+
+					code, _, stderr := run(t, "", "--root", root, "-w", path)
+					require.Equal(t, ExitOK, code, stderr)
+					got := readFile(t, tx)
+					assert.Contains(t, got, "    расходы:食品  1,000 EUR"+newline)
+					assert.NotContains(t, got, "1000.00")
+
+					code, stdout, stderr := run(t, "", "--root", root, "-c", path)
+					assert.Equal(t, ExitOK, code, "formatting must be idempotent: %s%s", stdout, stderr)
+				})
+			}
+		}
+	}
+}
+
 func TestAmountWithUnknownStyleKeepsItsWrittenForm(t *testing.T) {
 	path := writeJournal(t, t.TempDir(), "a.journal", "include nope.journal\n\n"+separatorJournal)
 

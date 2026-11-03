@@ -273,9 +273,12 @@ func (r *runner) formatContent(name, path, original string) (string, error) {
 // otherwise as the root of its own include tree.
 func (r *runner) formattingContext(name, path, content string) (include.FormattingContext, error) {
 	if r.rootJournal != nil {
-		ctx, ok := r.rootJournal.FormattingContext(path, content)
-		if !ok {
+		ctx, err := r.rootJournal.FormattingContext(path, content)
+		if errors.Is(err, include.ErrNotIncluded) {
 			return ctx, fmt.Errorf("%s: not included by the root journal", name)
+		}
+		if err != nil {
+			return ctx, fmt.Errorf("%s: %w", name, err)
 		}
 		return ctx, nil
 	}
@@ -290,9 +293,12 @@ func (r *runner) formattingContext(name, path, content string) (include.Formatti
 	}
 	r.warn(loadErrs, path)
 
-	ctx, ok := resolved.FormattingContext(path, content)
-	if !ok {
+	ctx, err := resolved.FormattingContext(path, content)
+	if errors.Is(err, include.ErrNotIncluded) {
 		return ctx, fmt.Errorf("%s: could not be read", name)
+	}
+	if err != nil {
+		return ctx, fmt.Errorf("%s: %w", name, err)
 	}
 	return ctx, nil
 }

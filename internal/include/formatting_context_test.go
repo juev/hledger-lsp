@@ -21,17 +21,68 @@ func TestFormattingContext(t *testing.T) {
 	resolved, errs := NewLoader().Load(root)
 	require.Empty(t, errs)
 
-	ctx, ok := resolved.FormattingContext(child, content)
-	require.True(t, ok)
+	ctx, err := resolved.FormattingContext(child, content)
+	require.NoError(t, err)
 	assert.Empty(t, ctx.ParseErrors)
 	require.Len(t, ctx.Readings, 1)
 	assert.Contains(t, ctx.Readings[0].Formats, "FDRXX")
 	require.Len(t, ctx.Readings[0].Journal.Transactions, 1)
 
-	ctx, ok = resolved.FormattingContext(child, "2024-13-45 bad\n")
-	require.True(t, ok)
+	ctx, err = resolved.FormattingContext(child, "2024-13-45 bad\n")
+	require.NoError(t, err)
 	assert.NotEmpty(t, ctx.ParseErrors)
 
-	_, ok = resolved.FormattingContext(filepath.Join(dir, "elsewhere.journal"), content)
-	assert.False(t, ok)
+	_, err = resolved.FormattingContext(filepath.Join(dir, "elsewhere.journal"), content)
+	assert.ErrorIs(t, err, ErrNotIncluded)
+}
+
+// A file included through a symlink or a hard link is read at that inclusion
+// too, whichever of its names is formatted.
+func TestFormattingContextFindsEveryNameOfTheFile(t *testing.T) {
+	links := map[string]func(target, alias string) error{
+		"symlink":   func(target, alias string) error { return os.Symlink(filepath.Base(target), alias) },
+		"hard link": os.Link,
+	}
+	for name, link := range links {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			const content = "2024-01-01 x\n    a  1,000 EUR\n    b\n"
+			tx := filepath.Join(dir, "tx.journal")
+			require.NoError(t, os.WriteFile(tx, []byte(content), 0o644))
+			alias := filepath.Join(dir, "alias.journal")
+			if err := link(tx, alias); err != nil {
+				t.Skipf("%s is not available: %v", name, err)
+			}
+			root := filepath.Join(dir, "main.journal")
+			require.NoError(t, os.WriteFile(root, []byte("decimal-mark .\ninclude tx.journal\ndecimal-mark ,\ninclude alias.journal\n"), 0o644))
+			resolved, errs := NewLoader().Load(root)
+			require.Empty(t, errs)
+
+			for _, path := range []string{tx, alias} {
+				ctx, err := resolved.FormattingContext(path, content)
+				require.NoError(t, err)
+				assert.Len(t, ctx.Readings, 2, "both decimal marks must be read for %s", path)
+			}
+		})
+	}
+}
+
+// When an included file can no longer be compared with the formatted one, it
+// might be another name for it, so formatting is refused.
+func TestFormattingContextFailsWhenAnIncludedFileIsGone(t *testing.T) {
+	dir := t.TempDir()
+	const content = "2024-01-01 x\n    a  1 EUR\n    b\n"
+	tx := filepath.Join(dir, "tx.journal")
+	require.NoError(t, os.WriteFile(tx, []byte(content), 0o644))
+	other := filepath.Join(dir, "other.journal")
+	require.NoError(t, os.WriteFile(other, []byte(content), 0o644))
+	root := filepath.Join(dir, "main.journal")
+	require.NoError(t, os.WriteFile(root, []byte("include tx.journal\ninclude other.journal\n"), 0o644))
+	resolved, errs := NewLoader().Load(root)
+	require.Empty(t, errs)
+	require.NoError(t, os.Remove(other))
+
+	_, err := resolved.FormattingContext(tx, content)
+	assert.Error(t, err)
+	assert.NotErrorIs(t, err, ErrNotIncluded)
 }

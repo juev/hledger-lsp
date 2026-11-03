@@ -1,7 +1,10 @@
 package include
 
 import (
+	"errors"
+	"io/fs"
 	"maps"
+	"os"
 	"slices"
 
 	"github.com/juev/hledger-lsp/internal/ast"
@@ -267,17 +270,20 @@ type FormattingContext struct {
 	ParseErrors []parser.ParseError
 }
 
-// FormattingContext reads content as each occurrence of path, with the context
-// the occurrence inherited (see ParseOccurrence). Occurrences with equal
-// contexts read content alike and share a reading. The bool reports whether
-// path is part of this tree.
-func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingContext, bool) {
-	occurrences := r.OccurrencesForPath(path)
-	if len(occurrences) == 0 {
-		occurrences = r.OccurrencesForCanonical(path)
+// ErrNotIncluded reports that a file is not part of the include tree.
+var ErrNotIncluded = errors.New("not part of the include tree")
+
+// FormattingContext reads content as each occurrence of the file at path, with
+// the context the occurrence inherited (see ParseOccurrence). Occurrences with
+// equal contexts read content alike and share a reading. It returns
+// ErrNotIncluded when the tree does not include the file.
+func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingContext, error) {
+	occurrences, err := r.occurrencesOfFile(path)
+	if err != nil {
+		return FormattingContext{}, err
 	}
 	if len(occurrences) == 0 {
-		return FormattingContext{}, false
+		return FormattingContext{}, ErrNotIncluded
 	}
 
 	var ctx FormattingContext
@@ -300,7 +306,41 @@ func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingCon
 			}
 		}
 	}
-	return ctx, true
+	return ctx, nil
+}
+
+// occurrencesOfFile returns every occurrence that reads the file at path, under
+// any name: a symlink or a hard link includes the same file, and only the file
+// system can tell a hard link from another file. A name that cannot be compared
+// is an error rather than a guess, because a missed occurrence lets the
+// formatter change what a number is worth there.
+func (r *ResolvedJournal) occurrencesOfFile(path string) ([]JournalOccurrence, error) {
+	file, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// Content with no file behind it, such as standard input, has no other name.
+		return r.OccurrencesForPath(path), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	same := make(map[string]bool)
+	var occurrences []JournalOccurrence
+	for _, occurrence := range r.Occurrences {
+		isSame, known := same[occurrence.Path]
+		if !known {
+			info, err := os.Stat(occurrence.Path)
+			if err != nil {
+				return nil, err
+			}
+			isSame = os.SameFile(file, info)
+			same[occurrence.Path] = isSame
+		}
+		if isSame {
+			occurrences = append(occurrences, occurrence)
+		}
+	}
+	return occurrences, nil
 }
 
 // OccurrencesForPath returns all occurrences for an exact source path.

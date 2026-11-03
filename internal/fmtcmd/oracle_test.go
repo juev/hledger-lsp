@@ -1,6 +1,7 @@
 package fmtcmd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -53,4 +54,27 @@ func TestOracle_WriteKeepsAmountValues(t *testing.T) {
 		require.True(t, accepted)
 		assert.Equal(t, before, after)
 	})
+
+	for _, kind := range aliasKinds {
+		for _, named := range []string{"real name", "alias"} {
+			for _, newline := range []string{"\n", "\r\n"} {
+				t.Run(fmt.Sprintf("file included again through a %s/%s/%q", kind.name, named, newline), func(t *testing.T) {
+					tx, alias, root := aliasedLayout(t, t.TempDir(), newline, kind.make)
+					path := tx
+					if named == "alias" {
+						path = alias
+					}
+					before, accepted := testutil.HledgerPostingAmounts(t, hledgerPath, root)
+					require.True(t, accepted)
+
+					code, _, stderr := run(t, "", "--root", root, "-w", path)
+					require.Equal(t, ExitOK, code, stderr)
+
+					after, accepted := testutil.HledgerPostingAmounts(t, hledgerPath, root)
+					require.True(t, accepted)
+					assert.Equal(t, before, after, "formatted:\n%s", readFile(t, tx))
+				})
+			}
+		}
+	}
 }
