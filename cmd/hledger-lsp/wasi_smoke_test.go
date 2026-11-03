@@ -69,8 +69,53 @@ func TestWASISmoke(t *testing.T) {
 			// message instead of taking the server down.
 			assert.Contains(t, got.cli, `"error"`)
 			assert.Contains(t, got.cli, "hledger is not available")
+
+			// Under the hledger 2 target a CSV include needs hledger to convert
+			// it, which WASI cannot start: the include says so, and the journal
+			// is judged without the records rather than reported balanced.
+			imported := runWASIImportSession(t, name, wasm)
+			assert.Contains(t, imported, `"code":"INCLUDE_IMPORT_ERROR"`)
+			assert.Contains(t, imported, "cannot be run on this platform (WASI has no subprocesses)")
+			assert.Contains(t, imported, `"code":"BALANCE_ASSERTION_FAILED"`)
 		})
 	}
+}
+
+// runWASIImportSession opens a journal that includes a CSV file under the
+// hledger 2 target, in a workspace of its own so the parity session never sees
+// it, and returns the diagnostics published for it.
+func runWASIImportSession(t *testing.T, runtimeName, wasm string) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	ws := dir
+	cmd := wasiCommand(t, runtimeName, wasm, ws)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "банк.csv"), []byte("date,amount\n2024-01-02,5.00\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "банк.csv.rules"), []byte("skip 1\nfields date, amount\ncurrency RUB\naccount1 資産:銀行\naccount2 доходы\n"), 0o644))
+	text := "include банк.csv\n\n2024-01-05 проверка\n    資産:銀行  0 RUB = 5.00 RUB\n    капитал\n"
+	mainPath := filepath.Join(dir, "main.journal")
+	require.NoError(t, os.WriteFile(mainPath, []byte(text), 0o644))
+
+	c := startLSPProcess(t, cmd)
+	c.configuration = map[string]any{"targetVersion": "2"}
+	c.call("initialize", map[string]any{
+		"processId": nil,
+		"rootUri":   fileURI(ws),
+		"capabilities": map[string]any{
+			"workspace": map[string]any{"configuration": true},
+		},
+	})
+	c.notify("initialized", map[string]any{})
+	mainURI := fileURI(mainPath)
+	c.notify("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{"uri": mainURI, "languageId": "hledger", "version": 1, "text": text},
+	})
+	diagnostics := c.waitDiagnostics(mainURI, 1)
+	c.call("shutdown", nil)
+	c.notify("exit", nil)
+	s := c.finish(t)
+	assert.Empty(t, s.stderr)
+	return diagnostics
 }
 
 // osErrorText matches the operating system's part of a "cannot read included
@@ -262,6 +307,9 @@ type lspProcess struct {
 
 	writeMu sync.Mutex
 
+	// configuration answers workspace/configuration; nil answers {}.
+	configuration map[string]any
+
 	mu          sync.Mutex
 	responses   map[int]json.RawMessage
 	diagnostics map[string][]json.RawMessage
@@ -415,7 +463,11 @@ func (c *lspProcess) setFramingErr(err error) {
 func (c *lspProcess) answer(id json.RawMessage, method string) {
 	var result any
 	if method == "workspace/configuration" {
-		result = []any{map[string]any{}}
+		settings := c.configuration
+		if settings == nil {
+			settings = map[string]any{}
+		}
+		result = []any{settings}
 	}
 	// Runs on the reader goroutine, which must not fail the test; a lost
 	// answer shows up as a timeout in the step waiting for it.
