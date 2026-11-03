@@ -837,7 +837,9 @@ func TestAnalyzer_DateTag_TransactionComment(t *testing.T) {
 		}
 	}
 
-	require.Len(t, warnings, 1, "Expected exactly 1 empty date tag warning for transaction comment")
+	// hledger 1.52.4 loads this journal: a date: tag in the transaction comment
+	// holds no posting date (issue #172).
+	assert.Empty(t, warnings, "an empty date tag in the transaction comment is prose")
 }
 
 func TestAnalyzer_DateTag_WithSpaceAfterColon_ValidValue(t *testing.T) {
