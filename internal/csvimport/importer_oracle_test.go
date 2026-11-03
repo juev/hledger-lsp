@@ -392,6 +392,16 @@ func TestPreviewOracle_ImportFindsABareSourceInTheMainJournalsDataDirectory(t *t
 	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
 	assert.Equal(t, []string{"eq-c"}, descriptionsOf(result.Transactions))
 
+	// Nor does ** descend into a directory whose name starts with a dot.
+	visible := write(t, dir, "data/sub/deep-a.csv", "date,desc,amount\n2024-04-01,visible,1\n")
+	require.NoError(t, os.Chtimes(visible, past, past))
+	write(t, dir, "data/.old/deep-z.csv", "date,desc,amount\n2024-04-01,in hidden dir,4\n")
+	write(t, dir, "sub/bank.rules", "source **/deep-*.csv\n"+rules)
+	result = importFrom(t, binary, ruleFile, main)
+	require.Empty(t, result.Err)
+	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
+	assert.Equal(t, []string{"visible"}, descriptionsOf(result.Transactions))
+
 	// A name missing from data/ would be looked for in ~/Downloads next.
 	write(t, dir, "sub/bank.rules", "source nowhere.csv\n"+rules)
 	result = importFrom(t, binary, ruleFile, main)

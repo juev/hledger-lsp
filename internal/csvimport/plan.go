@@ -289,11 +289,12 @@ func (b *planner) readDataSource(rule sourceRule, pattern string) error {
 		path = ""
 		var newest time.Time
 		sort.Strings(matches)
-		hidden := strings.HasPrefix(filepath.Base(pattern), ".")
+		base := filepath.Join(filepath.Dir(b.request.MainJournal), "data")
+		hidden := hasHiddenComponent(base, pattern)
 		for _, match := range matches {
-			// As in hledger, a wildcard does not match a name that starts with
-			// a dot, unless the pattern itself does.
-			if !hidden && strings.HasPrefix(filepath.Base(match), ".") {
+			// As in hledger, a wildcard matches no file or directory whose
+			// name starts with a dot, unless the pattern names one.
+			if !hidden && hasHiddenComponent(base, match) {
 				continue
 			}
 			info, err := os.Stat(match)
@@ -320,6 +321,21 @@ func (b *planner) readDataSource(rule sourceRule, pattern string) error {
 	b.plan.file = dataReaderFor(path) + ":" + path
 	b.plan.rules = b.request.Path
 	return nil
+}
+
+// hasHiddenComponent reports whether a path below base has a file or
+// directory name that starts with a dot.
+func hasHiddenComponent(base, path string) bool {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return false
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part != "." && part != ".." && strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // dataReaderFor names the reader hledger is given a data file with: by its
