@@ -19,7 +19,7 @@ func (s *Server) CodeLens(_ context.Context, params *protocol.CodeLensParams) ([
 		return nil, nil
 	}
 
-	doc, ok := s.GetDocument(params.TextDocument.URI)
+	doc, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return nil, nil
 	}

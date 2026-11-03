@@ -148,7 +148,7 @@ func (s *Server) sourcedDiagnosticsByURI(docURI uri.URI, path string, diags []an
 // how hledger reports it.
 func loadErrorDiagnostic(err include.LoadError) protocol.Diagnostic {
 	severity := protocol.DiagnosticSeverityError
-	if err.Kind == include.ErrorNotJournal || err.Kind == include.ErrorFileTooLarge {
+	if err.Kind == include.ErrorNotJournal || err.Kind == include.ErrorFileTooLarge || err.Kind == include.ErrorImportUnsaved {
 		severity = protocol.DiagnosticSeverityWarning
 	}
 
