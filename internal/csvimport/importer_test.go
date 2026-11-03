@@ -93,7 +93,7 @@ func TestImport_FailuresAreExplicit(t *testing.T) {
 		{"two commodities", fakeRun{json: strings.Replace(validJSON, `"pamount":[{`, `"pamount":[{"acommodity":"€","aquantity":{"decimalMantissa":1,"decimalPlaces":0}},{`, 1), text: validText}, 0, "an amount in 2 commodities"},
 		{"lot cost basis", fakeRun{json: strings.Replace(validJSON, `"acostbasis":null`, `"acostbasis":{"cbCost":null}`, 1), text: validText}, 0, "a lot cost basis"},
 		{"nonzero exit", fakeRun{script: "echo 'hledger: Error: bad\x01 rules' >&2\nexit 1\n"}, 0, "hledger could not convert the file: bad rules"},
-		{"output limit", fakeRun{script: "while :; do echo 0123456789012345678901234567890123456789; done\n"}, 0, "hledger's output exceeds the import limit"},
+		{"output limit", fakeRun{script: "exec yes 0123456789012345678901234567890123456789\n"}, 0, "hledger's output exceeds the import limit"},
 		{"timeout", fakeRun{script: "exec sleep 30\n"}, 300 * time.Millisecond, "hledger did not finish within hledger.cli.timeout"},
 		{"old version", fakeRun{version: "1.52.4", json: validJSON, text: validText}, 0, "hledger 1.52.4 cannot include CSV files; hledger 1.99.5 or newer is needed"},
 		{"older preview", fakeRun{version: "1.99.4", json: validJSON, text: validText}, 0, "hledger 1.99.4 cannot include CSV files"},
