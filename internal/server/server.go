@@ -15,6 +15,7 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/cli"
+	"github.com/juev/hledger-lsp/internal/csvimport"
 	"github.com/juev/hledger-lsp/internal/document"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
@@ -71,6 +72,9 @@ type Server struct {
 	diagDebounce time.Duration
 	diagMu       sync.Mutex
 	diagEntries  map[uri.URI]*diagEntry
+	// importTimer coalesces republishes after import sources change; diagMu
+	// guards it.
+	importTimer *time.Timer
 
 	journalDiagMu sync.Mutex
 	journalDiag   map[*include.ResolvedJournal]*journalDiagEntry
@@ -355,8 +359,8 @@ func (s *Server) registerFileWatchers() {
 	if s.client == nil {
 		return
 	}
-	watchers := make([]protocol.FileSystemWatcher, 0, 6)
-	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.prices", "**/*.rules"} {
+	watchers := make([]protocol.FileSystemWatcher, 0, 9)
+	for _, pattern := range []string{"**/*.journal", "**/*.hledger", "**/*.j", "**/*.ledger", "**/*.prices", "**/*.rules", "**/*.csv", "**/*.ssv", "**/*.tsv"} {
 		watchers = append(watchers, protocol.FileSystemWatcher{
 			GlobPattern: protocol.Pattern(pattern),
 		})
@@ -396,7 +400,9 @@ func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocume
 	text, _ := s.documents.rope(params.TextDocument.URI)
 	var revision uint64
 	if s.workspace != nil && s.loader.FileSizeError(content) == nil {
-		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
+		// An import source is not journal text even under a journal name; the
+		// import reads the saved file, which opening it does not change.
+		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) && !s.isImportSource(path) {
 			revision = s.workspace.MarkFileDirty(path, text)
 			s.loader.InvalidateFile(path)
 		}
@@ -434,11 +440,13 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 	// journal is re-parsed and re-indexed on the first read that needs tree
 	// data, so a keystroke stays O(log n) and a burst collapses into one pass.
 	var revision uint64
-	if s.workspace != nil {
-		if path := uriToPath(params.TextDocument.URI); path != "" {
-			revision = s.workspace.MarkFileDirty(path, text)
-			s.loader.InvalidateFile(path)
-		}
+	if path := uriToPath(params.TextDocument.URI); s.isImportSource(path) {
+		// The buffer now differs from the file the import reads, which the
+		// trees that import it report.
+		s.importSourceChanged()
+	} else if s.workspace != nil && path != "" {
+		revision = s.workspace.MarkFileDirty(path, text)
+		s.loader.InvalidateFile(path)
 	}
 	// Rules loader cache is independent of the journal workspace — a
 	// .rules file that changes must be evicted so the next completion
@@ -469,8 +477,10 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 	s.alignmentCache.Delete(params.TextDocument.URI)
 	s.tokenCache.delete(params.TextDocument.URI)
 	s.invalidateParseCache(params.TextDocument.URI)
-	if s.workspace != nil {
-		if path := uriToPath(params.TextDocument.URI); filetype.IsJournalPath(path) {
+	if path := uriToPath(params.TextDocument.URI); s.isImportSource(path) {
+		s.importSourceChanged()
+	} else if s.workspace != nil {
+		if filetype.IsJournalPath(path) {
 			if data, err := os.ReadFile(path); err == nil {
 				s.workspace.MarkFileDirty(path, workspace.StaticContent(textutil.NormalizeLineEndings(string(data))))
 				s.loader.InvalidateFile(path)
@@ -490,8 +500,10 @@ func (s *Server) DidSave(ctx context.Context, params *protocol.DidSaveTextDocume
 	s.payeeTemplatesCache.Clear()
 	s.alignmentCache.Delete(params.TextDocument.URI)
 
-	if s.workspace != nil {
-		if path := uriToPath(params.TextDocument.URI); path != "" {
+	if path := uriToPath(params.TextDocument.URI); s.isImportSource(path) {
+		s.importSourceChanged()
+	} else if s.workspace != nil {
+		if path != "" {
 			if text, ok := s.documents.rope(params.TextDocument.URI); ok {
 				s.workspace.MarkFileDirty(path, text)
 			} else if data, err := os.ReadFile(path); err == nil {
@@ -719,8 +731,11 @@ func (s *Server) readingDiagnostics(reading *occurrenceReading, result *analyzer
 	return diagnostics
 }
 
+// getJournalDoc returns the content of a document that may be treated as a
+// journal. CSV rules and every import source are not: journal features would
+// read them wrongly, and edits from them would corrupt the data.
 func (s *Server) getJournalDoc(uri uri.URI) (string, bool) {
-	if filetype.IsRules(string(uri)) {
+	if filetype.IsRules(string(uri)) || s.isImportDocument(uri) {
 		return "", false
 	}
 	return s.GetDocument(uri)
@@ -881,10 +896,22 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 	}
 
 	affected := make(map[uri.URI]bool)
+	imports := false
 
 	for _, change := range params.Changes {
 		path := uriToPath(change.URI)
 		if path == "" {
+			continue
+		}
+
+		// An import reads the saved file even when an editor holds it, so a
+		// change on disk matters for an open import source too.
+		if s.isImportSource(path) || csvimport.ReaderForPath(path) != "" {
+			imports = true
+			s.loader.InvalidateFile(path)
+			if filetype.IsRules(path) {
+				s.rulesLoader.InvalidateFile(path)
+			}
 			continue
 		}
 
@@ -918,6 +945,20 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		}
 	}
 
+	if imports {
+		s.payeeTemplatesCache.Clear()
+		s.workspace.ReloadImports()
+		for _, root := range s.workspace.ImportRoots() {
+			affected[pathToURI(root)] = true
+		}
+	}
+	s.republishFiles(ctx, affected)
+	return nil
+}
+
+// republishFiles republishes each file: an open one from its buffer, a closed
+// one through the include trees that cover it.
+func (s *Server) republishFiles(ctx context.Context, affected map[uri.URI]bool) {
 	for docURI := range affected {
 		if _, open := s.documents.rope(docURI); open {
 			// Revision before content, as in republishDiagnostics: a concurrent
@@ -933,8 +974,6 @@ func (s *Server) DidChangeWatchedFiles(ctx context.Context, params *protocol.Did
 		}
 		s.publishTreesOf(ctx, docURI, false)
 	}
-
-	return nil
 }
 
 func (s *Server) GetDocument(uri uri.URI) (string, bool) {

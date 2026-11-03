@@ -4,14 +4,12 @@ import (
 	"context"
 
 	"go.lsp.dev/protocol"
-
-	"github.com/juev/hledger-lsp/internal/filetype"
 )
 
 func (s *Server) RangeFormat(ctx context.Context, params *protocol.DocumentRangeFormattingParams) ([]protocol.TextEdit, error) {
-	// CSV rules files are a different format: journal formatting must not touch
-	// them (full-document Format refuses them too).
-	if filetype.IsRules(string(params.TextDocument.URI)) {
+	// CSV rules and imported data are different formats: journal formatting
+	// must not touch them (full-document Format refuses them too).
+	if s.isImportDocument(params.TextDocument.URI) {
 		return nil, nil
 	}
 

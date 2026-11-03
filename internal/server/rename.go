@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"go.lsp.dev/protocol"
@@ -48,6 +49,15 @@ func (s *Server) Rename(ctx context.Context, params *protocol.RenameParams) (*pr
 	locations := findReferences(target, resolved, currentPath, journal, true, s.newMapperCache())
 	if len(locations) == 0 {
 		return nil, nil
+	}
+
+	// An account that imported CSV data uses is named by its rules, not by text
+	// a rename could replace: refuse rather than rename half of it or write
+	// into the data.
+	for _, loc := range locations {
+		if s.isImportDocument(loc.URI) {
+			return nil, fmt.Errorf("account is used by imported CSV data in %s; rename it in the CSV rules", filepath.Base(uriToPath(loc.URI)))
+		}
 	}
 
 	changes := make(map[uri.URI][]protocol.TextEdit)

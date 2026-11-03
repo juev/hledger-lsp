@@ -70,7 +70,7 @@ func (s *Server) publishAffected(ctx context.Context, docURI uri.URI, content st
 	// as a journal of its own, which the include tree cannot offer for a file
 	// that is only included. A root whose tree was built from this very buffer
 	// serves them itself.
-	if s.workspace != nil {
+	if s.workspace != nil && !s.isImportSource(round.docPath) {
 		if resolved, _ := s.workspace.ResolvedForRootContent(round.docPath, revision); resolved == nil {
 			resolved, _ = s.loader.LoadFromContent(round.docPath, content)
 			s.resolved.Store(docURI, resolved)
@@ -243,7 +243,9 @@ func (r *publishRound) sourcesFor(target uri.URI) []journalSource {
 			return sources
 		}
 	}
-	if target != r.docURI || r.closed {
+	// A document no tree owns is read as a journal of its own, which an import
+	// source is not.
+	if target != r.docURI || r.closed || s.isImportSource(path) {
 		return nil
 	}
 	if !r.standaloneDone {
@@ -296,7 +298,7 @@ func (r *publishRound) setFor(target uri.URI) []protocol.Diagnostic {
 	// come from the journal-level pass above, which evaluates the whole include
 	// tree in hledger's date order.
 	var mapper *lsputil.PositionMapper
-	if text, open := s.documents.rope(target); open {
+	if text, open := s.documents.rope(target); open && !s.isImportSource(path) {
 		content := r.docContent
 		if target != r.docURI {
 			content = text.Materialize()

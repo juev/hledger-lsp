@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/juev/hledger-lsp/internal/ast"
+	"github.com/juev/hledger-lsp/internal/csvimport"
 	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
@@ -110,7 +111,10 @@ type Workspace struct {
 	trees      map[string]*IncludeTree // rootPath → tree
 	fileTree   map[string][]string     // filePath → sorted owning root paths
 	dirty      map[string]pendingEdit  // filePath → edit not yet applied
-	dirtyCount atomic.Int64            // len(dirty), readable without mu
+	dirtyCount atomic.Int64            // len(dirty)+len(reload), readable without mu
+	// reload holds roots to rebuild with no file edit of their own: an import
+	// source changed, or a setting changed how includes are read.
+	reload map[string]bool
 	// open holds the live buffer of every file an editor has open, which a
 	// rebuild must see in place of the disk even when the file was not edited
 	// in the batch that triggered it.
@@ -137,6 +141,7 @@ func NewWorkspace(rootURI string, loader *include.Loader) *Workspace {
 		trees:            make(map[string]*IncludeTree),
 		fileTree:         make(map[string][]string),
 		dirty:            make(map[string]pendingEdit),
+		reload:           make(map[string]bool),
 		open:             make(map[string]ContentSource),
 		contentRevisions: make(map[string]uint64),
 		includeGraph:     make(map[string][]string),
@@ -153,6 +158,7 @@ func (w *Workspace) Initialize() error {
 	w.trees = make(map[string]*IncludeTree)
 	w.fileTree = make(map[string][]string)
 	w.dirty = make(map[string]pendingEdit)
+	w.reload = make(map[string]bool)
 	w.dirtyCount.Store(0)
 	w.open = make(map[string]ContentSource)
 	w.contentRevisions = make(map[string]uint64)
@@ -180,9 +186,38 @@ func (w *Workspace) Initialize() error {
 			}
 		}
 	}
+	// Loading every root first records every import source, whatever order
+	// the roots load in.
+	w.dropImportRootsLocked()
 
 	w.buildIndexFromResolvedLocked()
 	return nil
+}
+
+// dropImportRootsLocked removes the trees rooted at a file some import reads
+// as CSV data or rules, such as data.journal read through `include
+// csv:data.journal`, or a link to a CSV file under a journal name. The file is
+// data, so reading it as a journal of its own would only report its records as
+// syntax errors. It returns the paths that lost their last owner. Caller must
+// hold the write lock.
+func (w *Workspace) dropImportRootsLocked() []string {
+	var orphaned []string
+	for rootPath := range w.trees {
+		if !w.loader.IsImportSource(rootPath) {
+			continue
+		}
+		delete(w.trees, rootPath)
+		delete(w.reload, rootPath)
+		for path := range w.fileTree {
+			if w.hasOwnerLocked(path, rootPath) {
+				w.removeOwnerLocked(path, rootPath)
+				if len(w.fileTree[path]) == 0 {
+					orphaned = append(orphaned, path)
+				}
+			}
+		}
+	}
+	return orphaned
 }
 
 func (w *Workspace) LoadErrors() []include.LoadError {
@@ -281,8 +316,11 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 
 		dir := filepath.Dir(file)
 		for _, inc := range journal.Includes {
-			if include.IsGlobPattern(inc.Path) {
-				matches, err := w.loader.ExpandGlob(file, inc.Path)
+			// A reader prefix names the file after it, so that file is included
+			// and is not a root of its own.
+			_, target := csvimport.SplitReader(inc.Path)
+			if include.IsGlobPattern(target) {
+				matches, err := w.loader.ExpandGlob(file, target)
 				if err != nil {
 					continue
 				}
@@ -297,7 +335,7 @@ func (w *Workspace) buildIncludeGraph(files []string) {
 				continue
 			}
 
-			incPath := inc.Path
+			incPath := target
 			if !filepath.IsAbs(incPath) {
 				incPath = filepath.Join(dir, incPath)
 			}
@@ -531,7 +569,7 @@ func (w *Workspace) MarkFileDirty(path string, source ContentSource) uint64 {
 	}
 	w.dirty[path] = pendingEdit{source: source, sourceVersion: sourceVersion, revision: w.revision}
 	w.contentRevisions[path] = w.revision
-	w.dirtyCount.Store(int64(len(w.dirty)))
+	w.storeDirtyCountLocked()
 	return w.revision
 }
 
@@ -549,7 +587,52 @@ func (w *Workspace) MarkFileRemoved(path string) {
 	w.revision++
 	delete(w.open, path)
 	w.dirty[path] = pendingEdit{removed: true, revision: w.revision}
-	w.dirtyCount.Store(int64(len(w.dirty)))
+	w.storeDirtyCountLocked()
+}
+
+// ReloadImports schedules a rebuild of every tree that includes CSV data,
+// failed imports included: a file such an import reads, or its editor buffer,
+// changed. The conversions are cached by content, so a tree whose inputs did
+// not change costs a cache lookup.
+func (w *Workspace) ReloadImports() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for rootPath, tree := range w.trees {
+		if tree.Resolved != nil && len(tree.Resolved.ImportSources) > 0 {
+			w.reload[rootPath] = true
+		}
+	}
+	w.storeDirtyCountLocked()
+}
+
+// ReloadAll schedules a rebuild of every tree, for a setting that changes how
+// includes are read.
+func (w *Workspace) ReloadAll() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for rootPath := range w.trees {
+		w.reload[rootPath] = true
+	}
+	w.storeDirtyCountLocked()
+}
+
+// ImportRoots returns the roots of the trees that include CSV data.
+func (w *Workspace) ImportRoots() []string {
+	w.refresh()
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var roots []string
+	for rootPath, tree := range w.trees {
+		if tree.Resolved != nil && len(tree.Resolved.ImportSources) > 0 {
+			roots = append(roots, rootPath)
+		}
+	}
+	sort.Strings(roots)
+	return roots
+}
+
+func (w *Workspace) storeDirtyCountLocked() {
+	w.dirtyCount.Store(int64(len(w.dirty) + len(w.reload)))
 }
 
 // ContentRevision returns the revision of the content most recently recorded
@@ -589,12 +672,14 @@ func (w *Workspace) refresh() {
 // applyDirtyLocked re-resolves the trees owning the edited files and updates
 // the index for those files only. Caller must hold the write lock.
 func (w *Workspace) applyDirtyLocked() {
-	if len(w.dirty) == 0 {
+	if len(w.dirty) == 0 && len(w.reload) == 0 {
 		w.dirtyCount.Store(0)
 		return
 	}
 	pending := w.dirty
+	reload := w.reload
 	w.dirty = make(map[string]pendingEdit, len(pending))
+	w.reload = make(map[string]bool)
 	w.dirtyCount.Store(0)
 
 	if len(w.trees) == 0 || w.index == nil {
@@ -661,6 +746,12 @@ func (w *Workspace) applyDirtyLocked() {
 		}
 	}
 
+	for rootPath := range reload {
+		if overlays[rootPath] == nil {
+			overlays[rootPath] = make(map[string]include.OverlayEntry)
+		}
+	}
+
 	var orphaned []string
 	for rootPath, entries := range overlays {
 		tree := w.trees[rootPath]
@@ -686,13 +777,23 @@ func (w *Workspace) applyDirtyLocked() {
 		if tree.Resolved == nil {
 			continue
 		}
+		// Imported transactions change with the data, not with any journal
+		// text, so their entries are always derived again.
+		imported := make(map[string]bool)
+		for i := range tree.Resolved.Occurrences {
+			if tree.Resolved.Occurrences[i].Import != nil {
+				imported[tree.Resolved.Occurrences[i].Path] = true
+			}
+		}
 		for path, journal := range tree.Resolved.Files {
-			if w.index.FileIndex(path) == nil {
+			if w.index.FileIndex(path) == nil || imported[path] {
 				w.index.SetFileIndex(path, BuildFileIndexFromJournal(path, journal))
 				w.updateIncludeEdgesLocked(path, nil, w.index.FileIndex(path).Includes)
 			}
 		}
 	}
+
+	orphaned = append(orphaned, w.dropImportRootsLocked()...)
 
 	// A path that lost its last owning tree is no longer part of the workspace;
 	// leaving its index entry behind would keep reporting its accounts and
