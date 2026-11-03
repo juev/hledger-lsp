@@ -631,6 +631,29 @@ func (w *Workspace) ImportRoots() []string {
 	return roots
 }
 
+// ImportSourcePaths returns every file an import of some tree reads: CSV data,
+// rules and the files they pull in, for failed imports too.
+func (w *Workspace) ImportSourcePaths() []string {
+	w.refresh()
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	seen := make(map[string]bool)
+	var paths []string
+	for _, tree := range w.trees {
+		if tree.Resolved == nil {
+			continue
+		}
+		for _, path := range tree.Resolved.ImportSources {
+			if !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func (w *Workspace) storeDirtyCountLocked() {
 	w.dirtyCount.Store(int64(len(w.dirty) + len(w.reload)))
 }
