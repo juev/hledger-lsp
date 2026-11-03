@@ -378,6 +378,20 @@ func TestPreviewOracle_ImportFindsABareSourceInTheMainJournalsDataDirectory(t *t
 	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
 	assert.Equal(t, []string{"newer"}, descriptionsOf(result.Transactions))
 
+	// Of equally new matches hledger reads the last by name, and a wildcard
+	// skips dotfiles even when they are newer.
+	same := time.Now().Add(-30 * time.Minute)
+	for _, name := range []string{"eq-a", "eq-b", "eq-c"} {
+		path := write(t, dir, "data/"+name+".csv", "date,desc,amount\n2024-03-01,"+name+",1\n")
+		require.NoError(t, os.Chtimes(path, same, same))
+	}
+	write(t, dir, "data/.eq-z.csv", "date,desc,amount\n2024-03-01,hidden,1\n")
+	write(t, dir, "sub/bank.rules", "source *eq-*.csv\n"+rules)
+	result = importFrom(t, binary, ruleFile, main)
+	require.Empty(t, result.Err)
+	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
+	assert.Equal(t, []string{"eq-c"}, descriptionsOf(result.Transactions))
+
 	// A name missing from data/ would be looked for in ~/Downloads next.
 	write(t, dir, "sub/bank.rules", "source nowhere.csv\n"+rules)
 	result = importFrom(t, binary, ruleFile, main)
