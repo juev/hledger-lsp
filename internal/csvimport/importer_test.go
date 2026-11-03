@@ -257,3 +257,49 @@ func TestImport_StaticChecksRejectNonRegularAndOversizedInput(t *testing.T) {
 	expanded := importer.Import(context.Background(), Request{Reader: ReaderRules, Path: rules, MaxFileSize: 1 << 20})
 	assert.Equal(t, "rules files include more than 256 files", expanded.Err)
 }
+
+// A conversion whose inputs change while hledger runs must not reach the cache
+// or the callers waiting on it. The stand-in reads the amount from the data
+// file, then blocks until the test has changed the file, so the output is
+// known to describe the old bytes.
+func TestImport_StaleConversionIsNeverServed(t *testing.T) {
+	dir, data := fixture(t)
+	write(t, dir, "in/bank.csv", "date,amount\n2024-01-02,150\n")
+	started := filepath.Join(dir, "started")
+	release := filepath.Join(dir, "release")
+	json := strings.Replace(strings.ReplaceAll(validJSON, "DATA", data), `"decimalMantissa":150`, `"decimalMantissa":MANTISSA`, 1)
+	write(t, dir, "fake/template.json", json)
+	script := "case \"$*\" in *json*)\n" +
+		"  m=$(sed -n 2p " + data + " | cut -d, -f2)\n" +
+		"  if [ ! -e " + release + " ]; then : > " + started + "; while [ ! -e " + release + " ]; do sleep 0.02; done; fi\n" +
+		"  sed \"s/MANTISSA/$m/\" " + filepath.Join(dir, "fake/template.json") + ";;\n" +
+		"*) cat " + filepath.Join(dir, "fake/out.txt") + ";;\nesac\n"
+	binary := fakeHledger(t, dir, fakeRun{text: validText, script: script})
+	importer := New(Config{Enabled: true, Path: binary, Timeout: 30 * time.Second})
+	request := Request{Reader: ReaderCSV, Path: data, MaxFileSize: 1 << 20}
+
+	results := make(chan Result, 2)
+	go func() { results <- importer.Import(context.Background(), request) }()
+	require.Eventually(t, func() bool { _, err := os.Stat(started); return err == nil }, 10*time.Second, 10*time.Millisecond)
+	// The second caller plans the old bytes too and waits on the running
+	// conversion.
+	go func() { results <- importer.Import(context.Background(), request) }()
+	require.Eventually(t, func() bool {
+		importer.mu.Lock()
+		defer importer.mu.Unlock()
+		return len(importer.inflight) == 1
+	}, 10*time.Second, 10*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	write(t, dir, "in/bank.csv", "date,amount\n2024-01-02,275\n")
+	write(t, dir, "release", "")
+
+	for range 2 {
+		result := <-results
+		require.Empty(t, result.Err)
+		require.Len(t, result.Transactions, 1)
+		assert.Equal(t, "2.75", result.Transactions[0].Postings[0].Amount.Quantity.String(), "no caller may see the conversion of the old bytes")
+	}
+	again := importer.Import(context.Background(), request)
+	assert.Equal(t, "2.75", again.Transactions[0].Postings[0].Amount.Quantity.String())
+}
