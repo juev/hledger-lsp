@@ -102,6 +102,7 @@ func (o *otherReading) postingEffects() []analyzer.PostingEffect {
 type offsetReplay struct {
 	balances map[int]map[string]decimal.Decimal
 	assigned map[int]map[string]decimal.Decimal
+	moved    map[int]map[string]decimal.Decimal
 }
 
 // cachedReplay returns the replay of the document's postings (running balances

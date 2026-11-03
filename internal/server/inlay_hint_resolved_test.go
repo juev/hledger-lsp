@@ -160,3 +160,52 @@ func TestInlayHint_RunningBalanceFollowsBalanceAssignment(t *testing.T) {
 		})
 	}
 }
+
+// A file included under different default commodities moves a different
+// commodity in each inclusion, so an account it empties shows each inclusion's
+// own zero, and the tooltip says which inclusion gives which.
+func TestInlayHint_ZeroRunningBalanceOfEachInclusion(t *testing.T) {
+	for mode, shared := range map[string]string{
+		"written":  "2024-01-03 пополнение\n    資産:現金  1\n    капитал  -1\n\n2024-01-03 снятие\n    資産:現金  -1\n    капитал  1\n",
+		"elided":   "2024-01-03 пополнение\n    капитал  -1\n    資産:現金\n\n2024-01-03 снятие\n    капитал  1\n    資産:現金\n",
+		"assigned": "2024-01-03 пополнение\n    資産:現金  = 1\n    капитал\n\n2024-01-03 снятие\n    資産:現金  = 0\n    капитал\n",
+	} {
+		for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+			t.Run(mode+"/"+name, func(t *testing.T) {
+				shared := strings.ReplaceAll(shared, "\n", newline)
+				srv, dir := newInlayWorkspace(t, map[string]string{
+					"main.journal": "2024-01-01 сид\n    資産:現金  0 USD\n    資産:現金  0 EUR\n\n" +
+						"D 1. USD\ninclude shared.journal\nD 1. EUR\ninclude shared.journal\n",
+					"shared.journal": shared,
+				})
+				enableOnlyRunningBalances(srv)
+				docURI := uri.File(filepath.Join(dir, "shared.journal"))
+				require.NoError(t, srv.DidOpen(context.Background(), &protocol.DidOpenTextDocumentParams{
+					TextDocument: protocol.TextDocumentItem{URI: docURI, Text: shared},
+				}))
+
+				hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+					TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+					Range:        protocol.Range{End: protocol.Position{Line: 10}},
+				})
+				require.NoError(t, err)
+				line := uint32(5)
+				if mode == "elided" {
+					line = 6
+				}
+				var emptied []protocol.InlayHint
+				for _, hint := range hints {
+					if hint.Position.Line == line {
+						emptied = append(emptied, hint)
+					}
+				}
+				require.Len(t, emptied, 1)
+				assert.Equal(t, protocol.String("balance: 0 USD | 0 EUR"), emptied[0].Label)
+				tooltip := strings.Split(tooltipString(emptied[0].Tooltip), "\n")
+				require.Len(t, tooltip, 2)
+				assert.True(t, strings.HasPrefix(tooltip[0], "0 USD (when included from "), tooltip[0])
+				assert.True(t, strings.HasPrefix(tooltip[1], "0 EUR (when included from "), tooltip[1])
+			})
+		}
+	}
+}

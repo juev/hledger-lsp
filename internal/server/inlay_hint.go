@@ -50,7 +50,7 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt func(occurrence int) map[string]decimal.Decimal) {
+	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
@@ -103,7 +103,8 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 				break
 			}
 			if amounts := balanceAt(index); len(amounts) > 0 {
-				values = addHintValue(values, formatAmounts(amounts, occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
+				transacted := transactedCommodities(posting, movedAt(index))
+				values = addHintValue(values, formatAmounts(shownBalance(amounts, transacted), occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
 		if len(values) > 0 {
@@ -124,7 +125,8 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
 			emit(posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Balances[ref] },
-				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] })
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] },
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Moved[ref] })
 		}
 		return hints, nil
 	}
@@ -163,9 +165,48 @@ func (s *Server) InlayHint(ctx context.Context, params *protocol.InlayHintParams
 			entry, ok := located[index][offset]
 			return entry.effect, ok
 		}, func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].balances[offset] },
-			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] })
+			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] },
+			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].moved[offset] })
 	}
 	return hints, nil
+}
+
+// shownBalance leaves out the commodities a running balance holds none of. A
+// balance that is zero in every commodity shows a zero in the commodities the
+// posting moves instead, so the hint still says the account is empty.
+func shownBalance(amounts map[string]decimal.Decimal, transacted []string) map[string]decimal.Decimal {
+	shown := make(map[string]decimal.Decimal, len(amounts))
+	for commodity, quantity := range amounts {
+		if !quantity.IsZero() {
+			shown[commodity] = quantity
+		}
+	}
+	if len(shown) > 0 {
+		return shown
+	}
+	for _, commodity := range transacted {
+		if _, held := amounts[commodity]; held {
+			shown[commodity] = decimal.Zero
+		}
+	}
+	if len(shown) == 0 {
+		return amounts
+	}
+	return shown
+}
+
+// transactedCommodities returns the commodities a posting moves in one replay of
+// the journal, since an inclusion can read its amount in another commodity. An
+// elided posting leaves out the commodities it balances to zero, as an inferred
+// amount does.
+func transactedCommodities(posting *ast.Posting, moved map[string]decimal.Decimal) []string {
+	commodities := make([]string, 0, len(moved))
+	for commodity, quantity := range moved {
+		if posting.Amount != nil || posting.BalanceAssertion != nil || !quantity.IsZero() {
+			commodities = append(commodities, commodity)
+		}
+	}
+	return commodities
 }
 
 // hasBalanceAssignment reports whether any reading of the document has a
@@ -241,7 +282,7 @@ func (s *Server) replayByOffset(docURI uri.URI, content string, occurrence balan
 		}
 		return result
 	}
-	byOffset := offsetReplay{balances: keyed(occurrence.replay.Balances), assigned: keyed(occurrence.replay.Assigned)}
+	byOffset := offsetReplay{balances: keyed(occurrence.replay.Balances), assigned: keyed(occurrence.replay.Assigned), moved: keyed(occurrence.replay.Moved)}
 	if doc.runningOffsets == nil {
 		doc.runningOffsets = make(map[readingKey]offsetReplay)
 	}
