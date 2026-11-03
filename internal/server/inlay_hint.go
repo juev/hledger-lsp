@@ -49,7 +49,7 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 
 	mapper := lsputil.NewPositionMapper(content)
 	hints := make([]protocol.InlayHint, 0)
-	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt func(occurrence int) map[string]decimal.Decimal) {
+	emit := func(posting *ast.Posting, effectAt func(reading int) (analyzer.PostingEffect, bool), balanceAt, assignedAt, movedAt func(occurrence int) map[string]decimal.Decimal) {
 		offset := posting.Range.Start.Offset
 		if settings.InlayHints.InferredAmounts {
 			// A posting of a transaction with a balance assignment has the amount
@@ -97,15 +97,12 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			}
 		}
 		var values []hintValue
-		var transacted []string
 		for index, occurrence := range occurrences {
 			if !settings.InlayHints.RunningBalances {
 				break
 			}
 			if amounts := balanceAt(index); len(amounts) > 0 {
-				if transacted == nil {
-					transacted = transactedCommodities(posting, len(readings), effectAt)
-				}
+				transacted := transactedCommodities(posting, movedAt(index))
 				values = addHintValue(values, formatAmounts(shownBalance(amounts, transacted), occurrence.formatsAt(offset)), []occurrenceRef{occurrence.ref})
 			}
 		}
@@ -127,7 +124,8 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			ref := analyzer.PostingRef{TransactionIndex: effect.TransactionIndex, PostingIndex: effect.PostingIndex}
 			emit(posting, func(int) (analyzer.PostingEffect, bool) { return effect, true },
 				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Balances[ref] },
-				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] })
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Assigned[ref] },
+				func(occurrence int) map[string]decimal.Decimal { return occurrences[occurrence].replay.Moved[ref] })
 		}
 		return hints, nil
 	}
@@ -166,7 +164,8 @@ func (s *Server) InlayHint(_ context.Context, params *protocol.InlayHintParams) 
 			entry, ok := located[index][offset]
 			return entry.effect, ok
 		}, func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].balances[offset] },
-			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] })
+			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].assigned[offset] },
+			func(occurrence int) map[string]decimal.Decimal { return replaysByOffset[occurrence].moved[offset] })
 	}
 	return hints, nil
 }
@@ -195,23 +194,15 @@ func shownBalance(amounts map[string]decimal.Decimal, transacted []string) map[s
 	return shown
 }
 
-// transactedCommodities returns the commodities a posting moves: the one it
-// writes or assigns, or those inferred for it in any reading.
-func transactedCommodities(posting *ast.Posting, readings int, effectAt func(reading int) (analyzer.PostingEffect, bool)) []string {
-	switch {
-	case posting.Amount != nil:
-		return []string{posting.Amount.Commodity.Symbol}
-	case posting.BalanceAssertion != nil:
-		return []string{posting.BalanceAssertion.Amount.Commodity.Symbol}
-	}
-	commodities := []string{}
-	for index := range readings {
-		if effect, ok := effectAt(index); ok {
-			for commodity := range effect.InferredAmounts {
-				if !slices.Contains(commodities, commodity) {
-					commodities = append(commodities, commodity)
-				}
-			}
+// transactedCommodities returns the commodities a posting moves in one replay of
+// the journal, since an inclusion can read its amount in another commodity. An
+// elided posting leaves out the commodities it balances to zero, as an inferred
+// amount does.
+func transactedCommodities(posting *ast.Posting, moved map[string]decimal.Decimal) []string {
+	commodities := make([]string, 0, len(moved))
+	for commodity, quantity := range moved {
+		if posting.Amount != nil || posting.BalanceAssertion != nil || !quantity.IsZero() {
+			commodities = append(commodities, commodity)
 		}
 	}
 	return commodities
@@ -290,7 +281,7 @@ func (s *Server) replayByOffset(docURI uri.URI, content string, occurrence balan
 		}
 		return result
 	}
-	byOffset := offsetReplay{balances: keyed(occurrence.replay.Balances), assigned: keyed(occurrence.replay.Assigned)}
+	byOffset := offsetReplay{balances: keyed(occurrence.replay.Balances), assigned: keyed(occurrence.replay.Assigned), moved: keyed(occurrence.replay.Moved)}
 	if doc.runningOffsets == nil {
 		doc.runningOffsets = make(map[readingKey]offsetReplay)
 	}

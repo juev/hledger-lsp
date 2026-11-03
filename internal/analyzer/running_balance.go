@@ -58,6 +58,10 @@ type Replay struct {
 	// assignment hold, and the elided amount that balances it. Both depend on the
 	// balance the account had before, so the transaction alone cannot tell them.
 	Assigned map[PostingRef]map[string]decimal.Decimal
+	// Moved is the amount each posting with a balance adds to its account in
+	// this replay. The commodities of a posting that elides its amount or
+	// assigns a balance depend on where the journal reads it.
+	Moved map[PostingRef]map[string]decimal.Decimal
 }
 
 // ReplayFor is RunningBalancesFor with the assigned amounts of each occurrence.
@@ -88,6 +92,7 @@ func ReplayFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID)
 		result[id] = Replay{
 			Balances: make(map[PostingRef]map[string]decimal.Decimal),
 			Assigned: make(map[PostingRef]map[string]decimal.Decimal),
+			Moved:    make(map[PostingRef]map[string]decimal.Decimal),
 		}
 	}
 	for _, step := range entries {
@@ -104,6 +109,7 @@ func ReplayFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID)
 		ref := PostingRef{TransactionIndex: source.Index, PostingIndex: step.postingIndex}
 		if !hidden[postingKey{step.sourceOrder, step.postingIndex}] {
 			wanted.Balances[ref] = cloneAmounts(balances[account])
+			wanted.Moved[ref] = cloneAmounts(step.contribution)
 		}
 		if posting.Amount == nil && HasBalanceAssignment(&source.Transaction) {
 			wanted.Assigned[ref] = cloneAmounts(step.contribution)
