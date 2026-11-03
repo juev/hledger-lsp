@@ -116,6 +116,10 @@ type AlignmentInfo struct {
 	// and every amount in the document has a right-side commodity (issue
 	// #25). Zero disables end-column alignment.
 	AmountEndCol int
+	// AssertionPadding holds the spaces written after the `=` of a balance
+	// assertion, by the offset its posting starts at, so that the decimal points
+	// of the assertions written after an amount line up within a transaction.
+	AssertionPadding map[int]int
 }
 
 func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
@@ -285,6 +289,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	}
 	alignment = settleAlignment(lines, postings, alignment, rule, commodityFormats, opts, target)
 	if withComments {
+		alignment.AssertionPadding = assertionPadding(journal, alignment, commodityFormats, opts, target)
 		alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
 	}
 	return alignment
@@ -395,7 +400,8 @@ func settleAlignment(lines []string, postings []ast.Posting, alignment Alignment
 		if rule.settleDecimal {
 			next.DecimalCol = max(rule.naturalDecimalCol, selectModalColumn(decimals))
 		}
-		if next == alignment {
+		if next.AccountCol == alignment.AccountCol && next.DecimalCol == alignment.DecimalCol &&
+			next.AmountEndCol == alignment.AmountEndCol && next.CommentColumn == alignment.CommentColumn {
 			break
 		}
 		alignment = next
@@ -1089,7 +1095,68 @@ func amountGap(posting *ast.Posting, alignment AlignmentInfo, commodityFormats m
 }
 
 func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
+	text, _ := renderPosting(posting, alignment, commodityFormats, indent, alignAmounts, target, alignment.AssertionPadding[posting.Range.Start.Offset])
+	return text
+}
+
+// assertionPadding returns the spaces each balance assertion written after an
+// amount takes after its `=`, so that within a transaction the decimal points of
+// the assertions whose `=` share a column line up, the way the amounts before
+// them do. Assertions whose `=` land in different columns, after amounts of
+// different widths or a lot price, are left alone rather than opening wide
+// gaps. An assignment, with no amount, keeps its `=` in the amount column and
+// takes no part.
+func assertionPadding(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]int {
+	indent := strings.Repeat(" ", opts.IndentSize)
+	padding := make(map[int]int)
+	lineUp := func(postings []ast.Posting) {
+		type asserted struct {
+			offset, decimal int
+		}
+		// The asserted amounts by the column they start at, which is the same
+		// for every `=` in one column.
+		groups := make(map[int][]asserted)
+		for i := range postings {
+			posting := &postings[i]
+			if posting.Amount == nil || posting.BalanceAssertion == nil || posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
+				continue
+			}
+			_, start := renderPosting(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			groups[start] = append(groups[start], asserted{posting.Range.Start.Offset, start + calculateSingleAmountDecimalPrefix(&posting.BalanceAssertion.Amount, commodityFormats)})
+		}
+		for _, group := range groups {
+			column := 0
+			for _, a := range group {
+				column = max(column, a.decimal)
+			}
+			for _, a := range group {
+				if column > a.decimal {
+					padding[a.offset] = column - a.decimal
+				}
+			}
+		}
+	}
+	for i := range journal.Transactions {
+		lineUp(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		lineUp(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		lineUp(journal.AutoPostingRules[i].Postings)
+	}
+	if len(padding) == 0 {
+		return nil
+	}
+	return padding
+}
+
+// renderPosting renders a posting without its comment, with assertionPad spaces
+// after the `=` of its balance assertion. It also returns the display column the
+// asserted amount starts at, or 0 without an assertion.
+func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string, assertionPad int) (string, int) {
 	var sb strings.Builder
+	assertionStart := 0
 	writePostingHead(&sb, posting, indent)
 
 	if posting.Amount != nil {
@@ -1144,6 +1211,8 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		default:
 			sb.WriteString("= ")
 		}
+		sb.WriteString(strings.Repeat(" ", assertionPad))
+		assertionStart = displayWidth(sb.String())
 		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
 		if posting.BalanceAssertion.Cost != nil {
 			if posting.BalanceAssertion.Cost.IsTotal {
@@ -1155,7 +1224,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		}
 	}
 
-	return sb.String()
+	return sb.String(), assertionStart
 }
 
 // formatPostingBody renders a posting without its inline comment, so the caller

@@ -3398,9 +3398,18 @@ func TestFormatDocumentWithOptions_BalanceAssertionSeparatorIgnoresAlignmentPadd
 			for _, line := range lines[3:] {
 				assertSingleBalanceAssertionSeparator(t, line)
 			}
-			assert.Contains(t, lines[3], "10.00 USD = 10.00 USD  ; Comment test")
-			assert.Contains(t, lines[4], "-15.00 USD = -10.00 USD")
-			assert.Contains(t, lines[5], "4.00 USD = 4.00 GBP")
+			if tt.opts.AmountAlignmentMode == "right" {
+				// The amounts end in one column, so the `=` signs share one and
+				// the asserted balances after them line up on their decimal points.
+				assert.Contains(t, lines[3], "10.00 USD =  10.00 USD  ; Comment test")
+				assert.Contains(t, lines[4], "-15.00 USD = -10.00 USD")
+				assert.Contains(t, lines[5], "4.00 USD =   4.00 GBP")
+			} else {
+				// The `=` signs land in different columns, and are left alone.
+				assert.Contains(t, lines[3], "10.00 USD = 10.00 USD  ; Comment test")
+				assert.Contains(t, lines[4], "-15.00 USD = -10.00 USD")
+				assert.Contains(t, lines[5], "4.00 USD = 4.00 GBP")
+			}
 
 			switch tt.opts.AmountAlignmentMode {
 			case "right":
