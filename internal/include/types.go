@@ -202,6 +202,10 @@ type ResolvedJournal struct {
 	// ImportSources lists every file an import of this load depends on, failed
 	// imports included, for watching and for protection from journal edits.
 	ImportSources []string
+	// PendingImports counts the imports whose conversion is still running in
+	// the background (csvimport.Config.Background). Their transactions are
+	// missing, so the journal must not be judged until they are done.
+	PendingImports int
 }
 
 func NewResolvedJournal(primary *ast.Journal) *ResolvedJournal {
