@@ -120,6 +120,17 @@ type AlignmentInfo struct {
 	// assertion, by the offset its posting starts at, so that the decimal points
 	// of the assertions written after an amount line up within a transaction.
 	AssertionPadding map[int]int
+	// CostLayout places the amounts and the `@`/`@@` of the postings with a cost,
+	// by the offset each posting starts at, so that within a transaction the
+	// signs share a column and the amounts before them line up.
+	CostLayout map[int]CostPlacement
+}
+
+// CostPlacement is where a posting with a cost writes its parts: the spaces
+// between account and amount, between amount and `@`/`@@`, and between the sign
+// and the cost.
+type CostPlacement struct {
+	AmountGap, BeforeSign, AfterSign int
 }
 
 func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
@@ -222,6 +233,10 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	}
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
+	// The columns are detected from where amounts are written, which for the
+	// postings of a lined-up cost group is where the group put them, not the
+	// document's columns, so they would move the columns on every pass.
+	detectable := outsideCostGroups(journal, postings, target)
 
 	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(postings, indentSize)
 	globalAccountCol := naturalAccountCol
@@ -240,7 +255,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 			globalDecimalCol = CalculateGlobalDecimalCol(postings, commodityFormats, globalAccountCol, target)
 			rule.naturalDecimalCol = globalDecimalCol
 			rule.settleDecimal = true
-			if detected := detectExistingDecimalColumn(lines, postings, commodityFormats, target); detected > globalDecimalCol {
+			if detected := detectExistingDecimalColumn(lines, detectable, commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
 		}
@@ -249,7 +264,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 			globalAccountCol = opts.AmountAlignmentColumn
 		} else {
 			rule.settleAccount = true
-			if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
+			if detected := detectExistingAmountColumn(lines, detectable); detected > globalAccountCol {
 				globalAccountCol = detected
 			}
 		}
@@ -258,7 +273,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// Smart detection: if the file already has hand-aligned
 		// amounts, use the most common existing start column as the
 		// base. Decimal mode uses decimal-target detection instead.
-		if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
+		if detected := detectExistingAmountColumn(lines, detectable); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
 		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings, commodityFormats) {
@@ -274,7 +289,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
 		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings, commodityFormats) {
-			if endCol := detectExistingAmountEndColumn(lines, postings, commodityFormats, target); endCol > 0 {
+			if endCol := detectExistingAmountEndColumn(lines, detectable, commodityFormats, target); endCol > 0 {
 				rule.naturalEndCol = naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
 				rule.settleEnd = true
 				globalAmountEndCol = max(rule.naturalEndCol, endCol)
@@ -287,8 +302,9 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
-	alignment = settleAlignment(lines, postings, alignment, rule, commodityFormats, opts, target)
+	alignment = settleAlignment(lines, detectable, alignment, rule, commodityFormats, opts, target)
 	if withComments {
+		alignment.CostLayout = costLayout(journal, alignment, commodityFormats, opts, target)
 		alignment.AssertionPadding = assertionPadding(journal, alignment, commodityFormats, opts, target)
 		alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
 	}
@@ -1099,6 +1115,138 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	return text
 }
 
+// outsideCostGroups returns the postings that are not in a lined-up cost group:
+// postings with a cost after an amount, and no lot price, two or more to a
+// transaction. costLayout places those, so where they are written says nothing
+// about the document's columns.
+func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target string) []ast.Posting {
+	if normalizeAlignTarget(target) != AlignTargetCost {
+		return postings
+	}
+	grouped := make(map[int]bool)
+	mark := func(group []ast.Posting) {
+		var members []int
+		for i := range group {
+			if inCostGroup(&group[i]) {
+				members = append(members, group[i].Range.Start.Offset)
+			}
+		}
+		if len(members) >= 2 {
+			for _, offset := range members {
+				grouped[offset] = true
+			}
+		}
+	}
+	for i := range journal.Transactions {
+		mark(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		mark(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		mark(journal.AutoPostingRules[i].Postings)
+	}
+	if len(grouped) == 0 {
+		return postings
+	}
+	rest := make([]ast.Posting, 0, len(postings)-len(grouped))
+	for i := range postings {
+		if !grouped[postings[i].Range.Start.Offset] {
+			rest = append(rest, postings[i])
+		}
+	}
+	return rest
+}
+
+// inCostGroup reports whether a posting takes part in lining up the costs of its
+// transaction.
+func inCostGroup(posting *ast.Posting) bool {
+	return posting.Amount != nil && posting.Cost != nil && posting.LotPrice == nil && !posting.Multiplier &&
+		posting.UnparsedTail.End.Offset <= posting.UnparsedTail.Start.Offset
+}
+
+// costLayout returns the placement of the amounts and cost signs of each
+// transaction with two or more postings that carry a cost after an amount. The
+// costs stay where the alignment puts them, lined up with the other amounts;
+// the signs move to the rightmost column every cost still fits after, and the
+// amounts before them line up on their decimal points, ending a space before
+// it. When the amounts would then come closer to their accounts than the gap
+// allows, as a wide amount with a narrow cost beside a narrow amount with a wide
+// one can, the transaction's signs and costs move right together to make room.
+// A transaction with a lot price keeps the layout each posting has on its own.
+func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]CostPlacement {
+	if normalizeAlignTarget(target) != AlignTargetCost {
+		return nil
+	}
+	indent := strings.Repeat(" ", opts.IndentSize)
+	layout := make(map[int]CostPlacement)
+	lineUp := func(postings []ast.Posting) {
+		type costed struct {
+			offset           int
+			head, cost, sign int
+			integer, width   int
+		}
+		var group []costed
+		for i := range postings {
+			posting := &postings[i]
+			if !inCostGroup(posting) {
+				continue
+			}
+			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			sign := 1
+			if posting.Cost.IsTotal {
+				sign = 2
+			}
+			group = append(group, costed{
+				offset:  posting.Range.Start.Offset,
+				head:    columns.head,
+				cost:    columns.cost,
+				sign:    sign,
+				integer: calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats),
+				width:   displayWidth(FormatAmount(posting.Amount, commodityFormats)),
+			})
+		}
+		if len(group) < 2 {
+			return
+		}
+		// The sign column, and the decimal column of the amounts before it.
+		signAt := group[0].cost - group[0].sign - 1
+		fraction := 0
+		for _, c := range group {
+			signAt = min(signAt, c.cost-c.sign-1)
+			fraction = max(fraction, c.width-c.integer)
+		}
+		decimal := signAt - 1 - fraction
+		shift := 0
+		for _, c := range group {
+			shift = max(shift, c.head+minSpaces-(decimal-c.integer))
+		}
+		decimal += shift
+		signAt += shift
+		for _, c := range group {
+			amountStart := decimal - c.integer
+			layout[c.offset] = CostPlacement{
+				AmountGap:  amountStart - c.head,
+				BeforeSign: signAt - (amountStart + c.width),
+				AfterSign:  c.cost + shift - (signAt + c.sign) - 1,
+			}
+		}
+	}
+	for i := range journal.Transactions {
+		lineUp(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		lineUp(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		lineUp(journal.AutoPostingRules[i].Postings)
+	}
+	if len(layout) == 0 {
+		return nil
+	}
+	return layout
+}
+
 // assertionPadding returns the spaces each balance assertion written after an
 // amount takes after its `=`, so that within a transaction the decimal points of
 // the assertions whose `=` share a column line up, the way the amounts before
@@ -1155,12 +1303,29 @@ func assertionPadding(journal *ast.Journal, alignment AlignmentInfo, commodityFo
 // after the `=` of its balance assertion. It also returns the display column the
 // asserted amount starts at, or 0 without an assertion.
 func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string, assertionPad int) (string, int) {
+	text, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, alignAmounts, target, assertionPad)
+	return text, columns.assertion
+}
+
+// postingColumns are the display columns where the parts of a rendered posting
+// start; 0 for a part it does not have.
+type postingColumns struct {
+	head, cost, assertion int
+}
+
+// renderPostingColumns is renderPosting with the columns of every part.
+func renderPostingColumns(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string, assertionPad int) (string, postingColumns) {
 	var sb strings.Builder
-	assertionStart := 0
+	var columns postingColumns
 	writePostingHead(&sb, posting, indent)
+	columns.head = displayWidth(sb.String())
+	placement, placed := alignment.CostLayout[posting.Range.Start.Offset]
 
 	if posting.Amount != nil {
 		spaces := amountGap(posting, alignment, commodityFormats, alignAmounts, target, displayWidth(sb.String()))
+		if placed {
+			spaces = placement.AmountGap
+		}
 		sb.WriteString(strings.Repeat(" ", spaces))
 
 		if posting.Multiplier {
@@ -1182,11 +1347,18 @@ func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityForma
 	}
 
 	if posting.Cost != nil {
-		if posting.Cost.IsTotal {
-			sb.WriteString(" @@ ")
-		} else {
-			sb.WriteString(" @ ")
+		before, after := 1, 0
+		if placed {
+			before, after = placement.BeforeSign, placement.AfterSign
 		}
+		sb.WriteString(strings.Repeat(" ", before))
+		if posting.Cost.IsTotal {
+			sb.WriteString("@@ ")
+		} else {
+			sb.WriteString("@ ")
+		}
+		sb.WriteString(strings.Repeat(" ", after))
+		columns.cost = displayWidth(sb.String())
 		writeAmountWithSign(&sb, &posting.Cost.Amount, commodityFormats)
 	}
 
@@ -1212,7 +1384,7 @@ func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityForma
 			sb.WriteString("= ")
 		}
 		sb.WriteString(strings.Repeat(" ", assertionPad))
-		assertionStart = displayWidth(sb.String())
+		columns.assertion = displayWidth(sb.String())
 		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
 		if posting.BalanceAssertion.Cost != nil {
 			if posting.BalanceAssertion.Cost.IsTotal {
@@ -1224,7 +1396,7 @@ func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityForma
 		}
 	}
 
-	return sb.String(), assertionStart
+	return sb.String(), columns
 }
 
 // formatPostingBody renders a posting without its inline comment, so the caller
