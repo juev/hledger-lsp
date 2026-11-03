@@ -322,7 +322,16 @@ func (s *Server) applyConfiguration(ctx context.Context, request uint64) bool {
 
 	// The client asks for the hints of the buffers it opened before the
 	// configuration arrived, and shows those until it has a reason to ask again.
-	return s.clientCapabilities.supportsInlayHintRefresh && current.InlayHints != previous.InlayHints
+	return s.clientCapabilities.supportsInlayHintRefresh && effectiveInlayHints(current) != effectiveInlayHints(previous)
+}
+
+// effectiveInlayHints is what the settings make an InlayHint request show: no
+// hints at all while the feature is off, whatever the individual options say.
+func effectiveInlayHints(settings serverSettings) inlayHintSettings {
+	if !settings.Features.InlayHints {
+		return inlayHintSettings{}
+	}
+	return settings.InlayHints
 }
 
 // initialConfigurationTimeout bounds how long a request waits for the
