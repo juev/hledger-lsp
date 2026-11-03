@@ -170,3 +170,22 @@ func TestImport_ParseOccurrenceRefusesImportedData(t *testing.T) {
 	_, _, ok := resolved.ParseOccurrence(occurrences[0].ID, "2024-01-01 x\n    a  1\n    b\n")
 	assert.False(t, ok, "imported data is not journal text")
 }
+
+func TestImport_FormattingContextRefusesImportedData(t *testing.T) {
+	dir := t.TempDir()
+	data := writeFile(t, dir, "bank.csv", "date,amount\n2024-01-01,1\n")
+	root := writeFile(t, dir, "main.journal", "include bank.csv\n")
+	link := filepath.Join(dir, "linked.journal")
+	require.NoError(t, os.Link(data, link))
+	transaction := ast.Transaction{Date: ast.Date{Year: 2024, Month: 1, Day: 1}, Description: "d", Postings: []ast.Posting{{Account: ast.Account{Name: "a"}}}}
+
+	loader := NewLoader()
+	loader.SetImporter(&fakeImporter{result: csvimport.Result{DataPath: data, Transactions: []ast.Transaction{transaction}, Sources: []string{data}}}, nil)
+	resolved, errs := loader.Load(root)
+	require.Empty(t, errs)
+
+	for _, path := range []string{data, link} {
+		_, err := resolved.FormattingContext(path, "2024-01-01 x\n    a  1\n    b\n")
+		assert.ErrorIs(t, err, ErrImportedData, path)
+	}
+}

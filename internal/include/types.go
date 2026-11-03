@@ -2,6 +2,8 @@ package include
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"slices"
@@ -307,6 +309,10 @@ type FormattingContext struct {
 // ErrNotIncluded reports that a file is not part of the include tree.
 var ErrNotIncluded = errors.New("not part of the include tree")
 
+// ErrImportedData reports that the tree reads a file as separated data or CSV
+// rules, which is not journal text and must not be formatted as one.
+var ErrImportedData = errors.New("read as imported CSV data, not as a journal")
+
 // FormattingContext reads content as each occurrence of the file at path, with
 // the context the occurrence inherited (see ParseOccurrence). Occurrences with
 // equal contexts read content alike and share a reading. It returns
@@ -318,6 +324,12 @@ func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingCon
 	}
 	if len(occurrences) == 0 {
 		return FormattingContext{}, ErrNotIncluded
+	}
+
+	for _, occurrence := range occurrences {
+		if occurrence.Import != nil {
+			return FormattingContext{}, ErrImportedData
+		}
 	}
 
 	var ctx FormattingContext

@@ -2288,26 +2288,21 @@ func (p *Parser) resolveAccountName(name string) string {
 	if prefix := p.getAccountPrefix(); prefix != "" {
 		resolvedName = prefix + ":" + resolvedName
 	}
-	return applyAliases(p.basicAliases, resolvedName)
+	aliased, err := applyAliases(p.aliases, resolvedName)
+	if err != nil {
+		p.errorAt(p.current.Pos, p.current.End, "problem in account alias applied to %s: %v", name, err)
+	}
+	return aliased
 }
 
 // ApplyAliases rewrites an account name with the aliases in force in context.
 // hledger applies them, but not `apply account`, to the transactions of an
-// included CSV file (checked on 1.99.5).
+// included CSV file (checked on 1.99.5). A regex alias that cannot be applied
+// leaves the name as it is.
 func ApplyAliases(context Context, name string) string {
-	return applyAliases(context.basicAliases, name)
-}
-
-func applyAliases(aliases []basicAlias, resolvedName string) string {
-	for i := len(aliases) - 1; i >= 0; i-- {
-		alias := aliases[i]
-		if resolvedName == alias.original {
-			resolvedName = alias.alias
-			continue
-		}
-		if strings.HasPrefix(resolvedName, alias.original+":") {
-			resolvedName = alias.alias + strings.TrimPrefix(resolvedName, alias.original)
-		}
+	aliased, err := applyAliases(context.aliases, name)
+	if err != nil {
+		return name
 	}
 	return aliased
 }
