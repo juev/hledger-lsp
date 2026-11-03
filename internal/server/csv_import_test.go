@@ -422,3 +422,37 @@ func TestImportSettingsChanged(t *testing.T) {
 	twoDisabled.CLI.Enabled = false
 	assert.True(t, importSettingsChanged(two, twoDisabled))
 }
+
+func TestPreviewOracle_ServerReadsImportedAssertionsAndAssignmentsInContext(t *testing.T) {
+	hledger := previewHledgerPath(t)
+	dir := t.TempDir()
+	// Record 2 asserts a wrong balance; record 3 assigns one, so its amount
+	// depends on everything before it, including the journal's opening.
+	bank := writeWorkspaceFile(t, dir, "data/bank.csv", "date,desc,amount,bal\n2024-01-02,a,10,60\n2024-01-03,b,5,99\n2024-01-04,c,,100\n")
+	writeWorkspaceFile(t, dir, "rules/bank.rules", "source ../data/bank.csv\nskip 1\nfields date, description, amount, bal\ncurrency $\naccount1 assets:bank\naccount2 income\nif %amount ^$\n balance1 %bal\nif %amount [0-9]\n amount1 %amount\n balance1 %bal\n")
+	journal := "2024-01-01 opening\n    assets:bank  $50\n    equity\n\ninclude rules/bank.rules\n\n2024-01-05 check\n    income  $0 = $-50\n    assets:bank  $0 = $100\n"
+	mainPath := writeWorkspaceFile(t, dir, "main.journal", journal)
+	ts := startWorkspace(t, dir, targetVersion2, hledger)
+	mainURI := uri.File(mainPath)
+
+	diagnostics, err := ts.openAndWait(mainURI, journal)
+	require.NoError(t, err)
+	assert.Empty(t, diagnosticCodes(diagnostics), "the assignment adds $35 after $65, so income is $-50")
+
+	bankURI := uri.File(bank)
+	ts.eventuallyDiagnostics(t, bankURI, func(codes []string) bool {
+		return len(codes) == 1 && contains(codes, "BALANCE_ASSERTION_FAILED: balance assertion failed in assets:bank: asserted 99 $, calculated 65 $ (difference -34)")
+	})
+	ts.client.mu.Lock()
+	var published *protocol.PublishDiagnosticsParams
+	for i := len(ts.client.diagnostics) - 1; i >= 0; i-- {
+		if ts.client.diagnostics[i].URI == bankURI {
+			published = &ts.client.diagnostics[i]
+			break
+		}
+	}
+	ts.client.mu.Unlock()
+	require.NotNil(t, published)
+	require.Len(t, published.Diagnostics, 1)
+	assert.Equal(t, uint32(2), published.Diagnostics[0].Range.Start.Line, "the failure is on the third line of the CSV, its second record")
+}
