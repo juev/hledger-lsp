@@ -120,6 +120,11 @@ func (s *Server) publishCoverage(ctx context.Context, round *publishRound, versi
 	defer s.scheduleImportWatchers()
 	docURI := round.docURI
 	docSources := round.sourcesFor(docURI)
+	if pendingImport(docSources) {
+		// importsReady publishes again once the conversion is done; until
+		// then the client keeps what it last received.
+		return
+	}
 	current := map[uri.URI]bool{docURI: true}
 	for _, source := range docSources {
 		for _, err := range source.errors {

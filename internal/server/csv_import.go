@@ -32,7 +32,33 @@ func (s *Server) configureImports(settings serverSettings) {
 		Enabled: settings.CLI.Enabled,
 		Path:    settings.CLI.Path,
 		Timeout: settings.CLI.Timeout,
+		// A rebuild runs under the workspace lock and requests wait on it, so
+		// no load waits for hledger: a conversion that is not cached runs in
+		// the background and the trees that need it are built again when it
+		// is done.
+		Background: true,
+		OnReady:    s.importsReady,
 	}), s.importBuffer)
+}
+
+// importsReady reacts to a background conversion that has finished: the trees
+// that import are built again, now from the cached result, and republished.
+func (s *Server) importsReady() {
+	s.clearParseCache()
+	s.importSourceChanged()
+}
+
+// pendingImport reports whether a tree is waiting for a background conversion.
+// Its imported transactions are missing, so its balances and assertions would
+// be judged on partial data; the publish is left to the run that follows the
+// conversion.
+func pendingImport(sources []journalSource) bool {
+	for _, source := range sources {
+		if source.resolved != nil && source.resolved.PendingImports > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // importSettingsChanged reports whether includes of CSV data must be read again.
