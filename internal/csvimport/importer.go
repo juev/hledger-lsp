@@ -82,7 +82,8 @@ type cacheEntry struct {
 type call struct {
 	done   chan struct{}
 	result Result
-	cached bool
+	// shared marks a validated result the waiters may use.
+	shared bool
 }
 
 func New(config Config) *Importer {
@@ -129,28 +130,22 @@ func (im *Importer) Import(ctx context.Context, request Request) Result {
 
 	for attempt := 0; ; attempt++ {
 		key := cacheKey(identity, version, im.config.Timeout, p.material)
-		converted, cached := im.convertOnce(ctx, key, client, p)
-		if cached || converted.Err != "" {
+		converted, outcome := im.convertOnce(ctx, key, client, p, request)
+		if outcome != outcomeStale {
 			return withPlan(converted, result)
 		}
-		// hledger read the files after the plan did; a change in between means
-		// the output may not match the bytes the plan checked.
-		after, err := buildPlan(request)
-		if err != nil {
-			result.Sources, result.Warnings = after.sources, after.warnings
-			result.Err = err.Error()
-			return result
-		}
-		if after.material == p.material {
-			return withPlan(converted, result)
-		}
-		im.forget(key)
-		p = after
-		result.Sources, result.Warnings = p.sources, p.warnings
 		if attempt+1 >= attempts {
 			result.Err = "the files changed while hledger was reading them"
 			return result
 		}
+		// The inputs moved under a conversion, ours or one we waited on: plan
+		// again from the bytes on disk now.
+		if p, err = buildPlan(request); err != nil {
+			result.Sources, result.Warnings = p.sources, p.warnings
+			result.Err = err.Error()
+			return result
+		}
+		result.Sources, result.Warnings = p.sources, p.warnings
 	}
 }
 
@@ -160,38 +155,65 @@ func withPlan(converted, planned Result) Result {
 	return converted
 }
 
+// outcome says what a conversion result is worth.
+type outcome int
+
+const (
+	// outcomeValid is a result for exactly the bytes the plan checked.
+	outcomeValid outcome = iota
+	// outcomeTransient is a result that says nothing about the inputs, such as
+	// a cancellation; it is returned but never shared.
+	outcomeTransient
+	// outcomeStale means the inputs changed while hledger read them: the
+	// result is discarded and the caller must plan again.
+	outcomeStale
+)
+
 // convertOnce returns the conversion for key, running hledger only when no
-// cached or in-flight conversion has it. cached reports a result some earlier
-// run produced from the same inputs.
-func (im *Importer) convertOnce(ctx context.Context, key string, client *cli.Client, p *plan) (Result, bool) {
+// cached or in-flight conversion has it. A result reaches the cache and the
+// callers waiting on it only after the inputs were read again and found
+// unchanged since the plan, so no one is ever served a conversion of bytes
+// other than the ones key names.
+func (im *Importer) convertOnce(ctx context.Context, key string, client *cli.Client, p *plan, request Request) (Result, outcome) {
 	im.mu.Lock()
 	if element, ok := im.cache[key]; ok {
 		im.lru.MoveToFront(element)
 		result := element.Value.(*cacheEntry).result
 		im.mu.Unlock()
-		return result, true
+		return result, outcomeValid
 	}
 	if pending, ok := im.inflight[key]; ok {
 		im.mu.Unlock()
 		select {
 		case <-pending.done:
-			if pending.cached {
-				return pending.result, true
-			}
 		case <-ctx.Done():
-			return Result{Err: "the import was cancelled"}, false
+			return Result{Err: "the import was cancelled"}, outcomeTransient
 		}
-		return im.convertOnce(ctx, key, client, p)
+		if pending.shared {
+			return pending.result, outcomeValid
+		}
+		// The conversion went stale or was cancelled for its own caller; this
+		// caller plans again rather than inherit either.
+		return Result{}, outcomeStale
 	}
 	pending := &call{done: make(chan struct{})}
 	im.inflight[key] = pending
 	im.mu.Unlock()
 
 	result, keep := im.run(ctx, client, p)
+	verdict := outcomeTransient
+	if keep {
+		// hledger read the files after the plan did; a change in between means
+		// the output may not describe the bytes the plan checked.
+		verdict = outcomeStale
+		if after, err := buildPlan(request); err == nil && after.material == p.material {
+			verdict = outcomeValid
+		}
+	}
 
 	im.mu.Lock()
 	delete(im.inflight, key)
-	if keep {
+	if verdict == outcomeValid {
 		im.cache[key] = im.lru.PushFront(&cacheEntry{key: key, result: result})
 		for im.lru.Len() > cacheEntries {
 			oldest := im.lru.Back()
@@ -199,19 +221,10 @@ func (im *Importer) convertOnce(ctx context.Context, key string, client *cli.Cli
 			delete(im.cache, oldest.Value.(*cacheEntry).key)
 		}
 	}
-	pending.result, pending.cached = result, keep
+	pending.result, pending.shared = result, verdict == outcomeValid
 	im.mu.Unlock()
 	close(pending.done)
-	return result, false
-}
-
-func (im *Importer) forget(key string) {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	if element, ok := im.cache[key]; ok {
-		im.lru.Remove(element)
-		delete(im.cache, key)
-	}
+	return result, verdict
 }
 
 // run converts with two hledger processes, one per output, holding a worker
