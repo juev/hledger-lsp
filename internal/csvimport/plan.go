@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 
@@ -39,7 +40,10 @@ type Request struct {
 	Reader Reader
 	// Path is the absolute include target: the data file for the csv, ssv and
 	// tsv readers, the rules file for the rules reader.
-	Path        string
+	Path string
+	// MainJournal is the root journal of the load, whose data/ directory
+	// hledger searches for a source given by a bare or relative name.
+	MainJournal string
 	MaxFileSize int64
 	// Buffer returns the unsaved editor content of path, if an editor holds it.
 	// The import always reads the saved files; a differing buffer is reported.
@@ -50,6 +54,10 @@ type Request struct {
 type plan struct {
 	dir  string
 	file string // the -f argument
+	// rules, when set, is passed as --rules: the data file was found by the
+	// server in data/, so hledger is given it with the rules that convert it
+	// instead of searching for it again from the rules file.
+	rules string
 	// data maps every data file hledger may read to the text its positions are
 	// counted in (CoordinateText), for locating the transactions it reports.
 	data map[string]string
@@ -80,7 +88,7 @@ type planner struct {
 func buildPlan(request Request) (*plan, error) {
 	p := &plan{dir: filepath.Dir(request.Path), data: make(map[string]string)}
 	b := &planner{request: request, plan: p, hash: &strings.Builder{}, seen: make(map[string]bool)}
-	fmt.Fprintf(b.hash, "reader=%s\x00target=%s\x00max=%d\x00", request.Reader, request.Path, request.MaxFileSize)
+	fmt.Fprintf(b.hash, "reader=%s\x00target=%s\x00max=%d\x00main=%s\x00", request.Reader, request.Path, request.MaxFileSize, request.MainJournal)
 	err := b.build()
 	p.material = b.hash.String()
 	return p, err
@@ -195,23 +203,39 @@ func resolveRulesInclude(from, argument string) (string, error) {
 	return filepath.Clean(argument), nil
 }
 
-// readSource resolves the data a rules file names. Only paths anchored at the
-// rules file or absolute are run: a bare name is searched for in a data/
-// directory next to the main journal and in ~/Downloads, which the server
-// cannot reproduce for an included rules file, and ~ reaches outside the
-// workspace.
+// readSource resolves the data a rules file names, as hledger 1.99.5 does: an
+// absolute path as written, ~/ under the home directory, ./ and ../ next to
+// the rules file, and any other name in a data/ directory next to the main
+// journal. hledger then also searches ~/Downloads, which the language server
+// does not read, so a name not found in data/ is reported instead.
 func (b *planner) readSource(rule sourceRule) error {
 	pattern := rule.pattern
+	inData := false
 	switch {
 	case pattern == "":
 		return &planError{fmt.Sprintf("%s: source rule without a file", filepath.Base(rule.in))}
 	case filepath.IsAbs(pattern):
+	case pattern == "~" || strings.HasPrefix(pattern, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return &planError{fmt.Sprintf("%s: source %q needs the home directory: %v", filepath.Base(rule.in), rule.pattern, err)}
+		}
+		pattern = filepath.Join(home, strings.TrimPrefix(pattern, "~"))
+	case strings.HasPrefix(pattern, "~"):
+		return &planError{fmt.Sprintf("%s: source %q names another user's home directory, which is not supported", filepath.Base(rule.in), rule.pattern)}
 	case strings.HasPrefix(pattern, "./"), strings.HasPrefix(pattern, "../"):
 		pattern = filepath.Join(filepath.Dir(rule.in), pattern)
 	default:
-		return &planError{fmt.Sprintf("%s: source %q is searched for in data/ and ~/Downloads; write it as ./%s to read it next to the rules file", filepath.Base(rule.in), rule.pattern, rule.pattern)}
+		if b.request.MainJournal == "" {
+			return &planError{fmt.Sprintf("%s: source %q is searched for next to the main journal, which this load has none of", filepath.Base(rule.in), rule.pattern)}
+		}
+		pattern = filepath.Join(filepath.Dir(b.request.MainJournal), "data", pattern)
+		inData = true
 	}
 	pattern = filepath.Clean(pattern)
+	if inData {
+		return b.readDataSource(rule, pattern)
+	}
 	b.addSource(pattern)
 	fmt.Fprintf(b.hash, "source=%s\x00", pattern)
 
@@ -244,6 +268,62 @@ func (b *planner) readSource(rule sourceRule) error {
 		}
 	}
 	return nil
+}
+
+// readDataSource reads a source found in data/ next to the main journal: the
+// file, or the newest match of a pattern, which hledger is then given itself.
+func (b *planner) readDataSource(rule sourceRule, pattern string) error {
+	b.addSource(pattern)
+	fmt.Fprintf(b.hash, "datasource=%s\x00", pattern)
+	notFound := &planError{fmt.Sprintf("%s: source %q is not in %s; hledger would look in ~/Downloads next, which the language server does not read", filepath.Base(rule.in), rule.pattern, filepath.Dir(pattern))}
+
+	path := pattern
+	if strings.ContainsAny(pattern, "*?[{") {
+		matches, err := doublestar.FilepathGlob(pattern)
+		if err != nil {
+			return &planError{fmt.Sprintf("%s: invalid source pattern: %v", filepath.Base(rule.in), err)}
+		}
+		if len(matches) > maxSourceMatches {
+			return &planError{fmt.Sprintf("%s: source pattern matches more than %d files", filepath.Base(rule.in), maxSourceMatches)}
+		}
+		path = ""
+		var newest time.Time
+		sort.Strings(matches)
+		for _, match := range matches {
+			info, err := os.Stat(match)
+			if err != nil {
+				return &planError{fmt.Sprintf("cannot read %s: %v", filepath.Base(match), err)}
+			}
+			fmt.Fprintf(b.hash, "mtime=%s:%d\x00", match, info.ModTime().UnixNano())
+			if path == "" || info.ModTime().After(newest) {
+				path, newest = match, info.ModTime()
+			}
+		}
+		if path == "" {
+			return notFound
+		}
+	} else if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return notFound
+	}
+	path = filepath.Clean(path)
+	if err := b.readData(path); err != nil {
+		return err
+	}
+	b.plan.file = dataReaderFor(path) + ":" + path
+	b.plan.rules = b.request.Path
+	return nil
+}
+
+// dataReaderFor names the reader hledger is given a data file with: by its
+// extension, CSV otherwise.
+func dataReaderFor(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ssv":
+		return string(ReaderSSV)
+	case ".tsv":
+		return string(ReaderTSV)
+	}
+	return string(ReaderCSV)
 }
 
 func (b *planner) readData(path string) error {

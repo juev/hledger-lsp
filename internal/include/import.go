@@ -111,9 +111,14 @@ func (s *loadState) loadImport(site parser.IncludeSite, provenance IncludeProven
 		ctx = context.Background()
 	}
 	buffer := s.loader.importBuffer()
+	mainJournal := ""
+	if len(s.result.Occurrences) > 0 {
+		mainJournal = s.result.Occurrences[0].Path
+	}
 	result := s.importer.Import(ctx, csvimport.Request{
 		Reader:      reader,
 		Path:        path,
+		MainJournal: mainJournal,
 		MaxFileSize: s.limits.MaxFileSizeBytes,
 		Buffer: func(source string) (string, bool) {
 			if content, ok := s.options.overlay(s.loader, source); ok {

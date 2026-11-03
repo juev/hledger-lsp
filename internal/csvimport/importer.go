@@ -320,7 +320,11 @@ func (im *Importer) run(ctx context.Context, client *cli.Client, p *plan) (Resul
 	}
 	defer func() { <-im.workers }()
 
-	base := []string{"--no-conf", "--color=no", "-f", p.file, "print"}
+	base := []string{"--no-conf", "--color=no", "-f", p.file}
+	if p.rules != "" {
+		base = append(base, "--rules", p.rules)
+	}
+	base = append(base, "print")
 	jsonOutput, err := client.RunBounded(ctx, cli.BoundedRun{Dir: p.dir, Args: append(append([]string(nil), base...), "-O", "json"), MaxStdout: maxJSONOutput, MaxStderr: maxStderr})
 	if err != nil {
 		return runFailure(ctx, err)
