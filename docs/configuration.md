@@ -246,6 +246,65 @@ keeping a comment's indentation when a comment line is continued.
 | `hledger.cli.path` | `"hledger"` | Path to hledger executable |
 | `hledger.cli.timeout` | `30000` | CLI command timeout in milliseconds |
 
+The CLI settings also govern CSV includes under `hledger.targetVersion` `"2"` or `"auto"`, below.
+
+## Target hledger version and CSV includes
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `hledger.targetVersion` | `"1"` | hledger release line to follow: `"1"`, `"2"` or `"auto"` |
+
+The setting currently decides one thing: whether a journal may include CSV, SSV, TSV and CSV rules
+files. Other hledger 2 changes (lot costs, commodity aliases, number checks) are not implemented.
+
+- `"1"` follows hledger 1.52, which refuses `include bank.csv`. The server reports such an include as
+  `included file is not a journal file` and reads nothing from it. This is the default.
+- `"2"` follows the hledger 2 previews. The configured hledger binary converts the included file
+  (`hledger --no-conf -f csv:FILE print`, once as JSON and once as text). The language server does not
+  interpret CSV rules itself, so the result is whatever your hledger produces.
+- `"auto"` does the same as `"2"`, and the binary's version decides the outcome: hledger older than
+  1.99.5 cannot include CSV files, so the include is reported as an error, as hledger 1 would do.
+
+Including CSV data needs a usable hledger 1.99.5 or newer. When `hledger.cli.enabled` is `false`, the
+binary is missing, older, fails, times out (`hledger.cli.timeout`) or prints more than the import
+accepts, the include gets an `INCLUDE_IMPORT_ERROR` diagnostic and contributes no transactions, so
+balance assertions that need the data fail rather than pass. Ordinary journals work without hledger.
+Under WASI no subprocess can run, so every CSV include reports this error.
+
+What is read:
+
+- `include bank.csv`, `include data.ssv`, `include data.tsv` read the data with `FILE.rules`.
+- `include csv:FILE`, `ssv:FILE`, `tsv:FILE` choose the reader whatever the extension.
+- `include bank.rules` reads the data named by the rules file's `source` rule.
+- Rules `include` directives, `merge`, quoting, BOM and CRLF are handled by hledger.
+- The include-site `alias` directives apply to imported accounts; `apply account` does not, as in
+  hledger 1.99.5.
+- Imported transactions keep hledger's quantities exactly and point at their CSV records, so
+  diagnostics such as a failed balance assertion appear on the CSV line.
+- Amounts hledger leaves implicit in `print` (inferred amounts, balance assignments, inferred costs)
+  stay implicit and are worked out in the context of the whole journal.
+
+The server refuses to run hledger, with a diagnostic at the include, when:
+
+- a `source` rule runs a command (`source | cmd`, `source FILE | cmd`);
+- a `source` rule is a bare name or starts with `~` (hledger searches `data/` and `~/Downloads`);
+  write `./FILE` or an absolute path;
+- a rules `include` uses a glob or `~`, includes itself, nests deeper than 16 levels, or the rules
+  expand to more than 1 MiB or 256 includes;
+- a data or rules file is not a regular file or exceeds `hledger.limits.maxFileSizeBytes`;
+- a number has more than 255 digits or an exponent above 99;
+- hledger's output carries a lot cost basis or a multi-commodity amount on one posting.
+
+The import reads saved files. A CSV or rules file open with unsaved changes gets an
+`INCLUDE_IMPORT_UNSAVED` warning at the include until it is saved or closed. Changes on disk are noticed
+through file watchers for `.csv`, `.ssv`, `.tsv` and `.rules`; a data file with another extension
+(`include csv:data.txt`) is read again when the journal is next reloaded, not when it changes.
+
+Files an import reads are never treated as journals: they get no formatting, completion, inlay hints,
+code actions or code lenses, also through a symlink or hard link, and also when the import failed. A
+rename that would touch an account imported data uses is refused. hledger writes nothing next to the
+inputs: the server never runs `import`, `add` or `--new`.
+
 ## Limits
 
 | Setting | Default | Description |
@@ -284,6 +343,7 @@ keeping a comment's indentation when a comment line is continued.
   "hledger.formatting.amountAlignmentTarget": "cost",
   "hledger.cli.path": "hledger",
   "hledger.cli.timeout": 30000,
+  "hledger.targetVersion": "1",
   "hledger.limits.maxFileSizeBytes": 20971520,
   "hledger.limits.maxIncludeDepth": 100
 }
