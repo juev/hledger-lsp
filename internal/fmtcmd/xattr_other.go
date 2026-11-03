@@ -3,5 +3,6 @@
 package fmtcmd
 
 // mayHaveExtendedAttributes reports true: extended attributes and ACLs are not
-// checked here, so a file is always written in place, which keeps them.
+// inspected here. Writing in place avoids discarding them by replacing the
+// inode, but attributes managed by the OS remain subject to its write policy.
 func mayHaveExtendedAttributes(string) bool { return true }
