@@ -105,7 +105,11 @@ func TestWriteInPlaceWhenOwnerCannotBeKept(t *testing.T) {
 	assert.Equal(t, formatted, readFile(t, path))
 	assert.Equal(t, inode, statOf(t, path).Ino)
 	assert.Equal(t, uint32(gid), statOf(t, path).Gid)
-	assert.Equal(t, uint32(0o640), statOf(t, path).Mode&0o777)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	// Stat_t.Mode is uint32 on Linux and uint16 on darwin; FileMode is the
+	// same everywhere.
+	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
 	assertNoLeftovers(t, dir, 1)
 }
 
