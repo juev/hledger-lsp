@@ -11,6 +11,7 @@ type clientCapabilities struct {
 	supportsCodeActionIsPreferred       bool
 	supportsHierarchicalDocumentSymbols bool
 	supportsDynamicFileWatchers         bool
+	supportsInlayHintRefresh            bool
 	completionDocumentationFormats      []protocol.MarkupKind
 	hoverContentFormats                 []protocol.MarkupKind
 }
@@ -22,6 +23,9 @@ func newClientCapabilities(capabilities protocol.ClientCapabilities) clientCapab
 		profile.supportsConfiguration = boolValue(workspace.Configuration)
 		if watchedFiles := workspace.DidChangeWatchedFiles; watchedFiles != nil {
 			profile.supportsDynamicFileWatchers = boolValue(watchedFiles.DynamicRegistration)
+		}
+		if inlayHint := workspace.InlayHint; inlayHint != nil {
+			profile.supportsInlayHintRefresh = boolValue(inlayHint.RefreshSupport)
 		}
 	}
 
