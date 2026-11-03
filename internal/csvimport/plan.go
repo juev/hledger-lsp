@@ -289,13 +289,21 @@ func (b *planner) readDataSource(rule sourceRule, pattern string) error {
 		path = ""
 		var newest time.Time
 		sort.Strings(matches)
+		hidden := strings.HasPrefix(filepath.Base(pattern), ".")
 		for _, match := range matches {
+			// As in hledger, a wildcard does not match a name that starts with
+			// a dot, unless the pattern itself does.
+			if !hidden && strings.HasPrefix(filepath.Base(match), ".") {
+				continue
+			}
 			info, err := os.Stat(match)
 			if err != nil {
 				return &planError{fmt.Sprintf("cannot read %s: %v", filepath.Base(match), err)}
 			}
 			fmt.Fprintf(b.hash, "mtime=%s:%d\x00", match, info.ModTime().UnixNano())
-			if path == "" || info.ModTime().After(newest) {
+			// hledger reads the newest match, and of equally new ones the last
+			// in name order.
+			if path == "" || !info.ModTime().Before(newest) {
 				path, newest = match, info.ModTime()
 			}
 		}
