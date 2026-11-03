@@ -67,9 +67,8 @@ func TestFormattingContextFindsEveryNameOfTheFile(t *testing.T) {
 	}
 }
 
-// When an included file can no longer be compared with the formatted one, it
-// might be another name for it, so formatting is refused.
-func TestFormattingContextFailsWhenAnIncludedFileIsGone(t *testing.T) {
+// A name removed since the tree was read no longer reaches the file.
+func TestFormattingContextSkipsAnIncludedFileThatIsGone(t *testing.T) {
 	dir := t.TempDir()
 	const content = "2024-01-01 x\n    a  1 EUR\n    b\n"
 	tx := filepath.Join(dir, "tx.journal")
@@ -81,6 +80,34 @@ func TestFormattingContextFailsWhenAnIncludedFileIsGone(t *testing.T) {
 	resolved, errs := NewLoader().Load(root)
 	require.Empty(t, errs)
 	require.NoError(t, os.Remove(other))
+
+	ctx, err := resolved.FormattingContext(tx, content)
+	require.NoError(t, err)
+	assert.Len(t, ctx.Readings, 1)
+}
+
+// When an included file cannot be compared with the formatted one, it might be
+// another name for it, so formatting is refused.
+func TestFormattingContextFailsWhenAnIncludedFileCannotBeChecked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can stat any file")
+	}
+	dir := t.TempDir()
+	const content = "2024-01-01 x\n    a  1 EUR\n    b\n"
+	tx := filepath.Join(dir, "tx.journal")
+	require.NoError(t, os.WriteFile(tx, []byte(content), 0o644))
+	sub := filepath.Join(dir, "sub")
+	require.NoError(t, os.Mkdir(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "other.journal"), []byte(content), 0o644))
+	root := filepath.Join(dir, "main.journal")
+	require.NoError(t, os.WriteFile(root, []byte("include tx.journal\ninclude sub/other.journal\n"), 0o644))
+	resolved, errs := NewLoader().Load(root)
+	require.Empty(t, errs)
+	require.NoError(t, os.Chmod(sub, 0))
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	if _, err := os.Stat(filepath.Join(sub, "other.journal")); err == nil {
+		t.Skip("the system still lets the file be checked")
+	}
 
 	_, err := resolved.FormattingContext(tx, content)
 	assert.Error(t, err)

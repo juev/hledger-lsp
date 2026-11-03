@@ -278,7 +278,7 @@ var ErrNotIncluded = errors.New("not part of the include tree")
 // equal contexts read content alike and share a reading. It returns
 // ErrNotIncluded when the tree does not include the file.
 func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingContext, error) {
-	occurrences, err := r.occurrencesOfFile(path)
+	occurrences, err := r.OccurrencesOfFile(path)
 	if err != nil {
 		return FormattingContext{}, err
 	}
@@ -309,12 +309,13 @@ func (r *ResolvedJournal) FormattingContext(path, content string) (FormattingCon
 	return ctx, nil
 }
 
-// occurrencesOfFile returns every occurrence that reads the file at path, under
+// OccurrencesOfFile returns every occurrence that reads the file at path, under
 // any name: a symlink or a hard link includes the same file, and only the file
-// system can tell a hard link from another file. A name that cannot be compared
-// is an error rather than a guess, because a missed occurrence lets the
-// formatter change what a number is worth there.
-func (r *ResolvedJournal) occurrencesOfFile(path string) ([]JournalOccurrence, error) {
+// system can tell a hard link from another file. A name that no longer exists
+// does not reach the file. A name that cannot be compared is an error rather
+// than a guess, because a missed occurrence lets the formatter change what a
+// number is worth there.
+func (r *ResolvedJournal) OccurrencesOfFile(path string) ([]JournalOccurrence, error) {
 	file, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		// Content with no file behind it, such as standard input, has no other name.
@@ -330,10 +331,10 @@ func (r *ResolvedJournal) occurrencesOfFile(path string) ([]JournalOccurrence, e
 		isSame, known := same[occurrence.Path]
 		if !known {
 			info, err := os.Stat(occurrence.Path)
-			if err != nil {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return nil, err
 			}
-			isSame = os.SameFile(file, info)
+			isSame = err == nil && os.SameFile(file, info)
 			same[occurrence.Path] = isSame
 		}
 		if isSame {
