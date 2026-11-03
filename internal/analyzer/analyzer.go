@@ -700,7 +700,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 func validateDateTags(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
 
-	checkTag := func(tag ast.Tag, year int) {
+	checkTag := func(tag ast.Tag) {
 		name := tag.Name
 		if name != "date" && name != "date2" {
 			return
@@ -717,7 +717,7 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 			return
 		}
 
-		if !isValidDateValueIn(leadingDateText(tag.Value), year) {
+		if !isValidDateValueIn(leadingDateText(tag.Value), tx.Date.Year) {
 			diags = append(diags, Diagnostic{
 				Range:    tag.Range,
 				Severity: SeverityError,
@@ -728,30 +728,21 @@ func validateDateTags(tx *ast.Transaction) []Diagnostic {
 		}
 	}
 
-	// A comment line below a posting belongs to that posting, and its dates are
-	// read in the transaction year; the other comment lines are the transaction's.
-	postingLines := make(map[int]bool)
+	// hledger reads a posting date only from a posting: its comment and the
+	// comment lines below it. In the header comment and on the comment lines
+	// before the first posting a date: tag is prose, whatever its value.
 	for i := range tx.Postings {
 		for _, line := range continuationComments(tx, &tx.Postings[i]) {
-			postingLines[line.Range.Start.Line] = true
-		}
-	}
-
-	// Check transaction comments
-	for _, comment := range tx.Comments {
-		year := withoutYear
-		if postingLines[comment.Range.Start.Line] {
-			year = tx.Date.Year
-		}
-		for _, tag := range comment.Tags {
-			checkTag(tag, year)
+			for _, tag := range line.Tags {
+				checkTag(tag)
+			}
 		}
 	}
 
 	// Check posting tags
 	for _, posting := range tx.Postings {
 		for _, tag := range posting.Tags {
-			checkTag(tag, tx.Date.Year)
+			checkTag(tag)
 		}
 	}
 
@@ -943,11 +934,6 @@ func yearNumber(digits string) int {
 // refuses a bracketed date without a year there unless it follows a full date.
 const unknownYear = -2
 
-// withoutYear stands for the year of a date tag written outside a posting. hledger
-// reads no posting date there, so a value without a year is not checked against
-// the transaction year.
-const withoutYear = -1
-
 // isValidDateValueIn reports whether a date:/date2: tag value is one hledger
 // accepts. hledger requires a day: "; date:2024-01" fails to load while
 // "; date:1/5" is a valid smart date, so a year-month value is rejected here.
@@ -986,9 +972,6 @@ func isValidDateValueIn(value string, transactionYear int) bool {
 	year, month, day := transactionYear, numbers[0], numbers[1]
 	if len(numbers) == 3 {
 		year, month, day = yearNumber(parts[0]), numbers[1], numbers[2]
-	}
-	if year == withoutYear {
-		return parser.IsValidCalendarDate(0, month, day)
 	}
 	if year == 0 {
 		// Year 0 is a leap year, and a value without a year in a transaction
