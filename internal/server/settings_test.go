@@ -757,11 +757,11 @@ func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *test
 		client := &configClient{settings: enabled}
 		srv.SetClient(client)
 
-		srv.refreshConfiguration(context.Background())
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
 		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
 		assert.Equal(t, int32(1), client.refreshes.Load())
 
-		srv.refreshConfiguration(context.Background())
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
 		assert.Equal(t, int32(1), client.refreshes.Load(), "unchanged hint settings need no refresh")
 	})
 
@@ -774,7 +774,7 @@ func TestRefreshConfiguration_RefreshesInlayHintsWhenTheirSettingsChange(t *test
 		client := &configClient{settings: enabled}
 		srv.SetClient(client)
 
-		srv.refreshConfiguration(context.Background())
+		srv.refreshConfiguration(context.Background(), srv.nextConfigurationRequest())
 		assert.True(t, srv.getSettings().InlayHints.RunningBalances)
 		assert.Zero(t, client.refreshes.Load())
 	})
@@ -932,6 +932,267 @@ func TestInitialized_ConfigurationReadyBeforeInlayHintRefreshIsAnswered(t *testi
 				assert.Contains(t, labels, protocol.String("balance: 50 $"))
 			} else {
 				assert.NotContains(t, labels, protocol.String("balance: 50 $"))
+			}
+		})
+	}
+}
+
+// heldConfigCall is one workspace/configuration request the test answers.
+type heldConfigCall struct {
+	reply chan heldConfigReply
+}
+
+type heldConfigReply struct {
+	settings []protocol.LSPAny
+	err      error
+}
+
+// orderedConfigClient hands every workspace/configuration request to the test,
+// which answers them in any order, and reports every
+// workspace/inlayHint/refresh.
+type orderedConfigClient struct {
+	protocol.UnimplementedClient
+	calls     chan heldConfigCall
+	refreshes chan struct{}
+}
+
+func newOrderedConfigClient() *orderedConfigClient {
+	return &orderedConfigClient{calls: make(chan heldConfigCall), refreshes: make(chan struct{}, 16)}
+}
+
+func (c *orderedConfigClient) Configuration(ctx context.Context, _ *protocol.ConfigurationParams) ([]protocol.LSPAny, error) {
+	call := heldConfigCall{reply: make(chan heldConfigReply, 1)}
+	select {
+	case c.calls <- call:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case reply := <-call.reply:
+		return reply.settings, reply.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *orderedConfigClient) InlayHintRefresh(context.Context) error {
+	c.refreshes <- struct{}{}
+	return nil
+}
+
+func (c *orderedConfigClient) nextCall(t *testing.T) heldConfigCall {
+	t.Helper()
+	select {
+	case call := <-c.calls:
+		return call
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server did not ask for the configuration")
+		return heldConfigCall{}
+	}
+}
+
+func (c *orderedConfigClient) nextRefresh(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.refreshes:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the server did not ask the client to refresh its inlay hints")
+	}
+}
+
+func newConfigurationTestServer(t *testing.T) (*Server, *orderedConfigClient, uri.URI) {
+	t.Helper()
+	srv := NewServer()
+	_, err := srv.Initialize(context.Background(), &protocol.InitializeParams{Capabilities: protocol.ClientCapabilities{
+		Workspace: &protocol.WorkspaceClientCapabilities{
+			Configuration: boolPtr(true),
+			InlayHint:     &protocol.InlayHintWorkspaceClientCapabilities{RefreshSupport: boolPtr(true)},
+		},
+	}})
+	require.NoError(t, err)
+	client := newOrderedConfigClient()
+	srv.SetClient(client)
+	docURI := uri.URI("file:///order.journal")
+	srv.StoreDocument(docURI, "2024-01-15 Покупка\n    expenses:еда  $50\n    assets:cash\n")
+	return srv, client, docURI
+}
+
+func inlayHintLabels(t *testing.T, srv *Server, docURI uri.URI) []protocol.InlayHintLabel {
+	t.Helper()
+	hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+		TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+		Range:        protocol.Range{End: protocol.Position{Line: 10}},
+	})
+	require.NoError(t, err)
+	labels := make([]protocol.InlayHintLabel, 0, len(hints))
+	for _, hint := range hints {
+		labels = append(labels, hint.Label)
+	}
+	return labels
+}
+
+// The reply to the fetch made after initialized can reach the server after the
+// reply to a fetch made for a later didChangeConfiguration. It then describes
+// settings the user has since changed and must not replace the newer ones.
+func TestInitialized_StaleConfigurationReplyKeepsTheNewerSettings(t *testing.T) {
+	older := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": true, "runningBalances": true}})
+	newer := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": false, "runningBalances": false}})
+	srv, client, docURI := newConfigurationTestServer(t)
+
+	require.NoError(t, srv.Initialized(context.Background(), &protocol.InitializedParams{}))
+	startup := client.nextCall(t)
+	srv.settingsMu.RLock()
+	ready := srv.configReady
+	srv.settingsMu.RUnlock()
+	require.NoError(t, srv.DidChangeConfiguration(context.Background(), &protocol.DidChangeConfigurationParams{}))
+	changed := client.nextCall(t)
+
+	changed.reply <- heldConfigReply{settings: []protocol.LSPAny{newer}}
+	client.nextRefresh(t)
+	assert.Equal(t, inlayHintSettings{}, srv.getSettings().InlayHints)
+
+	startup.reply <- heldConfigReply{settings: []protocol.LSPAny{older}}
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the startup fetch did not finish")
+	}
+	assert.Equal(t, inlayHintSettings{}, srv.getSettings().InlayHints, "the startup reply restored older settings")
+	assert.Empty(t, inlayHintLabels(t, srv, docURI))
+}
+
+// Each fetch is numbered when its notification is handled and its reply is
+// held until the test answers it, so the replies can be delivered in any order.
+// Whatever the order, a reply to an older fetch never replaces settings a newer
+// reply has applied, and a failed reply changes nothing.
+func TestRefreshConfiguration_RepliesInAnyOrderKeepTheNewestSettings(t *testing.T) {
+	older := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": true, "runningBalances": true}})
+	newer := mustMarshalLSPAny(t, map[string]any{"inlayHints": map[string]any{"inferredAmounts": false, "runningBalances": false}})
+	olderSettings := inlayHintSettings{InferredAmounts: true, RunningBalances: true}
+	defaults := defaultServerSettings().InlayHints
+	type answer struct {
+		fetch int
+		reply heldConfigReply
+	}
+	cases := []struct {
+		name          string
+		fetches       int
+		answers       []answer
+		want          inlayHintSettings
+		wantRefreshes int
+	}{
+		{
+			name:    "newer answered first",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{newer}}},
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+			},
+			wantRefreshes: 1,
+		},
+		{
+			name:    "answered in order",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{newer}}},
+			},
+			wantRefreshes: 2,
+		},
+		{
+			name:    "newest of three answered first",
+			fetches: 3,
+			answers: []answer{
+				{fetch: 2, reply: heldConfigReply{settings: []protocol.LSPAny{newer}}},
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+			},
+			wantRefreshes: 1,
+		},
+		{
+			name:    "newer reply without an hledger section",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{protocol.LSPAny("null")}}},
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+			},
+			want: defaults,
+		},
+		{
+			name:    "older fetch fails after the newer is applied",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{newer}}},
+				{fetch: 0, reply: heldConfigReply{err: errors.New("request cancelled")}},
+			},
+			wantRefreshes: 1,
+		},
+		{
+			name:    "newer fetch fails after the older is applied",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+				{fetch: 1, reply: heldConfigReply{err: errors.New("connection closed")}},
+			},
+			want:          olderSettings,
+			wantRefreshes: 1,
+		},
+		{
+			name:    "newer fetch fails before the older is answered",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 1, reply: heldConfigReply{err: errors.New("request cancelled")}},
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+			},
+			want:          olderSettings,
+			wantRefreshes: 1,
+		},
+		{
+			name:    "newer reply empty",
+			fetches: 2,
+			answers: []answer{
+				{fetch: 1, reply: heldConfigReply{settings: []protocol.LSPAny{}}},
+				{fetch: 0, reply: heldConfigReply{settings: []protocol.LSPAny{older}}},
+			},
+			want:          olderSettings,
+			wantRefreshes: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, client, docURI := newConfigurationTestServer(t)
+			calls := make([]heldConfigCall, tc.fetches)
+			done := make([]chan struct{}, tc.fetches)
+			for i := range tc.fetches {
+				// What DidChangeConfiguration does, with a signal once the
+				// reply has been dealt with, so a dropped reply can be waited for.
+				request := srv.nextConfigurationRequest()
+				done[i] = make(chan struct{})
+				go func() {
+					defer close(done[i])
+					srv.refreshConfiguration(context.Background(), request)
+				}()
+				calls[i] = client.nextCall(t)
+			}
+			for _, a := range tc.answers {
+				calls[a.fetch].reply <- a.reply
+				select {
+				case <-done[a.fetch]:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("fetch %d did not finish", a.fetch)
+				}
+			}
+
+			assert.Equal(t, tc.want, srv.getSettings().InlayHints)
+			assert.Len(t, client.refreshes, tc.wantRefreshes)
+			labels := inlayHintLabels(t, srv, docURI)
+			if tc.want.RunningBalances {
+				assert.Contains(t, labels, protocol.String("balance: 50 $"))
+			} else {
+				assert.NotContains(t, labels, protocol.String("balance: 50 $"))
+			}
+			if tc.want == (inlayHintSettings{}) {
+				assert.Empty(t, labels)
 			}
 		})
 	}
