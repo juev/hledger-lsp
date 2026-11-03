@@ -318,7 +318,7 @@ func (im *Importer) run(ctx context.Context, client *cli.Client, p *plan) (Resul
 	if err != nil {
 		return runFailure(ctx, err)
 	}
-	converted, err := convert(jsonOutput, textOutput, p.data)
+	converted, err := convert(jsonOutput, textOutput, p.data, p.known)
 	if err != nil {
 		return Result{Err: err.Error()}, true
 	}
