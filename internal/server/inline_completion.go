@@ -27,7 +27,7 @@ type cachedPayeeTemplates struct {
 }
 
 func (s *Server) InlineCompletion(_ context.Context, params *protocol.InlineCompletionParams) (protocol.InlineCompletionResult, error) {
-	content, ok := s.GetDocument(params.TextDocument.URI)
+	content, ok := s.getJournalDoc(params.TextDocument.URI)
 	if !ok {
 		return emptyInlineCompletionList(), nil
 	}

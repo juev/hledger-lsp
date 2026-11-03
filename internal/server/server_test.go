@@ -128,7 +128,8 @@ func TestServer_RegisterFileWatchers_IncludesPricesPattern(t *testing.T) {
 	watchedOptions, err := unmarshalLSPAny[protocol.DidChangeWatchedFilesRegistrationOptions](registrations[0].RegisterOptions)
 	require.NoError(t, err)
 
-	assert.Len(t, watchedOptions.Watchers, 6)
+	// Journals, prices and rules, plus the separated data a journal imports.
+	assert.Len(t, watchedOptions.Watchers, 9)
 
 	gotPricesPattern := false
 	for _, watcher := range watchedOptions.Watchers {
@@ -190,6 +191,9 @@ func TestServer_Initialized_DynamicFileWatcherClientRegistersExistingPatternsOnc
 		{GlobPattern: protocol.Pattern("**/*.ledger")},
 		{GlobPattern: protocol.Pattern("**/*.prices")},
 		{GlobPattern: protocol.Pattern("**/*.rules")},
+		{GlobPattern: protocol.Pattern("**/*.csv")},
+		{GlobPattern: protocol.Pattern("**/*.ssv")},
+		{GlobPattern: protocol.Pattern("**/*.tsv")},
 	}, watchedOptions.Watchers)
 }
 

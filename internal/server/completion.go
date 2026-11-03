@@ -91,6 +91,10 @@ func (s *Server) completionWithScope(ctx context.Context, params *protocol.Compl
 		response.CompletionList = list
 		return response, nil
 	}
+	// Imported data is not journal text: a journal completion would edit it.
+	if s.isImportDocument(params.TextDocument.URI) {
+		return response, nil
+	}
 
 	var result *analyzer.AnalysisResult
 	var transactions []ast.Transaction

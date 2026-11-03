@@ -7,7 +7,6 @@ import (
 	"go.lsp.dev/protocol"
 	"go.lsp.dev/uri"
 
-	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/lsputil"
 	"github.com/juev/hledger-lsp/internal/textutil"
@@ -71,9 +70,9 @@ func (s *Server) OnTypeFormatting(ctx context.Context, params *protocol.Document
 		return nil, nil
 	}
 
-	// CSV rules files are a different format: journal formatting must not touch
-	// them (full-document Format refuses them too).
-	if filetype.IsRules(string(params.TextDocument.URI)) {
+	// CSV rules and imported data are different formats: journal formatting
+	// must not touch them (full-document Format refuses them too).
+	if s.isImportDocument(params.TextDocument.URI) {
 		return nil, nil
 	}
 

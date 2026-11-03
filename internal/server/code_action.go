@@ -14,7 +14,6 @@ import (
 	"github.com/juev/hledger-lsp/internal/analyzer"
 	"github.com/juev/hledger-lsp/internal/ast"
 	"github.com/juev/hledger-lsp/internal/document"
-	"github.com/juev/hledger-lsp/internal/filetype"
 	"github.com/juev/hledger-lsp/internal/formatter"
 	"github.com/juev/hledger-lsp/internal/include"
 	"github.com/juev/hledger-lsp/internal/lsputil"
@@ -65,7 +64,9 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, nil
 	}
 
-	if filetype.IsRules(string(params.TextDocument.URI)) {
+	// No journal action applies to CSV rules or imported data, and running
+	// hledger on such a file would bypass the import's safety checks.
+	if s.isImportDocument(params.TextDocument.URI) {
 		return nil, nil
 	}
 

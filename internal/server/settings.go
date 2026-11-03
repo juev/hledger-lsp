@@ -86,18 +86,32 @@ type cliSettings struct {
 	Timeout time.Duration
 }
 
+// Target version values for targetVersion: the hledger release line whose
+// behaviour the server follows. "auto" asks the configured hledger binary.
+// The setting currently decides one thing: whether a journal may include CSV,
+// SSV, TSV and rules files, which hledger 2 converts and hledger 1 refuses.
+const (
+	targetVersion1    = "1"
+	targetVersion2    = "2"
+	targetVersionAuto = "auto"
+)
+
 type serverSettings struct {
-	Features    featureSettings
-	Completion  completionSettings
-	Diagnostics diagnosticsSettings
-	Formatting  formattingSettings
-	InlayHints  inlayHintSettings
-	CLI         cliSettings
-	Limits      include.Limits
+	// TargetVersion selects the hledger release line to follow: "1" (default,
+	// hledger 1.52), "2" (the hledger 2 previews, measured on 1.99.5) or "auto".
+	TargetVersion string
+	Features      featureSettings
+	Completion    completionSettings
+	Diagnostics   diagnosticsSettings
+	Formatting    formattingSettings
+	InlayHints    inlayHintSettings
+	CLI           cliSettings
+	Limits        include.Limits
 }
 
 func defaultServerSettings() serverSettings {
 	return serverSettings{
+		TargetVersion: targetVersion1,
 		Features: featureSettings{
 			Hover:            true,
 			Completion:       true,
@@ -154,6 +168,14 @@ func normalizeServerSettingsWithIssues(settings serverSettings) (serverSettings,
 	defaults := defaultServerSettings()
 	var issues []string
 
+	switch settings.TargetVersion {
+	case targetVersion1, targetVersion2, targetVersionAuto:
+		// valid
+	default:
+		issues = append(issues, fmt.Sprintf("hledger.targetVersion=%q is not one of %q, %q, %q; using %q",
+			settings.TargetVersion, targetVersion1, targetVersion2, targetVersionAuto, defaults.TargetVersion))
+		settings.TargetVersion = defaults.TargetVersion
+	}
 	if settings.Completion.MaxResults <= 0 {
 		issues = append(issues, fmt.Sprintf("hledger.completion.maxResults=%d is not positive; using %d", settings.Completion.MaxResults, defaults.Completion.MaxResults))
 		settings.Completion.MaxResults = defaults.Completion.MaxResults
@@ -232,6 +254,9 @@ func (s *Server) setSettingsLocked(settings serverSettings) {
 	}
 	if oldSettings.CLI.Path != settings.CLI.Path || oldSettings.CLI.Timeout != settings.CLI.Timeout {
 		s.reinitCLI(settings.CLI)
+	}
+	if importSettingsChanged(oldSettings, settings) {
+		s.reloadForImportSettings(settings)
 	}
 	if s.analyzer != nil {
 		s.analyzer.SetBalanceTolerance(decimal.NewFromFloat(settings.Diagnostics.BalanceTolerance))
@@ -412,6 +437,10 @@ func parseSettingsFromLSPAnyWithIssues(base serverSettings, raw protocol.LSPAny)
 }
 
 func applySettingsMap(settings serverSettings, raw map[string]interface{}) serverSettings {
+	if value, ok := toTargetVersion(raw["targetVersion"]); ok {
+		settings.TargetVersion = value
+	}
+
 	// Features
 	if featuresRaw, ok := raw["features"].(map[string]interface{}); ok {
 		if value, ok := toBool(featuresRaw["hover"]); ok {
@@ -782,6 +811,21 @@ func toFloat64(value interface{}) (float64, bool) {
 		return parsed, true
 	}
 	return 0, false
+}
+
+// toTargetVersion reads targetVersion, which a client may send as a string or,
+// for "1" and "2", as a number. A number is kept as written, so 2.9 is
+// reported as an invalid value rather than read as 2.
+func toTargetVersion(value interface{}) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(strings.ToLower(v)), true
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true
+	case int:
+		return strconv.Itoa(v), true
+	}
+	return "", false
 }
 
 func toString(value interface{}) (string, bool) {
