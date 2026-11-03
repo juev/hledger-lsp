@@ -1,7 +1,10 @@
 package analyzer
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -799,21 +802,28 @@ func parsePostingDateValue(value string, transactionYear int) (ast.Date, bool) {
 	if len(parts) != 2 && len(parts) != 3 {
 		return ast.Date{}, false
 	}
-	year := transactionYear
+	year, calendarYear, digits := transactionYear, transactionYear, ""
 	if len(parts) == 3 {
 		parsed, err := strconv.Atoi(parts[0])
-		if err != nil {
+		switch {
+		case err == nil:
+			year, calendarYear = parsed, parsed
+		case errors.Is(err, strconv.ErrRange) && strings.Trim(parts[0], "0123456789") == "":
+			// hledger reads a year of any length. One too large for an int is
+			// kept as its digits, and its leap years come from its place in
+			// the 400-year cycle.
+			year, calendarYear, digits = math.MaxInt, yearNumber(parts[0]), strings.TrimLeft(parts[0], "0")
+		default:
 			return ast.Date{}, false
 		}
-		year = parsed
 		parts = parts[1:]
 	}
 	month, monthErr := strconv.Atoi(parts[0])
 	day, dayErr := strconv.Atoi(parts[1])
-	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(year, month, day) {
+	if monthErr != nil || dayErr != nil || !parser.IsValidCalendarDate(calendarYear, month, day) {
 		return ast.Date{}, false
 	}
-	return ast.Date{Year: year, Month: month, Day: day}, true
+	return ast.Date{Year: year, Month: month, Day: day, YearDigits: digits}, true
 }
 
 // groupOf returns the index of the balancing group that contains a posting.
@@ -1103,14 +1113,31 @@ func postingRange(p *ast.Posting) ast.Range {
 
 // compareDates orders two journal dates, treating an unset date as the earliest.
 func compareDates(a, b ast.Date) int {
-	switch {
-	case a.Year != b.Year:
-		return a.Year - b.Year
-	case a.Month != b.Month:
-		return a.Month - b.Month
-	default:
-		return a.Day - b.Day
+	if c := compareYears(a, b); c != 0 {
+		return c
 	}
+	if c := cmp.Compare(a.Month, b.Month); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Day, b.Day)
+}
+
+// compareYears orders the years of two dates, including years too large for an
+// int, which are compared by their digits.
+func compareYears(a, b ast.Date) int {
+	if a.YearDigits == "" && b.YearDigits == "" {
+		return cmp.Compare(a.Year, b.Year)
+	}
+	if a.YearDigits == "" {
+		return -1
+	}
+	if b.YearDigits == "" {
+		return 1
+	}
+	if c := cmp.Compare(len(a.YearDigits), len(b.YearDigits)); c != 0 {
+		return c
+	}
+	return strings.Compare(a.YearDigits, b.YearDigits)
 }
 
 // formatDifferences renders residuals for the UNBALANCED message: sorted by

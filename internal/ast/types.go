@@ -65,7 +65,11 @@ type Date struct {
 	Year  int
 	Month int
 	Day   int
-	Range Range
+	// YearDigits holds a year too large for Year, written without leading
+	// zeros. Year is then math.MaxInt, so the date still sorts after every
+	// year Year can hold. It is empty for every other date.
+	YearDigits string
+	Range      Range
 }
 
 type Status int
