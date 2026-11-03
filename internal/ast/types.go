@@ -178,6 +178,12 @@ type Cost struct {
 	Amount  Amount
 	IsTotal bool
 	Range   Range
+	// Places, when set, is the number of decimals the cost literal is written
+	// with, in place of those of Amount.Quantity. The analyzer sets it on a cost
+	// it rebuilds from a running balance: hledger keeps the literal of the first
+	// amount added under a cost, while the quantity can be a sum with more
+	// decimals. A parsed cost leaves it nil.
+	Places *int32
 }
 
 type LotPrice struct {

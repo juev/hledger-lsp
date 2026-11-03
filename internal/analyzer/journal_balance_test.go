@@ -2202,6 +2202,109 @@ var assignmentOrderCases = []struct {
 `,
 		wantMessages: []string{"EUR off by 0.02"},
 	},
+	{
+		name: "elided precision takes the first 1.00 EUR total of a cost key",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.500 EUR
+    a  -0.10 USD @ 0.491 EUR
+    [b]  1.0 USD @@ 1.00 EUR
+    [b]  -1.0 USD @@ 1.0110 EUR
+    [c]
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "elided precision takes the first 1.0 EUR total of a cost key",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.500 EUR
+    a  -0.10 USD @ 0.491 EUR
+    [b]  1.0 USD @@ 1.0 EUR
+    [b]  -1.0 USD @@ 1.0110 EUR
+    [c]
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "elided precision takes the first 1 EUR total of a cost key",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.500 EUR
+    a  -0.10 USD @ 0.491 EUR
+    [b]  1.0 USD @@ 1 EUR
+    [b]  -1.0 USD @@ 1.0110 EUR
+    [c]
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "elided precision takes the first 1.000 EUR total of a cost key",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.500 EUR
+    a  -0.10 USD @ 0.491 EUR
+    [b]  1.0 USD @@ 1.000 EUR
+    [b]  -1.0 USD @@ 1.0110 EUR
+    [c]
+`,
+		wantMessages: []string{"EUR off by"},
+	},
+	{
+		name: "elided precision takes the first 1.0110 EUR total of a cost key",
+		input: `2024-01-01 t
+    a  0.10 USD @ 0.500 EUR
+    a  -0.10 USD @ 0.491 EUR
+    [b]  1.0 USD @@ 1.0110 EUR
+    [b]  -1.0 USD @@ 1.0110 EUR
+    [c]
+`,
+		wantMessages: []string{"EUR off by"},
+	},
+	{
+		name: "a cost of zero keeps its precision",
+		input: `2024-01-01 t
+    b  1 USD @@ 0.00 EUR
+    c  0.3 USD @ 1 EUR
+    d  -1.3 USD @@ 0 EUR
+`,
+		wantMessages: []string{"EUR off by"},
+	},
+	{
+		name: "first cost literal of a key with Cyrillic and CJK accounts",
+		input: `2024-01-01 обмен
+    расход  0.10 USD @ 0.500 EUR
+    расход  -0.10 USD @ 0.491 EUR
+    [валюта:現金]  1.0 USD @@ 1.00 EUR
+    [валюта:現金]  -1.0 USD @@ 1.0110 EUR
+    [касса]
+`,
+		wantMessages: nil,
+	},
+	{
+		name: "an assignment takes the cost literal of the first 1.00010 EUR amount of a key",
+		input: `2024-01-01 p
+    счёт  0.1 USD @ 1.00010 EUR
+    счёт  0.1 USD @ 1.0001 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 q
+    счёт  = 0 USD
+    w  0.2 USD @ 1.0000 EUR
+`,
+		wantMessages: []string{"EUR off by -0.00002"},
+	},
+	{
+		name: "an assignment takes the cost literal of the first 1.0001 EUR amount of a key",
+		input: `2024-01-01 p
+    счёт  0.1 USD @ 1.0001 EUR
+    счёт  0.1 USD @ 1.00010 EUR
+    y  = 0 GBP
+    e
+
+2024-01-02 q
+    счёт  = 0 USD
+    w  0.2 USD @ 1.0000 EUR
+`,
+		wantMessages: nil,
+	},
 }
 
 func TestCheckJournalBalance_AssignmentOrder(t *testing.T) {

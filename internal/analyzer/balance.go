@@ -212,6 +212,14 @@ func decimalPrecision(d decimal.Decimal) int32 {
 	return exp
 }
 
+// costPlaces returns the number of decimals a cost literal is written with.
+func costPlaces(cost *ast.Cost) int32 {
+	if cost.Places != nil {
+		return *cost.Places
+	}
+	return decimalPrecision(cost.Amount.Quantity)
+}
+
 // postingNativeAmount returns the amount a posting contributes to its account
 // balance: the written amount, or — for a posting that carries only a balance
 // assertion — the amount hledger infers for it. CheckJournalBalance infers that
@@ -253,24 +261,35 @@ func balanceSumContribution(p ast.Posting) (string, decimal.Decimal, bool) {
 // elidedAmountPostings returns one posting per commodity of the amount hledger
 // infers for the single elided posting of a group, carrying the precision that
 // amount is written with, so that it counts among the amounts of the transaction.
-// The inferred amount is the cost-converted sum of the group, and its precision is
-// the finest of the amounts that went into it: that of a cost literal for a
-// converted amount, that of the quantity for the others. A commodity the group
-// sums to zero in still has one, an inferred zero.
+//
+// hledger sums the group before converting it (Balancing.hs,
+// transactionInferBalancingAmount, 1.52.4): amounts under one cost key — the
+// commodity, the cost commodity and, for @, the unit price — are added into one,
+// which keeps the cost literal of the first of them (sumSimilarAmountsUsingFirstCost),
+// and only then is each converted. So a converted amount has the precision of the
+// first cost literal of its key, an amount without a cost the finest precision of
+// its quantities, and the inferred amount the finest of those per commodity. A
+// commodity the group sums to zero in still has one, an inferred zero.
 func elidedAmountPostings(group []ast.Posting) []ast.Posting {
 	precisions := make(map[string]int32)
+	raise := func(commodity string, precision int32) {
+		if held, ok := precisions[commodity]; !ok || precision > held {
+			precisions[commodity] = precision
+		}
+	}
+	firstCost := make(map[pricedKey]bool)
 	for i := range group {
 		p := &group[i]
 		if p.Amount == nil {
 			continue
 		}
-		commodity, _, _ := balanceSumContribution(*p)
-		precision := decimalPrecision(p.Amount.Quantity)
-		if p.Cost != nil {
-			precision = decimalPrecision(p.Cost.Amount.Quantity)
+		if p.Cost == nil {
+			raise(p.Amount.Commodity.Symbol, decimalPrecision(p.Amount.Quantity))
+			continue
 		}
-		if held, ok := precisions[commodity]; !ok || precision > held {
-			precisions[commodity] = precision
+		if key := costKey(*p.Amount, p.Cost); !firstCost[key] {
+			firstCost[key] = true
+			raise(p.Cost.Amount.Commodity.Symbol, costPlaces(p.Cost))
 		}
 	}
 
@@ -288,8 +307,9 @@ func elidedAmountPostings(group []ast.Posting) []ast.Posting {
 // tighten the commodity it is converted into (docs/hledger.md:178-181, verified
 // against hledger 1.52.4: "1.005 AAPL @ $2" + "$-2.0" balances). A commodity that
 // is written nowhere but appears as the cost of the group's own amounts takes the
-// finest precision of those costs, per unit for @ and as a total for @@, a cost of
-// zero giving none.
+// finest precision of those costs, per unit for @ and as a total for @@: hledger
+// converts each posting of the group on its own before adding them up, and a cost
+// of zero keeps the precision it is written with.
 func maxPrecisionByCommodity(written, group []ast.Posting) map[string]int32 {
 	precisions := make(map[string]int32)
 	raise := func(commodity string, precision int32) {
@@ -305,10 +325,10 @@ func maxPrecisionByCommodity(written, group []ast.Posting) map[string]int32 {
 
 	costs := make(map[string]int32)
 	for i := range group {
-		if cost := group[i].Cost; cost != nil && group[i].Amount != nil && !cost.Amount.Quantity.IsZero() {
+		if cost := group[i].Cost; cost != nil && group[i].Amount != nil {
 			commodity := cost.Amount.Commodity.Symbol
-			if held, ok := costs[commodity]; !ok || decimalPrecision(cost.Amount.Quantity) > held {
-				costs[commodity] = decimalPrecision(cost.Amount.Quantity)
+			if held, ok := costs[commodity]; !ok || costPlaces(cost) > held {
+				costs[commodity] = costPlaces(cost)
 			}
 		}
 	}
