@@ -51,11 +51,8 @@ type plan struct {
 	dir  string
 	file string // the -f argument
 	// data maps every data file hledger may read to the text its positions are
-	// counted in (CoordinateText), for locating the transactions it reports. A
-	// file whose lines cannot be told is absent.
+	// counted in (CoordinateText), for locating the transactions it reports.
 	data map[string]string
-	// known holds every data file read, located or not.
-	known map[string]bool
 	// sources lists every file or glob the conversion depends on, including
 	// ones that do not exist yet, in the order they were found.
 	sources  []string
@@ -81,7 +78,7 @@ type planner struct {
 }
 
 func buildPlan(request Request) (*plan, error) {
-	p := &plan{dir: filepath.Dir(request.Path), data: make(map[string]string), known: make(map[string]bool)}
+	p := &plan{dir: filepath.Dir(request.Path), data: make(map[string]string)}
 	b := &planner{request: request, plan: p, hash: &strings.Builder{}, seen: make(map[string]bool)}
 	fmt.Fprintf(b.hash, "reader=%s\x00target=%s\x00max=%d\x00", request.Reader, request.Path, request.MaxFileSize)
 	err := b.build()
@@ -255,12 +252,16 @@ func (b *planner) readData(path string) error {
 	if err != nil {
 		return err
 	}
-	if text, ok := CoordinateText(content); ok {
-		b.plan.data[path] = text
-	} else {
-		b.plan.warnings = append(b.plan.warnings, fmt.Sprintf("%s is in an encoding whose lines cannot be told apart (UTF-32, or UTF-16 without a byte order mark): diagnostics on its records point at the start of the file", filepath.Base(path)))
+	// The number guard and the record positions both need the decoded text,
+	// so data that cannot be decoded is not imported at all.
+	text, ok := CoordinateText(content)
+	if !ok {
+		return &planError{fmt.Sprintf("data file %s is in an encoding the language server cannot read (UTF-32, or UTF-16 without a byte order mark)", filepath.Base(path))}
 	}
-	b.plan.known[path] = true
+	if problem := numberProblem(text); problem != "" {
+		return &planError{fmt.Sprintf("data file %s: %s", filepath.Base(path), problem)}
+	}
+	b.plan.data[path] = text
 	return nil
 }
 

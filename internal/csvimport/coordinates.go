@@ -15,8 +15,7 @@ import (
 // lone \n byte, so the bytes split into the same lines the editor shows. UTF-16
 // does not: a \n byte is also half of many characters (U+010A is 0A 01), so a
 // file with a byte order mark is decoded first. UTF-32, or UTF-16 without a
-// byte order mark, cannot be split reliably; ok is false and no position in the
-// file is claimed.
+// byte order mark, cannot be split reliably; ok is false.
 func CoordinateText(raw string) (text string, ok bool) {
 	switch {
 	case strings.HasPrefix(raw, "\xff\xfe\x00\x00"), strings.HasPrefix(raw, "\x00\x00\xfe\xff"):
