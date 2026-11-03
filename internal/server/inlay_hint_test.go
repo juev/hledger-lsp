@@ -175,3 +175,50 @@ func TestInlayHint_RunningBalanceOmittedWhereRegisterHidesThePosting(t *testing.
 		})
 	}
 }
+
+// A balance assignment moves its account by the difference from the balance it
+// had, and the elided posting balances that difference, not the assigned
+// balance. The amount an assignment moves sits just before its `=`.
+func TestInlayHint_BalanceAssignmentShowsTheAmountItMoves(t *testing.T) {
+	for name, newline := range map[string]string{"lf": "\n", "crlf": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer()
+			docURI := uri.URI("file:///test.journal")
+			lines := []string{
+				"commodity 1,000.00 USD",
+				"",
+				"2026-07-31 Zestimate",
+				"    активы:дом  =517,300.00 USD",
+				"    equity:gains",
+				"",
+				"2026-08-03 Zestimate",
+				"    активы:дом  =522,000.00 USD",
+				"    equity:gains",
+				"",
+			}
+			srv.StoreDocument(docURI, strings.Join(lines, newline))
+
+			hints, err := srv.InlayHint(context.Background(), &protocol.InlayHintParams{
+				TextDocument: protocol.TextDocumentIdentifier{URI: docURI},
+				Range:        protocol.Range{End: protocol.Position{Line: 10}},
+			})
+			require.NoError(t, err)
+			type placed struct {
+				line, character uint32
+				label           protocol.InlayHintLabel
+			}
+			var got []placed
+			for _, hint := range hints {
+				got = append(got, placed{hint.Position.Line, hint.Position.Character, hint.Label})
+			}
+			assignAt := uint32(len("    ") + len([]rune("активы:дом")) + len("  "))
+			assert.Equal(t, []placed{
+				{3, assignAt, protocol.String("517,300.00 USD")},
+				{4, uint32(len("    equity:gains")), protocol.String("= -517,300.00 USD")},
+				{7, assignAt, protocol.String("4,700.00 USD")},
+				{8, uint32(len("    equity:gains")), protocol.String("= -4,700.00 USD")},
+			}, got)
+			assert.Nil(t, hints[0].PaddingLeft)
+		})
+	}
+}
