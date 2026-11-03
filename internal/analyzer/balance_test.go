@@ -1009,3 +1009,25 @@ func TestCheckBalance_ResidualAtToleranceBoundary(t *testing.T) {
 	assert.False(t, CheckBalance(&journal2.Transactions[0], decimal.Zero).Balanced,
 		"a residual above the tolerance is unbalanced")
 }
+
+func TestCheckBalance_CostCommodityWithoutWrittenAmountsHasNoTolerance(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"lone converted posting in a balanced virtual group", "2024-01-01 t\n    [касса]  2 USD @ 0.25 EUR\n    現金  1 USD\n    капитал\n", false},
+		{"costs that differ by a tenth", "2024-01-01 t\n    b  2 USD @ 0.25 EUR\n    a  -2 USD @ 0.2 EUR\n", false},
+		{"equal costs", "2024-01-01 t\n    b  2 USD @ 0.25 EUR\n    a  -2 USD @ 0.25 EUR\n", true},
+		{"written amount gives the tolerance", "2024-01-01 t\n    b  2 USD @@ 3 EUR\n    a  -2 USD @@ 2.5 EUR\n    c  1 EUR\n    d  -1 EUR\n", true},
+		{"another group gives the tolerance", "2024-01-01 t\n    b  2 USD @ 0.25 EUR\n    a  -2 USD @ 0.2 EUR\n    [x]  1 EUR\n    [y]  -1 EUR\n", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, errs := parser.Parse(tc.input)
+			require.Empty(t, errs)
+
+			assert.Equal(t, tc.want, CheckBalance(&journal.Transactions[0], decimal.Zero).Balanced)
+		})
+	}
+}

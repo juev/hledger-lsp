@@ -54,7 +54,7 @@ type Context struct {
 	defaultCommodityPosition    ast.CommodityPosition
 	commodityDecimalMarks       map[string]string
 	accountPrefixes             []string
-	basicAliases                []basicAlias
+	aliases                     []accountAlias
 }
 
 // Equal reports whether a journal parsed under either context would parse the
@@ -69,12 +69,7 @@ func (c Context) Equal(other Context) bool {
 		c.defaultCommodityPosition == other.defaultCommodityPosition &&
 		maps.Equal(c.commodityDecimalMarks, other.commodityDecimalMarks) &&
 		slices.Equal(c.accountPrefixes, other.accountPrefixes) &&
-		slices.Equal(c.basicAliases, other.basicAliases)
-}
-
-type basicAlias struct {
-	original string
-	alias    string
+		slices.Equal(c.aliases, other.aliases)
 }
 
 // ContextExports is the portion of a child context that an include may merge
@@ -139,7 +134,7 @@ type Parser struct {
 	defaultCommodityPosition     ast.CommodityPosition
 	inputLen                     int
 	accountPrefixes              []string // stack for nested apply account directives
-	basicAliases                 []basicAlias
+	aliases                      []accountAlias
 	items                        []LocalItem
 	includeSites                 []IncludeSite
 	checkpoints                  []ContextCheckpoint
@@ -196,7 +191,7 @@ func ParseWithContext(input string, initial Context, resolve IncludeResolver) (P
 		defaultCommodityPosition:     context.defaultCommodityPosition,
 		commodityDecimalMarks:        context.commodityDecimalMarks,
 		accountPrefixes:              context.accountPrefixes,
-		basicAliases:                 context.basicAliases,
+		aliases:                      context.aliases,
 		resolveInclude:               resolve,
 		initialCommodityDecimalMarks: cloneStringMap(context.commodityDecimalMarks),
 	}
@@ -1962,78 +1957,26 @@ func (p *Parser) parseAliasDirective(startPos Position) ast.Directive {
 	dir := ast.AliasDirective{
 		Range: ast.Range{Start: toASTPosition(startPos)},
 	}
-	if p.current.Type == TokenAccount {
-		if original, alias, ok := strings.Cut(p.current.Value, "="); ok {
-			dir.Original = strings.TrimSpace(original)
-			dir.Alias = strings.TrimSpace(alias)
-			dir.Range.End = toASTPosition(p.current.End)
-			p.advance()
-			p.basicAliases = append(p.basicAliases, basicAlias{original: dir.Original, alias: dir.Alias})
-			return dir
-		}
-	}
-
-	// Collect tokens until we hit '=' sign
-	var originalParts []string
-	isRegex := false
-
-	for p.current.Type != TokenEquals && p.current.Type != TokenNewline && p.current.Type != TokenEOF {
-		switch p.current.Type {
-		case TokenText, TokenAccount, TokenNumber:
-			originalParts = append(originalParts, p.current.Value)
-		case TokenColon:
-			originalParts = append(originalParts, ":")
-		}
-		p.advance()
-	}
-
-	if len(originalParts) == 0 {
+	if p.current.Type == TokenNewline || p.current.Type == TokenEOF {
 		p.error("expected alias pattern or name")
+		return nil
+	}
+	// hledger reads the rest of the line itself, comment marks included.
+	textPos := p.current.Pos
+	rest := p.lexer.input[textPos.Offset:]
+	if end := strings.IndexByte(rest, '\n'); end >= 0 {
+		rest = rest[:end]
+	}
+	alias, regexStart, regexEnd, problem := parseAliasText(rest)
+	if problem != "" {
+		p.errorAt(advancePosition(textPos, rest[:regexStart]), advancePosition(textPos, rest[:regexEnd]), "%s", problem)
 		p.skipToNextLine()
 		return nil
 	}
-
-	original := strings.Join(originalParts, "")
-	// Check if it's a regex pattern (starts and ends with /)
-	if strings.HasPrefix(original, "/") && strings.HasSuffix(original, "/") {
-		isRegex = true
-		// Remove leading and trailing slashes
-		original = original[1 : len(original)-1]
-	}
-
-	dir.Original = strings.TrimSpace(original)
-	dir.IsRegex = isRegex
-
-	// Expect '=' sign
-	if p.current.Type != TokenEquals {
-		p.error("expected = in alias directive")
-		p.skipToNextLine()
-		return nil
-	}
-	p.advance()
-
-	// Parse the replacement/alias - collect all remaining tokens until newline
-	var aliasParts []string
-	for p.current.Type != TokenNewline && p.current.Type != TokenEOF && p.current.Type != TokenComment {
-		switch p.current.Type {
-		case TokenText, TokenAccount, TokenNumber:
-			aliasParts = append(aliasParts, p.current.Value)
-		case TokenColon:
-			aliasParts = append(aliasParts, ":")
-		}
-		p.advance()
-	}
-
-	if len(aliasParts) == 0 {
-		p.error("expected alias replacement")
-		return nil
-	}
-
-	dir.Alias = strings.Join(aliasParts, "")
-	dir.Range.End = toASTPosition(p.current.Pos)
-	if !dir.IsRegex {
-		p.basicAliases = append(p.basicAliases, basicAlias{original: dir.Original, alias: dir.Alias})
-	}
+	dir.Original, dir.Alias, dir.IsRegex = alias.original, alias.replacement, alias.regex
+	p.aliases = append(p.aliases, alias)
+	p.skipToNextLine()
+	dir.Range.End = toASTPosition(advancePosition(textPos, rest))
 	return dir
 }
 
@@ -2135,7 +2078,7 @@ func (p *Parser) parseEndDirective(_ Position) ast.Directive {
 			p.skipToNextLine()
 			return nil
 		case "aliases":
-			p.basicAliases = nil
+			p.aliases = nil
 			p.skipToNextLine()
 			return nil
 		default:
@@ -2337,33 +2280,31 @@ func (p *Parser) getAccountPrefix() string {
 	return strings.Join(p.accountPrefixes, ":")
 }
 
+// resolveAccountName applies the parent account and the aliases in force to
+// the account written at the current token. An alias that cannot be applied is
+// reported there, as hledger reports it.
 func (p *Parser) resolveAccountName(name string) string {
 	resolvedName := name
 	if prefix := p.getAccountPrefix(); prefix != "" {
 		resolvedName = prefix + ":" + resolvedName
 	}
-	return applyAliases(p.basicAliases, resolvedName)
+	aliased, err := applyAliases(p.aliases, resolvedName)
+	if err != nil {
+		p.errorAt(p.current.Pos, p.current.End, "problem in account alias applied to %s: %v", name, err)
+	}
+	return aliased
 }
 
 // ApplyAliases rewrites an account name with the aliases in force in context.
 // hledger applies them, but not `apply account`, to the transactions of an
-// included CSV file (checked on 1.99.5).
+// included CSV file (checked on 1.99.5). A regex alias that cannot be applied
+// leaves the name as it is.
 func ApplyAliases(context Context, name string) string {
-	return applyAliases(context.basicAliases, name)
-}
-
-func applyAliases(aliases []basicAlias, resolvedName string) string {
-	for i := len(aliases) - 1; i >= 0; i-- {
-		alias := aliases[i]
-		if resolvedName == alias.original {
-			resolvedName = alias.alias
-			continue
-		}
-		if strings.HasPrefix(resolvedName, alias.original+":") {
-			resolvedName = alias.alias + strings.TrimPrefix(resolvedName, alias.original)
-		}
+	aliased, err := applyAliases(context.aliases, name)
+	if err != nil {
+		return name
 	}
-	return resolvedName
+	return aliased
 }
 
 // ApplyContextExports returns a clone of initial with declared commodity styles
@@ -2406,7 +2347,7 @@ func (p *Parser) liveContext() Context {
 		defaultCommodityPosition:    p.defaultCommodityPosition,
 		commodityDecimalMarks:       p.commodityDecimalMarks,
 		accountPrefixes:             p.accountPrefixes,
-		basicAliases:                p.basicAliases,
+		aliases:                     p.aliases,
 	}
 }
 
@@ -2453,7 +2394,7 @@ func cloneContext(context Context) Context {
 		defaultCommodityPosition:    context.defaultCommodityPosition,
 		commodityDecimalMarks:       cloneStringMap(context.commodityDecimalMarks),
 		accountPrefixes:             append([]string(nil), context.accountPrefixes...),
-		basicAliases:                append([]basicAlias(nil), context.basicAliases...),
+		aliases:                     append([]accountAlias(nil), context.aliases...),
 	}
 }
 

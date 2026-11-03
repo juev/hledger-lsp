@@ -3,6 +3,7 @@ package analyzer
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -20,12 +21,19 @@ const (
 	CodeUnbalanced             = "UNBALANCED"
 	CodeMultipleInferred       = "MULTIPLE_INFERRED"
 	CodeBalanceAssertionFailed = "BALANCE_ASSERTION_FAILED"
+	// CodeOrderDependentBalance marks a transaction whose balance check hledger
+	// decides by an order it does not define.
+	CodeOrderDependentBalance = "ORDER_DEPENDENT_BALANCE"
 )
 
 // multipleInferredMessage keeps hledger's own hint: the usual cause is a single
 // space between the account and the amount, which makes the account name absorb
 // the amount.
 const multipleInferredMessage = "posting has no amount (separate the account and amount with two or more spaces)"
+
+// orderDependentBalanceMessage explains a balance check whose verdict depends on
+// the order hledger sums subaccounts in.
+const orderDependentBalanceMessage = "whether this transaction balances depends on the order hledger adds up subaccount balances: their costs are written with different decimal places, and hledger takes the tolerance from whichever comes first"
 
 // JournalCheckOptions tunes the journal-level pass.
 type JournalCheckOptions struct {
@@ -172,6 +180,18 @@ func costKey(amount ast.Amount, cost *ast.Cost) pricedKey {
 type pricedAmount struct {
 	quantity decimal.Decimal
 	value    decimal.Decimal
+	// places is the precision of the cost literal hledger keeps for the key:
+	// that of the first amount added under it (sumSimilarAmountsUsingFirstCost).
+	places int32
+	// uncertain lists other precisions that literal may have. hledger sums the
+	// subaccounts of an inclusive assignment in the order of an internal hash
+	// table, so which subaccount's literal comes first cannot be told.
+	uncertain []int32
+}
+
+// empty reports whether nothing is held under the key any more.
+func (a pricedAmount) empty() bool {
+	return a.quantity.IsZero() && a.value.IsZero()
 }
 
 // pricedBalances holds, per account, the part of its balance that keeps its
@@ -182,7 +202,11 @@ type pricedAmount struct {
 // infers carries them too.
 type pricedBalances map[string]map[pricedKey]pricedAmount
 
-func (b pricedBalances) add(account string, key pricedKey, quantity, value decimal.Decimal) {
+// add adds an amount under a key. The key keeps the cost literal of the first
+// amount added under it, even once the amounts cancel out: hledger keeps the
+// emptied entry, and its literal, in the running balance. Only an assignment
+// replaces it (settleAssignment).
+func (b pricedBalances) add(account string, key pricedKey, amount pricedAmount) {
 	if account == "" {
 		return
 	}
@@ -191,8 +215,45 @@ func (b pricedBalances) add(account string, key pricedKey, quantity, value decim
 		byKey = make(map[pricedKey]pricedAmount)
 		b[account] = byKey
 	}
-	held := byKey[key]
-	byKey[key] = pricedAmount{quantity: held.quantity.Add(quantity), value: held.value.Add(value)}
+	held, ok := byKey[key]
+	if !ok {
+		held.places, held.uncertain = amount.places, amount.uncertain
+	}
+	held.quantity, held.value = held.quantity.Add(amount.quantity), held.value.Add(amount.value)
+	byKey[key] = held
+}
+
+// settlePricedAssignment gives an account's priced balance the cost literals it
+// has after a balance assignment. hledger does not add the change to the
+// balance: it replaces the balance in the asserted commodity (in every
+// commodity for ==) with the asserted amount, or for =* with the asserted
+// amount less what the subaccounts hold. So a key the replacement leaves empty
+// is gone, the asserted cost brings its own literal, and a key the subaccounts
+// hold takes theirs.
+func (e *journalEvaluator) settlePricedAssignment(account string, assertion *ast.BalanceAssertion) {
+	byKey := e.priced[account]
+	if len(byKey) == 0 {
+		return
+	}
+	asserted, hasAsserted := assertionPricedPart(assertion)
+	commodity := assertion.Amount.Commodity.Symbol
+	for key, held := range byKey {
+		if key.commodity != commodity && !assertion.IsStrict {
+			continue
+		}
+		switch {
+		case held.empty():
+			delete(byKey, key)
+			continue
+		case hasAsserted && key == asserted.pricedKey:
+			held.places, held.uncertain = asserted.places, nil
+		case assertion.IsInclusive:
+			if sub, ok := e.priced.collect(account, key.commodity, scopeSubaccounts)[key]; ok && !sub.empty() {
+				held.places, held.uncertain = sub.places, sub.uncertain
+			}
+		}
+		byKey[key] = held
+	}
 }
 
 // pricedScope selects which accounts an assignment reads priced balances from.
@@ -206,8 +267,15 @@ const (
 
 // collect sums the priced balances of the accounts in scope, per key and for one
 // commodity.
+//
+// The cost literal of a key is the one hledger meets first. An inclusive
+// assignment sums the subaccounts first, in an order hledger does not define,
+// and takes the account's own balance off after them, so when subaccounts hold
+// the key, their literals are the candidates, otherwise the account's own.
 func (b pricedBalances) collect(account, commodity string, scope pricedScope) map[pricedKey]pricedAmount {
 	collected := make(map[pricedKey]pricedAmount)
+	ownPlaces := make(map[pricedKey]pricedAmount)
+	subPlaces := make(map[pricedKey]map[int32]bool)
 	prefix := account + ":"
 	for name, byKey := range b {
 		own := name == account
@@ -221,8 +289,31 @@ func (b pricedBalances) collect(account, commodity string, scope pricedScope) ma
 				continue
 			}
 			sum := collected[key]
-			collected[key] = pricedAmount{quantity: sum.quantity.Add(held.quantity), value: sum.value.Add(held.value)}
+			sum.quantity, sum.value = sum.quantity.Add(held.quantity), sum.value.Add(held.value)
+			collected[key] = sum
+			// An emptied entry still holds its literal in hledger's running
+			// balance, so it is a candidate like any other.
+			if own {
+				ownPlaces[key] = held
+				continue
+			}
+			if subPlaces[key] == nil {
+				subPlaces[key] = make(map[int32]bool)
+			}
+			subPlaces[key][held.places] = true
+			for _, places := range held.uncertain {
+				subPlaces[key][places] = true
+			}
 		}
+	}
+	for key, sum := range collected {
+		if candidates, ok := subPlaces[key]; ok {
+			sorted := slices.Sorted(maps.Keys(candidates))
+			sum.places, sum.uncertain = sorted[0], sorted[1:]
+		} else {
+			sum.places, sum.uncertain = ownPlaces[key].places, ownPlaces[key].uncertain
+		}
+		collected[key] = sum
 	}
 	return collected
 }
@@ -232,6 +323,15 @@ type pricedPart struct {
 	pricedKey
 	quantity decimal.Decimal
 	value    decimal.Decimal
+	// places and uncertain are the precision of its cost literal, as in
+	// pricedAmount.
+	places    int32
+	uncertain []int32
+}
+
+// amount returns the part as an amount held under its key.
+func (p pricedPart) amount() pricedAmount {
+	return pricedAmount{quantity: p.quantity, value: p.value, places: p.places, uncertain: p.uncertain}
 }
 
 // journalEvaluator carries the mutable state of one journal evaluation.
@@ -400,7 +500,11 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 			}
 			if carryCosts && p.Cost != nil {
 				if _, value, ok := balanceSumContribution(*p); ok {
-					e.priced.add(p.Account.GetResolvedName(), costKey(*p.Amount, p.Cost), p.Amount.Quantity, value)
+					e.priced.add(p.Account.GetResolvedName(), costKey(*p.Amount, p.Cost), pricedAmount{
+						quantity: p.Amount.Quantity,
+						value:    value,
+						places:   decimalPrecision(p.Cost.Amount.Quantity),
+					})
 				}
 			}
 		case p.BalanceAssertion != nil:
@@ -411,8 +515,9 @@ func (e *journalEvaluator) evaluate(tx *ast.Transaction, path string, carryCosts
 				precision: decimalPrecision(p.BalanceAssertion.Amount.Quantity),
 			}
 			for _, part := range priced {
-				e.priced.add(p.Account.GetResolvedName(), part.pricedKey, part.quantity, part.value)
+				e.priced.add(p.Account.GetResolvedName(), part.pricedKey, part.amount())
 			}
+			e.settlePricedAssignment(p.Account.GetResolvedName(), p.BalanceAssertion)
 		default:
 			if group, ok := groupOf(groups, i); ok {
 				inferredPerGroup[group]++
@@ -482,10 +587,13 @@ func (e *journalEvaluator) assignedContribution(p *ast.Posting) (map[string]deci
 	if assertion.IsInclusive {
 		scope = scopeSubtree
 	}
-	priced := e.pricedParts(account, commodity, scope)
+	// hledger subtracts the balance from the asserted amount, so a cost written
+	// on the assertion is the first literal of its key.
+	var priced []pricedPart
 	if assertedPart, ok := assertionPricedPart(assertion); ok {
 		priced = append(priced, assertedPart)
 	}
+	priced = append(priced, e.pricedParts(account, commodity, scope)...)
 
 	for other := range e.balances.heldCommodities(account, assertion.IsInclusive) {
 		if other == commodity {
@@ -535,6 +643,7 @@ func assertionPricedPart(assertion *ast.BalanceAssertion) (pricedPart, bool) {
 		pricedKey: costKey(assertion.Amount, assertion.Cost),
 		quantity:  assertion.Amount.Quantity,
 		value:     value,
+		places:    decimalPrecision(assertion.Cost.Amount.Quantity),
 	}, true
 }
 
@@ -546,17 +655,22 @@ func mergePricedParts(parts []pricedPart) []pricedPart {
 	if len(parts) == 0 {
 		return parts
 	}
+	// The first part of a key gives the merged part its cost literal.
 	sums := make(map[pricedKey]pricedAmount, len(parts))
 	for _, part := range parts {
-		sum := sums[part.pricedKey]
-		sums[part.pricedKey] = pricedAmount{quantity: sum.quantity.Add(part.quantity), value: sum.value.Add(part.value)}
+		sum, ok := sums[part.pricedKey]
+		if !ok {
+			sum.places, sum.uncertain = part.places, part.uncertain
+		}
+		sum.quantity, sum.value = sum.quantity.Add(part.quantity), sum.value.Add(part.value)
+		sums[part.pricedKey] = sum
 	}
 	merged := make([]pricedPart, 0, len(sums))
 	for key, sum := range sums {
-		if sum.quantity.IsZero() && sum.value.IsZero() {
+		if sum.empty() {
 			continue
 		}
-		merged = append(merged, pricedPart{pricedKey: key, quantity: sum.quantity, value: sum.value})
+		merged = append(merged, pricedPart{pricedKey: key, quantity: sum.quantity, value: sum.value, places: sum.places, uncertain: sum.uncertain})
 	}
 	sort.Slice(merged, func(i, j int) bool {
 		return lessPricedKey(merged[i].pricedKey, merged[j].pricedKey)
@@ -585,7 +699,7 @@ func (e *journalEvaluator) pricedParts(account, commodity string, scope pricedSc
 		if amount.quantity.IsZero() && amount.value.IsZero() {
 			continue
 		}
-		parts = append(parts, pricedPart{pricedKey: key, quantity: amount.quantity.Neg(), value: amount.value.Neg()})
+		parts = append(parts, pricedPart{pricedKey: key, quantity: amount.quantity.Neg(), value: amount.value.Neg(), places: amount.places, uncertain: amount.uncertain})
 	}
 	sort.Slice(parts, func(i, j int) bool { return lessPricedKey(parts[i].pricedKey, parts[j].pricedKey) })
 	return parts
@@ -867,8 +981,69 @@ func (e *journalEvaluator) apply(account string, contribution map[string]decimal
 // balanceDiagnostics checks the two posting groups of a transaction against
 // hledger's balance rules and returns transaction-level diagnostics.
 func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, effective []postingEffective, elidedByGroup map[int]int, groups [][]int) []SourcedDiagnostic {
+	lenient := e.balanceDiagnosticsWith(tx, path, effective, elidedByGroup, groups, placesLenient)
+	if !hasUncertainPlaces(effective) {
+		return lenient
+	}
+	// Some cost literal comes from whichever subaccount hledger's hash table
+	// lists first. When the finest and the coarsest of the literals it can be
+	// give different verdicts, the verdict depends on that order, which hledger
+	// does not define, so it is reported as such rather than as a definite
+	// error or a silent pass.
+	strict := e.balanceDiagnosticsWith(tx, path, effective, elidedByGroup, groups, placesStrict)
+	if len(strict) == len(lenient) {
+		return lenient
+	}
+	return append(lenient, SourcedDiagnostic{
+		Path:     path,
+		Range:    tx.Range,
+		Severity: SeverityWarning,
+		Code:     CodeOrderDependentBalance,
+		Message:  orderDependentBalanceMessage,
+		Data:     map[string]any{"kind": "orderDependentBalance"},
+	})
+}
+
+// hasUncertainPlaces reports whether a posting of a transaction carries a cost
+// whose literal hledger may take from more than one subaccount.
+func hasUncertainPlaces(effective []postingEffective) bool {
+	for _, posting := range effective {
+		for _, part := range posting.priced {
+			if len(part.uncertain) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// placesChoice picks, for a cost literal that can have one of several
+// precisions, the coarsest (lenient: the widest tolerance) or the finest.
+type placesChoice int
+
+const (
+	placesLenient placesChoice = iota
+	placesStrict
+)
+
+func (c placesChoice) of(places int32, uncertain []int32) int32 {
+	chosen := places
+	for _, other := range uncertain {
+		if (c == placesLenient && other < chosen) || (c == placesStrict && other > chosen) {
+			chosen = other
+		}
+	}
+	return chosen
+}
+
+func (e *journalEvaluator) balanceDiagnosticsWith(tx *ast.Transaction, path string, effective []postingEffective, elidedByGroup map[int]int, groups [][]int, choice placesChoice) []SourcedDiagnostic {
 	var diagnostics []SourcedDiagnostic
 
+	type groupPostings struct {
+		postings []ast.Posting
+		multi    []bool
+	}
+	built := make([]groupPostings, len(groups))
 	for group, indices := range groups {
 		elidedIdx, hasElided := elidedByGroup[group]
 		postings := make([]ast.Posting, 0, len(indices))
@@ -880,7 +1055,7 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			// Assertion-only postings are balanced by construction; their
 			// inferred amount is what keeps the group in balance.
 			before := len(postings)
-			postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx])
+			postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx], choice)
 			for len(multi) < before {
 				multi = append(multi, false)
 			}
@@ -889,6 +1064,29 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 				multi = append(multi, mixed)
 			}
 		}
+		built[group] = groupPostings{postings, multi}
+	}
+
+	// The tolerance of a commodity comes from every amount written in it in the
+	// transaction, not only from those of the group being checked, and the amount
+	// hledger infers for an elided posting counts as written.
+	var written []ast.Posting
+	elided := make(map[int]bool, len(elidedByGroup))
+	for _, idx := range elidedByGroup {
+		elided[idx] = true
+	}
+	for idx := range tx.Postings {
+		if !elided[idx] {
+			written = appendEffectivePosting(written, tx.Postings[idx], effective[idx], choice)
+		}
+	}
+	for group := range elidedByGroup {
+		written = append(written, elidedAmountPostings(built[group].postings)...)
+	}
+
+	for group := range groups {
+		_, hasElided := elidedByGroup[group]
+		postings, multi := built[group].postings, built[group].multi
 
 		if hasElided {
 			// Exactly one posting is elided in this group, so it absorbs the
@@ -896,7 +1094,7 @@ func (e *journalEvaluator) balanceDiagnostics(tx *ast.Transaction, path string, 
 			continue
 		}
 
-		result := checkPostingGroupMixed(postings, multi, e.tolerance)
+		result := checkPostingGroupMixed(postings, multi, maxPrecisionByCommodity(written, postings), e.tolerance)
 		if result.multipleInferred {
 			// An elided posting in the *other* group cannot balance this one.
 			diagnostics = append(diagnostics, SourcedDiagnostic{
@@ -951,7 +1149,7 @@ func (e *journalEvaluator) elidedContribution(tx *ast.Transaction, effective []p
 		if idx == elidedIdx {
 			continue
 		}
-		postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx])
+		postings = appendEffectivePosting(postings, tx.Postings[idx], effective[idx], placesLenient)
 	}
 	for commodity, sum := range sumByCommodity(postings) {
 		contribution[commodity] = sum.Neg()
@@ -1071,7 +1269,7 @@ func groupContains(group []int, idx int) bool {
 // appendEffectivePosting appends a posting for the transaction-level balance
 // check. An inferred amount can be mixed, so it becomes one posting per commodity,
 // and the part of it that carries a cost becomes a posting with that cost.
-func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effective postingEffective) []ast.Posting {
+func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effective postingEffective, choice placesChoice) []ast.Posting {
 	if posting.Amount != nil {
 		return append(postings, posting)
 	}
@@ -1098,7 +1296,7 @@ func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effecti
 			postings = append(postings, posting)
 		}
 		for _, part := range parts {
-			postings = append(postings, pricedPosting(posting, part))
+			postings = append(postings, pricedPosting(posting, part, choice))
 		}
 	}
 	return postings
@@ -1110,9 +1308,10 @@ func appendEffectivePosting(postings []ast.Posting, posting ast.Posting, effecti
 // its total cost can differ in sign or the quantity can be zero once parts are
 // added, so the total is stored with the sign that makes the posting convert to
 // exactly the part's value.
-func pricedPosting(posting ast.Posting, part pricedPart) ast.Posting {
+func pricedPosting(posting ast.Posting, part pricedPart, choice placesChoice) ast.Posting {
 	posting.Amount = &ast.Amount{Quantity: part.quantity, Commodity: ast.Commodity{Symbol: part.commodity}}
-	cost := &ast.Cost{Amount: ast.Amount{Commodity: ast.Commodity{Symbol: part.costCommodity}}}
+	places := choice.of(part.places, part.uncertain)
+	cost := &ast.Cost{Amount: ast.Amount{Commodity: ast.Commodity{Symbol: part.costCommodity}}, Places: &places}
 	if part.total {
 		cost.IsTotal = true
 		cost.Amount.Quantity = part.value

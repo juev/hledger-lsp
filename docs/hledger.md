@@ -180,6 +180,21 @@ All posting amounts in a transaction must sum to zero (within balancing precisio
 - Inferred from the highest decimal precision of the amounts denominated in each commodity within the transaction
 - Cost amounts (`@`/`@@`) and the native amount behind a cost do not affect the cost commodity's precision:
   `1.005 AAPL @ $2` with `$-2.0` balances because `$` keeps precision 1 (tolerance 0.05), while `$-2.00` does not
+- A commodity written only as the cost of a group's amounts takes the finest precision of those costs (the price
+  for `@`, the total for `@@`; a cost of zero counts with its own decimals), so `[b]  2 USD @ 0.25 EUR` alone is
+  unbalanced by 0.5 EUR while `b  -0.1 USD @ 1 EUR` alone is within the tolerance of 0.5. Each group (real
+  postings, balanced virtual postings) counts its own costs
+- The amount hledger infers for an omitted posting counts as written, and applies to every group of the
+  transaction; it is also written when it comes out as zero. hledger adds up the group before converting it:
+  amounts under one cost key (commodity, cost commodity, and the unit price for `@`, or `@@` as one key) become
+  one amount that keeps the cost literal of the first of them. So each key gives the precision of its first cost
+  literal, an amount without a cost the precision of its quantity, and the inferred amount the finest of those:
+  `[b]  1.0 USD @@ 1.00 EUR`, `[b]  -1.0 USD @@ 1.0110 EUR`, `[c]` infers EUR with 2 decimals, not 4
+- A balance assignment takes the costs of the balance it replaces with the same rule: the literal of the first
+  amount added under a key. An inclusive assignment (`=*`) adds up the subaccounts in the order of an internal
+  hash table, so when subaccounts hold one key with literals of different precision, which one counts is not
+  defined. Where that choice changes the verdict, the server reports `ORDER_DEPENDENT_BALANCE` (a warning)
+  instead of a definite error or pass
 - `commodity` and `D` directive precision is **not** a floor: `commodity $1,000.000` alone does not tighten the
   tolerance for `$` amounts written with fewer decimals
 - Lot prices (`{}`/`{{}}`) are not costs: they do not participate in balancing at all
