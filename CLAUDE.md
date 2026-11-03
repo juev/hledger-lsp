@@ -38,6 +38,7 @@ internal/
     formatter.go            Document formatting: alignment (right/decimal), indentation
   fmtcmd/
     fmtcmd.go               hledger-fmt command line, on top of formatter and include
+  csvimport/                CSV/SSV/TSV/rules includes converted by the hledger binary (target 2)
   server/
     server.go               LSP server: document sync, diagnostics
     completion.go           Completion: context detection, item generation, fuzzy scoring
@@ -52,7 +53,10 @@ internal/
 ### Key Design Decisions
 
 - **Hand-written parser** (not generated) for better error recovery in LSP context
-- **Pure Go validation** (no hledger CLI dependency) for fast response times
+- **Pure Go validation** (no hledger CLI dependency) for fast response times. The one exception is an
+  included CSV/SSV/TSV/rules file under `hledger.targetVersion` 2/auto: the configured hledger binary
+  converts it (`internal/csvimport`), and the CSV rules are never interpreted in Go. Files an import
+  reads must never get journal features or edits (`Server.isImportSource`).
 - **Include file handling**: occurrence-aware resolution following hledger 1.52.1
   (repeated/diamond includes counted per occurrence, textual-inline order, active
   canonical ancestor cycle detection, edge-based depth limit, multi-owner reload)
