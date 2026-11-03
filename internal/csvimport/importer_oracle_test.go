@@ -2,7 +2,9 @@ package csvimport
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -228,8 +230,8 @@ func TestPreviewOracle_ImportRefusesWhatItCannotRunSafely(t *testing.T) {
 	}{
 		{"source command", "source | echo x\nfields date, amount\n", "", "a source rule that runs a command is not run by the language server"},
 		{"cleaning command", "source ./x.csv | sort\nfields date, amount\n", "", "a source rule that runs a command"},
-		{"bare source name", "source bank.csv\nfields date, amount\n", "", `source "bank.csv" is searched for in data/ and ~/Downloads`},
-		{"home source", "source ~/bank.csv\nfields date, amount\n", "", "is searched for in data/ and ~/Downloads"},
+		{"bare source name without a main journal", "source bank.csv\nfields date, amount\n", "", `source "bank.csv" is searched for next to the main journal, which this load has none of`},
+		{"another user's home", "source ~root/bank.csv\nfields date, amount\n", "", "names another user's home directory"},
 		{"no source", "fields date, amount\n", "", "r.rules has no source rule naming its data file"},
 		{"huge exponent", "source ./x.csv\nfields date, amount\n", "date,amount\n2024-01-01,1E100\n", "a number with an exponent above 99 is not imported"},
 		{"long digits", "source ./x.csv\nfields date, amount\n", "date,amount\n2024-01-01," + strings.Repeat("9", 300) + "\n", "a number longer than 255 digits is not imported"},
@@ -309,4 +311,94 @@ func TestPreviewOracle_ImportCachesByContentAndNoticesChanges(t *testing.T) {
 	// not bypass the check.
 	small := importer.Import(context.Background(), Request{Reader: ReaderCSV, Path: data, MaxFileSize: 8})
 	assert.Equal(t, "data file bank.csv is too large: 41 bytes (max 8)", small.Err)
+}
+
+// importFrom imports a rules file the way an include in mainJournal does.
+func importFrom(t *testing.T, binary, rules, mainJournal string) Result {
+	t.Helper()
+	importer := New(Config{Enabled: true, Path: binary, Timeout: 30 * time.Second})
+	return importer.Import(context.Background(), Request{Reader: ReaderRules, Path: rules, MainJournal: mainJournal, MaxFileSize: 10 << 20})
+}
+
+// hledgerAmounts are the amounts hledger reads from the journal at path.
+func hledgerDescriptions(t *testing.T, binary, path string) []string {
+	t.Helper()
+	output, err := exec.Command(binary, "--no-conf", "-f", path, "print", "-O", "json").Output()
+	require.NoError(t, err)
+	var transactions []struct {
+		Description string `json:"tdescription"`
+	}
+	require.NoError(t, json.Unmarshal(output, &transactions))
+	var descriptions []string
+	for _, transaction := range transactions {
+		descriptions = append(descriptions, transaction.Description)
+	}
+	return descriptions
+}
+
+func descriptionsOf(transactions []ast.Transaction) []string {
+	var descriptions []string
+	for _, transaction := range transactions {
+		descriptions = append(descriptions, transaction.Description)
+	}
+	return descriptions
+}
+
+// A bare or relative source is searched for in data/ next to the main
+// journal, also for a rules file included from deeper down, and a pattern there
+// reads the newest match; hledger gets that file with the rules.
+func TestPreviewOracle_ImportFindsABareSourceInTheMainJournalsDataDirectory(t *testing.T) {
+	binary := previewHledger(t)
+	dir := t.TempDir()
+	const rules = "skip 1\nfields date, description, amount\naccount1 assets:банк\naccount2 доход\n"
+	write(t, dir, "data/bank.csv", "date,desc,amount\n2024-01-02,from data,7\n")
+	write(t, dir, "sub/bank.csv", "date,desc,amount\n2024-01-02,next to rules,99\n")
+	write(t, dir, "sub/data/bank.csv", "date,desc,amount\n2024-01-02,sub data,55\n")
+	ruleFile := write(t, dir, "sub/bank.rules", "source bank.csv\n"+rules)
+	write(t, dir, "sub/inner.journal", "include bank.rules\n")
+	main := write(t, dir, "main.journal", "include sub/inner.journal\n")
+	before := listing(t, dir)
+
+	result := importFrom(t, binary, ruleFile, main)
+
+	require.Empty(t, result.Err)
+	assert.Equal(t, filepath.Join(dir, "data/bank.csv"), result.DataPath)
+	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
+	assert.Equal(t, []string{"from data"}, descriptionsOf(result.Transactions))
+	assert.Equal(t, before, listing(t, dir))
+
+	// A pattern reads the newest match.
+	older := write(t, dir, "data/stmt-1.csv", "date,desc,amount\n2024-01-01,older,1\n")
+	write(t, dir, "data/stmt-2.csv", "date,desc,amount\n2024-02-01,newer,2\n")
+	past := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(older, past, past))
+	write(t, dir, "sub/bank.rules", "source stmt-*.csv\n"+rules)
+	result = importFrom(t, binary, ruleFile, main)
+	require.Empty(t, result.Err)
+	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
+	assert.Equal(t, []string{"newer"}, descriptionsOf(result.Transactions))
+
+	// A name missing from data/ would be looked for in ~/Downloads next.
+	write(t, dir, "sub/bank.rules", "source nowhere.csv\n"+rules)
+	result = importFrom(t, binary, ruleFile, main)
+	assert.Contains(t, result.Err, `source "nowhere.csv" is not in `+filepath.Join(dir, "data")+`; hledger would look in ~/Downloads next, which the language server does not read`)
+	assert.Empty(t, result.Transactions)
+}
+
+// A ~/ source is read from the home directory, as hledger reads it.
+func TestPreviewOracle_ImportReadsASourceUnderHome(t *testing.T) {
+	binary := previewHledger(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	write(t, home, "выписки/bank.csv", "date,desc,amount\n2024-01-02,дом,5\n")
+	dir := t.TempDir()
+	ruleFile := write(t, dir, "bank.rules", "source ~/выписки/bank.csv\nskip 1\nfields date, description, amount\naccount1 a\naccount2 b\n")
+	main := write(t, dir, "main.journal", "include bank.rules\n")
+
+	result := importFrom(t, binary, ruleFile, main)
+
+	require.Empty(t, result.Err)
+	assert.Equal(t, filepath.Join(home, "выписки/bank.csv"), result.DataPath)
+	assert.Equal(t, hledgerDescriptions(t, binary, main), descriptionsOf(result.Transactions))
+	assert.Contains(t, result.Sources, filepath.Join(home, "выписки/bank.csv"))
 }

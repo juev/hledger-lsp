@@ -284,11 +284,18 @@ What is read:
 - Amounts hledger leaves implicit in `print` (inferred amounts, balance assignments, inferred costs)
   stay implicit and are worked out in the context of the whole journal.
 
+A `source` rule is resolved as hledger 1.99.5 resolves it: an absolute path as written, `~/…`
+under the home directory, `./…` and `../…` next to the rules file, and any other name or pattern in
+a `data/` directory next to the main journal (the root of the include tree), where a pattern reads
+the newest match.
+
 The server refuses to run hledger, with a diagnostic at the include, when:
 
 - a `source` rule runs a command (`source | cmd`, `source FILE | cmd`);
-- a `source` rule is a bare name or starts with `~` (hledger searches `data/` and `~/Downloads`);
-  write `./FILE` or an absolute path;
+- a `source` rule names a file that is not in `data/` next to the main journal: hledger would
+  look in `~/Downloads` next, which the server does not read (write `./FILE` for a file next to the
+  rules file, or an absolute or `~/` path);
+- a `source` rule names `~user/…`;
 - a rules `include` uses a glob or `~`, includes itself, nests deeper than 16 levels, or the rules
   expand to more than 1 MiB or 256 includes;
 - a data or rules file is not a regular file or exceeds `hledger.limits.maxFileSizeBytes`;
