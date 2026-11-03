@@ -70,7 +70,7 @@ func ReplayFor(sourced []include.SourcedTransaction, ids []include.OccurrenceID)
 	evaluator := &journalEvaluator{balances: accountBalances{}, priced: pricedBalances{}, trackAssertions: true}
 	evaluator.observe = func(sourceOrder, postingIndex int, contribution map[string]decimal.Decimal, priced bool) {
 		tx := &sourced[sourceOrder].Transaction
-		entries = append(entries, registerEntry{registerDate(tx, &tx.Postings[postingIndex]), sourceOrder, postingIndex, contribution, priced})
+		entries = append(entries, registerEntry{evaluator.registerDates(tx)[postingIndex], sourceOrder, postingIndex, contribution, priced})
 	}
 	evaluator.run(sourced)
 

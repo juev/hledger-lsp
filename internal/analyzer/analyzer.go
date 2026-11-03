@@ -751,8 +751,8 @@ func postingDateTagDiagnostics(postings []ast.Posting, comments []ast.Comment, y
 	// hledger reads a posting date only from a posting: its comment and the
 	// comment lines below it. In the header comment and on the comment lines
 	// before the first posting a date: tag is prose, whatever its value.
-	for i := range postings {
-		for _, line := range postingCommentLines(postings, comments, &postings[i]) {
+	for _, lines := range postingCommentLines(postings, comments) {
+		for _, line := range lines {
 			for _, tag := range line.Tags {
 				checkTag(tag)
 			}
@@ -775,12 +775,16 @@ func postingDateTagDiagnostics(postings []ast.Posting, comments []ast.Comment, y
 // secondary date (date2: or a bracket with only the part after =) is allowed.
 func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 	var diags []Diagnostic
+	var lines [][]ast.Comment
 	for i := range tx.Postings {
 		p := &tx.Postings[i]
 		if p.Amount != nil || p.BalanceAssertion == nil {
 			continue
 		}
-		if _, ok := postingDateOverride(tx, p); !ok {
+		if lines == nil {
+			lines = postingCommentLines(tx.Postings, tx.Comments)
+		}
+		if _, ok := postingDateOverride(tx, p, lines[i]); !ok {
 			continue
 		}
 		diags = append(diags, Diagnostic{
@@ -841,10 +845,11 @@ func validateRuleDateTags(journal *ast.Journal) []Diagnostic {
 
 func postingBracketDateDiagnostics(postings []ast.Posting, comments []ast.Comment, year int) []Diagnostic {
 	var diags []Diagnostic
+	lines := postingCommentLines(postings, comments)
 	for i := range postings {
 		posting := &postings[i]
 		diags = appendBracketDateDiagnostics(diags, posting.Comment, posting.CommentRange.Start, year)
-		for _, line := range postingCommentLines(postings, comments, posting) {
+		for _, line := range lines[i] {
 			diags = appendBracketDateDiagnostics(diags, line.Text, line.Range.Start, year)
 		}
 	}
