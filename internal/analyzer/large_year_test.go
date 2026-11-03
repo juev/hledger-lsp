@@ -16,21 +16,21 @@ import (
 )
 
 func TestParsePostingDateValue_YearTooLargeForAnInt(t *testing.T) {
-	date, ok := parsePostingDateValue("99999999999999999999-01-05", 2024)
+	date, ok := parsePostingDateValue("99999999999999999999-01-05", ast.Date{Year: 2024})
 	require.True(t, ok)
 	assert.Equal(t, ast.Date{Year: math.MaxInt, Month: 1, Day: 5, YearDigits: "99999999999999999999"}, date)
 
-	date, ok = parsePostingDateValue("000100000000000000000000-01-05", 2024)
+	date, ok = parsePostingDateValue("000100000000000000000000-01-05", ast.Date{Year: 2024})
 	require.True(t, ok)
 	assert.Equal(t, "100000000000000000000", date.YearDigits, "leading zeros do not count")
 
 	// Leap years come from the real year: ...96 is one, ...99 is not.
-	_, ok = parsePostingDateValue("99999999999999999996-02-29", 2024)
+	_, ok = parsePostingDateValue("99999999999999999996-02-29", ast.Date{Year: 2024})
 	assert.True(t, ok)
-	_, ok = parsePostingDateValue("99999999999999999999-02-29", 2024)
+	_, ok = parsePostingDateValue("99999999999999999999-02-29", ast.Date{Year: 2024})
 	assert.False(t, ok)
 
-	date, ok = parsePostingDateValue("2025-01-05", 2024)
+	date, ok = parsePostingDateValue("2025-01-05", ast.Date{Year: 2024})
 	require.True(t, ok)
 	assert.Equal(t, ast.Date{Year: 2025, Month: 1, Day: 5}, date)
 }
@@ -122,6 +122,69 @@ func TestOracle_LargeYearPostingDatesMatchHledger(t *testing.T) {
 		resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: input})
 		for _, d := range CheckJournalBalance(resolved, New().balanceTolerance()) {
 			failed = failed || d.Severity == SeverityError
+		}
+		assert.Equal(t, !hledgerAccepts(t, hledgerPath, input), failed, "our verdict must match hledger for:\n%s", input)
+	}
+}
+
+// largeTransactionYearJournal has transaction dates whose years do not fit an
+// int, and a yearless posting date that takes such a year. hledger 1.52.4 lists
+// the posting dated 99999999999999999999-01-03 after the transaction of 01-02,
+// so the assertion there sees only its own posting.
+const largeTransactionYearJournal = `99999999999999999999-01-05 t
+    расход  5 USD  ; date:01-03
+    b
+
+99999999999999999999-01-02 u
+    расход  1 USD = 1 USD
+    b
+
+2025-01-01 normal
+    расход  2 USD = 2 USD
+    b
+
+9223372036854775808-01-01 m
+    расход  4 USD = 6 USD
+    b
+`
+
+func TestOracle_LargeTransactionYearsMatchHledger(t *testing.T) {
+	if os.Getenv("HLEDGER_ORACLE") == "" {
+		t.Skip("set HLEDGER_ORACLE=1 to compare against the installed hledger binary")
+	}
+	hledgerPath, err := exec.LookPath("hledger")
+	if err != nil {
+		t.Skip("hledger is not installed")
+	}
+
+	t.Run("running balances", func(t *testing.T) {
+		assertRunningBalancesMatchRegister(t, hledgerPath, largeTransactionYearJournal)
+	})
+
+	for _, input := range []string{
+		largeTransactionYearJournal,
+		"99999999999999999996-02-29 t\n    a  5 USD\n    b\n",
+		"99999999999999999999-02-29 t\n    a  5 USD\n    b\n",
+		"Y 10000\n01-05 t\n    a  5 USD\n    b\n",
+		"Y 99999999999999999996\n02-29 t\n    a  5 USD\n    b\n",
+		"Y 99999999999999999999\n02-29 t\n    a  5 USD\n    b\n",
+		"Y 0\n01-05 t\n    a  5 USD\n    b\n",
+		"Y 99999999999999999999\n~ monthly\n    a  5 USD  ; date:02-29\n    b\n",
+		"Y 99999999999999999996\n~ monthly\n    a  5 USD  ; date:02-29\n    b\n",
+		"99999999999999999999-01-05 t\n    a  5 USD  ; date:02-29\n    b\n",
+		"99999999999999999996-01-05 t\n    a  5 USD  ; [02-29]\n    b\n",
+	} {
+		failed := false
+		journal, errs := parser.Parse(input)
+		failed = len(errs) > 0
+		if !failed {
+			for _, d := range New().Analyze(journal).Diagnostics {
+				failed = failed || d.Severity == SeverityError
+			}
+			resolved := resolvedFromSources(t, journalSource{path: "/main.journal", content: input})
+			for _, d := range CheckJournalBalance(resolved, New().balanceTolerance()) {
+				failed = failed || d.Severity == SeverityError
+			}
 		}
 		assert.Equal(t, !hledgerAccepts(t, hledgerPath, input), failed, "our verdict must match hledger for:\n%s", input)
 	}

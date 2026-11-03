@@ -124,7 +124,7 @@ func collectPayeeAccountPairUsageFromResolved(resolved *include.ResolvedJournal)
 }
 
 func formatDateKey(d ast.Date) string {
-	return fmt.Sprintf("%04d-%02d-%02d", d.Year, d.Month, d.Day)
+	return fmt.Sprintf("%s-%02d-%02d", d.YearText(), d.Month, d.Day)
 }
 
 func CollectPayeeAccountLastUsed(journal *ast.Journal) map[string]string {

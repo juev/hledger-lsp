@@ -699,7 +699,7 @@ func checkUndeclaredCommodities(tx *ast.Transaction, declared map[string]bool) [
 }
 
 func validateDateTags(tx *ast.Transaction) []Diagnostic {
-	return postingDateTagDiagnostics(tx.Postings, tx.Comments, tx.Date.Year)
+	return postingDateTagDiagnostics(tx.Postings, tx.Comments, tx.Date.CalendarYear())
 }
 
 // postingDateTagDiagnostics reports the date: and date2: tags hledger refuses on
@@ -807,7 +807,7 @@ func checkAssignmentDates(tx *ast.Transaction) []Diagnostic {
 // Every bracket of the comment of a posting and of the comment lines below it is
 // checked.
 func validateBracketDates(tx *ast.Transaction) []Diagnostic {
-	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.Year)
+	return postingBracketDateDiagnostics(tx.Postings, tx.Comments, tx.Date.CalendarYear())
 }
 
 // validateRuleBracketDates reports the bracketed posting dates hledger refuses in

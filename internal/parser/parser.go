@@ -46,6 +46,7 @@ type ParseError struct {
 // Its fields stay private so callers can only pass snapshots returned by parser.
 type Context struct {
 	defaultYear                 int
+	defaultYearDigits           string
 	decimalMark                 string
 	decimalMarkExplicit         bool
 	defaultCommodityDecimalMark string
@@ -60,6 +61,7 @@ type Context struct {
 // same way.
 func (c Context) Equal(other Context) bool {
 	return c.defaultYear == other.defaultYear &&
+		c.defaultYearDigits == other.defaultYearDigits &&
 		c.decimalMark == other.decimalMark &&
 		c.decimalMarkExplicit == other.decimalMarkExplicit &&
 		c.defaultCommodityDecimalMark == other.defaultCommodityDecimalMark &&
@@ -122,10 +124,13 @@ func (e ParseError) Error() string {
 }
 
 type Parser struct {
-	lexer                        *Lexer
-	current                      Token
-	errors                       []ParseError
-	defaultYear                  int
+	lexer       *Lexer
+	current     Token
+	errors      []ParseError
+	defaultYear int
+	// defaultYearDigits is the Y year when it is too large for an int; see
+	// ast.Date.YearDigits.
+	defaultYearDigits            string
 	decimalMark                  string
 	decimalMarkExplicit          bool
 	commodityDecimalMarks        map[string]string
@@ -183,6 +188,7 @@ func ParseWithContext(input string, initial Context, resolve IncludeResolver) (P
 		lexer:                        NewLexer(input),
 		inputLen:                     len(input),
 		defaultYear:                  context.defaultYear,
+		defaultYearDigits:            context.defaultYearDigits,
 		decimalMark:                  context.decimalMark,
 		decimalMarkExplicit:          context.decimalMarkExplicit,
 		defaultCommodityDecimalMark:  context.defaultCommodityDecimalMark,
@@ -361,7 +367,7 @@ func (p *Parser) parseTransaction() *ast.Transaction {
 
 func (p *Parser) parsePeriodicTransaction() *ast.PeriodicTransaction {
 	ptx := &ast.PeriodicTransaction{
-		Year:     p.partialDateYear(),
+		Year:     p.partialDateYear().CalendarYear(),
 		Postings: make([]ast.Posting, 0, 3),
 	}
 	ptx.Range.Start = toASTPosition(p.current.Pos)
@@ -548,12 +554,13 @@ func (p *Parser) isMultiplier() bool {
 }
 
 // partialDateYear returns the year a date written without one is read in here:
-// the Y directive in force, else the current year.
-func (p *Parser) partialDateYear() int {
+// the Y directive in force, else the current year. Only the year of the result
+// is set.
+func (p *Parser) partialDateYear() ast.Date {
 	if p.defaultYear != 0 {
-		return p.defaultYear
+		return ast.Date{Year: p.defaultYear, YearDigits: p.defaultYearDigits}
 	}
-	return defaultYearForPartialDates()
+	return ast.Date{Year: defaultYearForPartialDates()}
 }
 
 func (p *Parser) parseDate() *ast.Date {
@@ -581,7 +588,7 @@ func (p *Parser) parseDate() *ast.Date {
 	case 2:
 		// hledger accepts a date without a year (a "smart date") and fills in
 		// the current year; it does not require a Y directive.
-		year := p.partialDateYear()
+		date := p.partialDateYear()
 		month, err := strconv.Atoi(parts[0])
 		if err != nil {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid month: %s", parts[0])
@@ -592,19 +599,17 @@ func (p *Parser) parseDate() *ast.Date {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid day: %s", parts[1])
 			return nil
 		}
-		if !IsValidCalendarDate(year, month, day) {
+		date.Month, date.Day = month, day
+		if !IsValidCalendarDate(date.CalendarYear(), month, day) {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date: %s", value)
 			return nil
 		}
-		return &ast.Date{
-			Year:  year,
-			Month: month,
-			Day:   day,
-			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
-		}
+		date.Range = ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)}
+		return &date
 	case 3:
-		year, err := strconv.Atoi(parts[0])
-		if err != nil {
+		// hledger reads a year of any length.
+		year, yearDigits, ok := ast.ParseYear(parts[0])
+		if !ok {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid year: %s", parts[0])
 			return nil
 		}
@@ -618,16 +623,18 @@ func (p *Parser) parseDate() *ast.Date {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid day: %s", parts[2])
 			return nil
 		}
-		if !IsValidCalendarDate(year, month, day) {
+		date := ast.Date{
+			Year:       year,
+			Month:      month,
+			Day:        day,
+			YearDigits: yearDigits,
+			Range:      ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
+		}
+		if !IsValidCalendarDate(date.CalendarYear(), month, day) {
 			p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date: %s", value)
 			return nil
 		}
-		return &ast.Date{
-			Year:  year,
-			Month: month,
-			Day:   day,
-			Range: ast.Range{Start: toASTPosition(pos), End: toASTPosition(end)},
-		}
+		return &date
 	default:
 		p.errorCodeAt(CodeInvalidDate, pos, end, "invalid date format: %s", value)
 		return nil
@@ -2150,14 +2157,15 @@ func (p *Parser) parseYearDirective(startPos Position) ast.Directive {
 		return nil
 	}
 
-	year, err := strconv.Atoi(p.current.Value)
-	if err != nil || year < 1 || year > 9999 {
+	// hledger accepts a year of any length, but not year 0.
+	year, yearDigits, ok := ast.ParseYear(p.current.Value)
+	if !ok || year < 1 {
 		p.error("invalid year: %s", p.current.Value)
 		p.skipToNextLine()
 		return nil
 	}
 
-	p.defaultYear = year
+	p.defaultYear, p.defaultYearDigits = year, yearDigits
 	dir := ast.YearDirective{
 		Year:  year,
 		Range: ast.Range{Start: toASTPosition(startPos)},
@@ -2379,6 +2387,7 @@ func (p *Parser) context() Context {
 func (p *Parser) liveContext() Context {
 	return Context{
 		defaultYear:                 p.defaultYear,
+		defaultYearDigits:           p.defaultYearDigits,
 		decimalMark:                 p.decimalMark,
 		decimalMarkExplicit:         p.decimalMarkExplicit,
 		defaultCommodityDecimalMark: p.defaultCommodityDecimalMark,
@@ -2425,6 +2434,7 @@ func (p *Parser) mergeExports(exports ContextExports) {
 func cloneContext(context Context) Context {
 	return Context{
 		defaultYear:                 context.defaultYear,
+		defaultYearDigits:           context.defaultYearDigits,
 		decimalMark:                 context.decimalMark,
 		decimalMarkExplicit:         context.decimalMarkExplicit,
 		defaultCommodityDecimalMark: context.defaultCommodityDecimalMark,

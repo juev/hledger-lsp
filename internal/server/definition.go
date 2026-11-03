@@ -295,13 +295,7 @@ func pathToURI(path string) uri.URI {
 }
 
 func compareDates(a, b ast.Date) int {
-	if a.Year != b.Year {
-		return a.Year - b.Year
-	}
-	if a.Month != b.Month {
-		return a.Month - b.Month
-	}
-	return a.Day - b.Day
+	return a.Compare(b)
 }
 
 func sortedJournalPaths(journals map[string]*ast.Journal) []string {
