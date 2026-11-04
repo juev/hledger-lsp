@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/juev/hledger-lsp/internal/testutil"
 	"github.com/juev/hledger-lsp/internal/textutil"
 )
 
@@ -51,12 +53,31 @@ func TestFormatDocument_LinesUpBalanceAssertions(t *testing.T) {
 		"",
 	}, "\n")
 
-	once := formatForOracle(t, input)
-	assert.Equal(t, want, once)
-	assert.Equal(t, once, formatForOracle(t, once), "formatting must be idempotent")
+	assertFormatsTo(t, input, want)
+}
 
-	crlf := strings.ReplaceAll(input, "\n", "\r\n")
-	assert.Equal(t, once, formatForOracle(t, textutil.NormalizeLineEndings(crlf)))
+// Assertions whose operators start in one column line up on their decimal
+// points whichever operator they use, `=`, `==`, `=*` or `==*`; the padding
+// after a wider operator is narrower.
+func TestFormatDocument_LinesUpMixedAssertionOperators(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-01-01 * Mixed",
+		"    資産:a  1.00 USD = 1.00 USD",
+		"    капитал:b  100.00 USD == 100.00 USD",
+		"    c  10.00 USD =* 10.00 USD",
+		"    d  -111.00 USD ==* -111.00 USD",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-01-01 * Mixed",
+		"    資産:a        1.00 USD =      1.00 USD",
+		"    капитал:b   100.00 USD ==   100.00 USD",
+		"    c            10.00 USD =*    10.00 USD",
+		"    d          -111.00 USD ==* -111.00 USD",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
 }
 
 // The postings of a transaction that carry a cost line their `@` and `@@` up in
@@ -97,6 +118,82 @@ func TestFormatDocument_LinesUpCostSigns(t *testing.T) {
 		"",
 	}, "\n")
 
+	assertFormatsTo(t, input, want)
+}
+
+// Cost postings that also assert a balance line up their signs and costs, and
+// the assertions after them line up on their decimal points.
+func TestFormatDocument_LinesUpCostsAndTheirAssertions(t *testing.T) {
+	input := strings.Join([]string{
+		"commodity 1,000.00 USD",
+		"commodity 1,000.000 VOO",
+		"",
+		"2026-06-19 * Rebalance",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD = 10.000 VOO",
+		"    капитал:акции  12.5 AAPL @ 150.00 USD == 112.5 AAPL",
+		"    assets:cash",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"commodity 1,000.00 USD",
+		"commodity 1,000.000 VOO",
+		"",
+		"2026-06-19 * Rebalance",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD =   10.000 VOO",
+		"    капитал:акции   12.5 AAPL  @    150.00 USD == 112.5 AAPL",
+		"    assets:cash",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// Lining up assertions and costs changes only the layout: hledger reads the same
+// amounts, costs and assertions before and after formatting.
+func TestOracle_AssertionAndCostAlignmentKeepHledgerMeaning(t *testing.T) {
+	hledgerPath := testutil.RequireHledger(t)
+
+	journals := map[string]string{
+		"mixed operators": strings.Join([]string{
+			"2026-01-01 * Open",
+			"    資産:a  1.00 USD",
+			"    капитал:b  100.00 USD",
+			"    c  10.00 USD",
+			"    d  -111.00 USD",
+			"",
+			"2026-01-02 * Check",
+			"    資産:a  0 USD = 1.00 USD",
+			"    капитал:b  0 USD == 100.00 USD",
+			"    c  0 USD =* 10.00 USD",
+			"    d  0 USD ==* -111.00 USD",
+			"",
+		}, "\n"),
+		"costs with assertions": strings.Join([]string{
+			"2026-06-19 * Rebalance",
+			"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD = -3.000 VOO",
+			"    капитал:акции  12.5 AAPL @ 150.00 USD == 12.5 AAPL",
+			"    assets:cash",
+			"",
+		}, "\n"),
+	}
+	for name, input := range journals {
+		t.Run(name, func(t *testing.T) {
+			before, accepted := testutil.HledgerMeaning(t, hledgerPath, input)
+			require.True(t, accepted, "hledger must accept the journal:\n%s", input)
+
+			once := formatForOracle(t, input)
+			after, accepted := testutil.HledgerMeaning(t, hledgerPath, once)
+			require.True(t, accepted, "hledger must accept the formatted journal:\n%s", once)
+			assert.Equal(t, before, after, "formatted journal:\n%s", once)
+			assert.Equal(t, once, formatForOracle(t, once), "format(format(x)) must equal format(x)")
+		})
+	}
+}
+
+// assertFormatsTo checks that input formats to want, that formatting it again
+// changes nothing, and that its CRLF spelling formats the same.
+func assertFormatsTo(t *testing.T, input, want string) {
+	t.Helper()
 	once := formatForOracle(t, input)
 	assert.Equal(t, want, once)
 	assert.Equal(t, once, formatForOracle(t, once), "formatting must be idempotent")

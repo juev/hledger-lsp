@@ -463,6 +463,47 @@ func HledgerRead(t *testing.T, hledgerPath, input string) HledgerAmount {
 	return decodeHledgerAmount(t, cmd)
 }
 
+// HledgerMeaning returns the transactions hledger reads from the journal on
+// stdin, with what layout may change left out: where each part is written and
+// the style its numbers are written in. Two journals that differ only in layout
+// have equal meanings. The second result is false when hledger rejects the
+// journal.
+func HledgerMeaning(t *testing.T, hledgerPath, input string) (any, bool) {
+	t.Helper()
+	cmd := exec.Command(hledgerPath, "-f", "-", "print", "-O", "json")
+	cmd.Stdin = strings.NewReader(input)
+	var stdout strings.Builder
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil, false
+	}
+
+	var transactions any
+	decoder := json.NewDecoder(strings.NewReader(stdout.String()))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&transactions))
+	return withoutLayout(transactions), true
+}
+
+// withoutLayout drops the source positions and number styles from hledger's
+// JSON.
+func withoutLayout(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for _, key := range []string{"tsourcepos", "baposition", "astyle"} {
+			delete(v, key)
+		}
+		for key, field := range v {
+			v[key] = withoutLayout(field)
+		}
+	case []any:
+		for i := range v {
+			v[i] = withoutLayout(v[i])
+		}
+	}
+	return value
+}
+
 // HledgerReadFile returns how hledger reads the journal at path, with its includes.
 func HledgerReadFile(t *testing.T, hledgerPath, path string) HledgerAmount {
 	t.Helper()

@@ -289,7 +289,9 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
 		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings, commodityFormats) {
-			if endCol := detectExistingAmountEndColumn(lines, detectable, commodityFormats, target); endCol > 0 {
+			// Detection finds nothing when every amount is in a cost group,
+			// which still lines up by its end column.
+			if endCol := detectExistingAmountEndColumn(lines, detectable, commodityFormats, target); endCol > 0 || len(detectable) < len(postings) {
 				rule.naturalEndCol = naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
 				rule.settleEnd = true
 				globalAmountEndCol = max(rule.naturalEndCol, endCol)
@@ -1248,12 +1250,13 @@ func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats 
 }
 
 // assertionPadding returns the spaces each balance assertion written after an
-// amount takes after its `=`, so that within a transaction the decimal points of
-// the assertions whose `=` share a column line up, the way the amounts before
-// them do. Assertions whose `=` land in different columns, after amounts of
-// different widths or a lot price, are left alone rather than opening wide
-// gaps. An assignment, with no amount, keeps its `=` in the amount column and
-// takes no part.
+// amount takes after its operator, so that within a transaction the decimal
+// points of the assertions whose operators start in one column line up, the way
+// the amounts before them do, whichever of `=`, `==`, `=*` and `==*` they use.
+// Assertions whose operators land in different columns, after amounts of
+// different widths or a lot price, are left alone rather than opening wide gaps.
+// An assignment, with no amount, keeps its `=` in the amount column and takes no
+// part.
 func assertionPadding(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]int {
 	indent := strings.Repeat(" ", opts.IndentSize)
 	padding := make(map[int]int)
@@ -1261,16 +1264,15 @@ func assertionPadding(journal *ast.Journal, alignment AlignmentInfo, commodityFo
 		type asserted struct {
 			offset, decimal int
 		}
-		// The asserted amounts by the column they start at, which is the same
-		// for every `=` in one column.
+		// The asserted amounts by the column their operator starts at.
 		groups := make(map[int][]asserted)
 		for i := range postings {
 			posting := &postings[i]
 			if posting.Amount == nil || posting.BalanceAssertion == nil || posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
 				continue
 			}
-			_, start := renderPosting(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
-			groups[start] = append(groups[start], asserted{posting.Range.Start.Offset, start + calculateSingleAmountDecimalPrefix(&posting.BalanceAssertion.Amount, commodityFormats)})
+			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			groups[columns.operator] = append(groups[columns.operator], asserted{posting.Range.Start.Offset, columns.assertion + calculateSingleAmountDecimalPrefix(&posting.BalanceAssertion.Amount, commodityFormats)})
 		}
 		for _, group := range groups {
 			column := 0
@@ -1310,7 +1312,7 @@ func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityForma
 // postingColumns are the display columns where the parts of a rendered posting
 // start; 0 for a part it does not have.
 type postingColumns struct {
-	head, cost, assertion int
+	head, cost, operator, assertion int
 }
 
 // renderPostingColumns is renderPosting with the columns of every part.
@@ -1372,6 +1374,7 @@ func renderPostingColumns(posting *ast.Posting, alignment AlignmentInfo, commodi
 			}
 		}
 		sb.WriteString(strings.Repeat(" ", spaces))
+		columns.operator = displayWidth(sb.String())
 
 		switch {
 		case posting.BalanceAssertion.IsStrict && posting.BalanceAssertion.IsInclusive:
