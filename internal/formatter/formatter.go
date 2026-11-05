@@ -116,21 +116,22 @@ type AlignmentInfo struct {
 	// and every amount in the document has a right-side commodity (issue
 	// #25). Zero disables end-column alignment.
 	AmountEndCol int
-	// AssertionPadding holds the spaces written after the `=` of a balance
+	// AssertionPadding holds the spaces written after the operator of a balance
 	// assertion, by the offset its posting starts at, so that the decimal points
 	// of the assertions written after an amount line up within a transaction.
 	AssertionPadding map[int]int
-	// CostLayout places the amounts and the `@`/`@@` of the postings with a cost,
-	// by the offset each posting starts at, so that within a transaction the
-	// signs share a column and the amounts before them line up.
+	// CostLayout places the amounts, lot annotations and `@`/`@@` of the
+	// postings with a cost or a lot annotation, by the offset each posting
+	// starts at, so that within a transaction the amounts, the lot annotations
+	// and the signs each share a column.
 	CostLayout map[int]CostPlacement
 }
 
-// CostPlacement is where a posting with a cost writes its parts: the spaces
-// between account and amount, between amount and `@`/`@@`, and between the sign
-// and the cost.
+// CostPlacement is where a posting in a cost group writes its parts: the spaces
+// between account and amount, between amount and lot annotation, between what
+// comes before the `@`/`@@` and the sign, and between the sign and the cost.
 type CostPlacement struct {
-	AmountGap, BeforeSign, AfterSign int
+	AmountGap, BeforeLot, BeforeSign, AfterSign int
 }
 
 func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
@@ -1117,26 +1118,17 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	return text
 }
 
-// outsideCostGroups returns the postings that are not in a lined-up cost group:
-// postings with a cost after an amount, and no lot price, two or more to a
-// transaction. costLayout places those, so where they are written says nothing
-// about the document's columns.
+// outsideCostGroups returns the postings that are not in a lined-up cost group
+// (see costGroup). costLayout places those, so where they are written says
+// nothing about the document's columns.
 func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target string) []ast.Posting {
 	if normalizeAlignTarget(target) != AlignTargetCost {
 		return postings
 	}
 	grouped := make(map[int]bool)
-	mark := func(group []ast.Posting) {
-		var members []int
-		for i := range group {
-			if inCostGroup(&group[i]) {
-				members = append(members, group[i].Range.Start.Offset)
-			}
-		}
-		if len(members) >= 2 {
-			for _, offset := range members {
-				grouped[offset] = true
-			}
+	mark := func(postings []ast.Posting) {
+		for _, posting := range costGroup(postings) {
+			grouped[posting.Range.Start.Offset] = true
 		}
 	}
 	for i := range journal.Transactions {
@@ -1160,22 +1152,41 @@ func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target stri
 	return rest
 }
 
-// inCostGroup reports whether a posting takes part in lining up the costs of its
-// transaction.
-func inCostGroup(posting *ast.Posting) bool {
-	return posting.Amount != nil && posting.Cost != nil && posting.LotPrice == nil && !posting.Multiplier &&
-		posting.UnparsedTail.End.Offset <= posting.UnparsedTail.Start.Offset
+// costGroup returns the postings of a transaction that line up their costs and
+// lot annotations: the postings with a cost or a lot annotation after an
+// amount, when there are two or more and at least one has a cost.
+func costGroup(postings []ast.Posting) []*ast.Posting {
+	var group []*ast.Posting
+	costs := 0
+	for i := range postings {
+		posting := &postings[i]
+		if posting.Amount == nil || (posting.Cost == nil && posting.LotPrice == nil) || posting.Multiplier ||
+			posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
+			continue
+		}
+		group = append(group, posting)
+		if posting.Cost != nil {
+			costs++
+		}
+	}
+	if len(group) < 2 || costs == 0 {
+		return nil
+	}
+	return group
 }
 
-// costLayout returns the placement of the amounts and cost signs of each
-// transaction with two or more postings that carry a cost after an amount. The
-// costs stay where the alignment puts them, lined up with the other amounts;
-// the signs move to the rightmost column every cost still fits after, and the
-// amounts before them line up on their decimal points, ending a space before
-// it. When the amounts would then come closer to their accounts than the gap
-// allows, as a wide amount with a narrow cost beside a narrow amount with a wide
-// one can, the transaction's signs and costs move right together to make room.
-// A transaction with a lot price keeps the layout each posting has on its own.
+// costLayout returns the placement of the amounts, lot annotations and cost
+// signs of each transaction's cost group (see costGroup). The costs stay where
+// the alignment puts them, lined up with the other amounts; the signs move to
+// the rightmost column every cost still fits after. The lot annotations of the
+// postings with a cost end a space before the signs, starting in one column
+// with the numbers in them lined up on their decimal points, and the amounts
+// before them line up on their decimal points, ending a space before the
+// annotations. A lot annotation on a posting without a cost takes the same
+// column but does not move the signs. When the amounts would then come closer
+// to their accounts than the gap allows, as a wide amount with a narrow cost
+// beside a narrow amount with a wide one can, the transaction's columns move
+// right together to make room.
 func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]CostPlacement {
 	if normalizeAlignTarget(target) != AlignTargetCost {
 		return nil
@@ -1183,55 +1194,99 @@ func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats 
 	indent := strings.Repeat(" ", opts.IndentSize)
 	layout := make(map[int]CostPlacement)
 	lineUp := func(postings []ast.Posting) {
-		type costed struct {
-			offset           int
-			head, cost, sign int
-			integer, width   int
+		type member struct {
+			offset         int
+			head           int
+			integer, width int
+			// The cost's column and its sign's width, 0 without a cost.
+			cost, sign int
+			// The lot annotation's width, 0 without one, and the width before
+			// the decimal point of its number, -1 without one.
+			lot, lotInteger int
 		}
-		var group []costed
-		for i := range postings {
-			posting := &postings[i]
-			if !inCostGroup(posting) {
-				continue
-			}
-			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
-			sign := 1
-			if posting.Cost.IsTotal {
-				sign = 2
-			}
-			group = append(group, costed{
-				offset:  posting.Range.Start.Offset,
-				head:    columns.head,
-				cost:    columns.cost,
-				sign:    sign,
-				integer: calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats),
-				width:   displayWidth(FormatAmount(posting.Amount, commodityFormats)),
-			})
-		}
-		if len(group) < 2 {
+		group := costGroup(postings)
+		if group == nil {
 			return
 		}
-		// The sign column, and the decimal column of the amounts before it.
-		signAt := group[0].cost - group[0].sign - 1
-		fraction := 0
-		for _, c := range group {
-			signAt = min(signAt, c.cost-c.sign-1)
-			fraction = max(fraction, c.width-c.integer)
+		members := make([]member, 0, len(group))
+		for _, posting := range group {
+			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			m := member{
+				offset:     posting.Range.Start.Offset,
+				head:       columns.head,
+				integer:    calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats),
+				width:      displayWidth(FormatAmount(posting.Amount, commodityFormats)),
+				lotInteger: -1,
+			}
+			if posting.LotPrice != nil {
+				m.lot = displayWidth(lotAnnotation(posting.LotPrice, commodityFormats))
+				m.lotInteger = lotDecimalPrefix(posting.LotPrice, commodityFormats)
+			}
+			if posting.Cost != nil {
+				m.sign = 1
+				if posting.Cost.IsTotal {
+					m.sign = 2
+				}
+				// The alignment leaves the lot annotation out, so it pushes the
+				// cost right by its width and the space before it.
+				m.cost = columns.cost
+				if m.lot > 0 {
+					m.cost -= m.lot + 1
+				}
+			}
+			members = append(members, m)
 		}
-		decimal := signAt - 1 - fraction
+
+		// The sign column, and the column the lot annotations' decimal points
+		// sit after their start.
+		signAt, lotInteger := 0, 0
+		for _, m := range members {
+			if m.cost > 0 && (signAt == 0 || m.cost-m.sign-1 < signAt) {
+				signAt = m.cost - m.sign - 1
+			}
+			lotInteger = max(lotInteger, m.lotInteger)
+		}
+		// lotEnd is where a lot annotation ends after the annotations' column.
+		lotEnd := func(m member) int {
+			if m.lotInteger < 0 {
+				return m.lot
+			}
+			return lotInteger - m.lotInteger + m.lot
+		}
+		// The end of the amounts: a space before the signs, or before the
+		// annotations of the postings with a cost.
+		amountEnd := signAt - 1
+		for _, m := range members {
+			if m.cost > 0 && m.lot > 0 {
+				amountEnd = min(amountEnd, signAt-2-lotEnd(m))
+			}
+		}
+		fraction := 0
+		for _, m := range members {
+			fraction = max(fraction, m.width-m.integer)
+		}
+		decimal := amountEnd - fraction
 		shift := 0
-		for _, c := range group {
-			shift = max(shift, c.head+minSpaces-(decimal-c.integer))
+		for _, m := range members {
+			shift = max(shift, m.head+minSpaces-(decimal-m.integer))
 		}
 		decimal += shift
 		signAt += shift
-		for _, c := range group {
-			amountStart := decimal - c.integer
-			layout[c.offset] = CostPlacement{
-				AmountGap:  amountStart - c.head,
-				BeforeSign: signAt - (amountStart + c.width),
-				AfterSign:  c.cost + shift - (signAt + c.sign) - 1,
+		lots := decimal + fraction + 1
+		for _, m := range members {
+			amountStart := decimal - m.integer
+			placement := CostPlacement{AmountGap: amountStart - m.head}
+			end := amountStart + m.width
+			if m.lot > 0 {
+				lotStart := lots + lotEnd(m) - m.lot
+				placement.BeforeLot = lotStart - end
+				end = lotStart + m.lot
 			}
+			if m.cost > 0 {
+				placement.BeforeSign = signAt - end
+				placement.AfterSign = m.cost + shift - (signAt + m.sign) - 1
+			}
+			layout[m.offset] = placement
 		}
 	}
 	for i := range journal.Transactions {
@@ -1247,6 +1302,29 @@ func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats 
 		return nil
 	}
 	return layout
+}
+
+// lotAnnotation renders a lot annotation without the space before it.
+func lotAnnotation(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) string {
+	var sb strings.Builder
+	writeLotPrice(&sb, lot, commodityFormats)
+	return strings.TrimPrefix(sb.String(), " ")
+}
+
+// lotDecimalPrefix returns the width of a lot annotation before the decimal
+// point of its number, or -1 when it has no number.
+func lotDecimalPrefix(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) int {
+	if lot.Cost == nil {
+		return -1
+	}
+	open := 1
+	if lot.IsTotal {
+		open = 2
+	}
+	if lot.Fixed {
+		open++
+	}
+	return open + calculateSingleAmountDecimalPrefix(lot.Cost, commodityFormats)
 }
 
 // assertionPadding returns the spaces each balance assertion written after an
@@ -1345,7 +1423,12 @@ func renderPostingColumns(posting *ast.Posting, alignment AlignmentInfo, commodi
 	}
 
 	if posting.LotPrice != nil {
-		writeLotPrice(&sb, posting.LotPrice, commodityFormats)
+		if placed {
+			sb.WriteString(strings.Repeat(" ", placement.BeforeLot))
+			sb.WriteString(lotAnnotation(posting.LotPrice, commodityFormats))
+		} else {
+			writeLotPrice(&sb, posting.LotPrice, commodityFormats)
+		}
 	}
 
 	if posting.Cost != nil {

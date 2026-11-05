@@ -148,9 +148,127 @@ func TestFormatDocument_LinesUpCostsAndTheirAssertions(t *testing.T) {
 	assertFormatsTo(t, input, want)
 }
 
-// Lining up assertions and costs changes only the layout: hledger reads the same
-// amounts, costs and assertions before and after formatting.
-func TestOracle_AssertionAndCostAlignmentKeepHledgerMeaning(t *testing.T) {
+// A lot price beside plain costs starts its own column after the amounts, and
+// the signs move past it.
+func TestFormatDocument_LinesUpLotPricesBesideCosts(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-06-19 * Lot price beside plain costs",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+		"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+		"    капитал:лот  2 VOO {1.00 USD} @ 2.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-06-19 * Lot price beside plain costs",
+		"    資産:brokerage  -3.000 VOO            @@ 2,064.75 USD",
+		"    資産:brokerage  12.5 AAPL             @    150.00 USD",
+		"    капитал:лот      2 VOO     {1.00 USD} @      2.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// Unit, total and fixed lot prices line up on the decimal points of their
+// numbers, with the `{{` and `{=` reaching left of the `{`.
+func TestFormatDocument_LinesUpUnitTotalAndFixedLotPrices(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-06-20 * Unit, total and fixed lot prices",
+		"    資産:lots  10 VOO {100.00 USD} @ 120.00 USD",
+		"    資産:lots  5 VOO {{550.00 USD}} @@ 600.00 USD",
+		"    капитал:лот  -2 VOO {=200.00 USD} @ 130.00 USD",
+		"    資産:lots  3 VOO {1.00 USD} @ 2.00 USD",
+		"    income:gains",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-06-20 * Unit, total and fixed lot prices",
+		"    資産:lots    10 VOO  {100.00 USD}  @  120.00 USD",
+		"    資産:lots     5 VOO {{550.00 USD}} @@ 600.00 USD",
+		"    капитал:лот  -2 VOO {=200.00 USD}  @  130.00 USD",
+		"    資産:lots     3 VOO    {1.00 USD}  @    2.00 USD",
+		"    income:gains",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// A lot price on a posting without a cost takes the lot column but does not
+// move the signs of the postings with a cost, and leaves no empty cost column.
+func TestFormatDocument_LotPriceWithoutCostLeavesTheSignsAlone(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-06-21 * Lot price without a cost",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+		"    капитал:лот  2 VOO {1.00 USD}",
+		"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-06-21 * Lot price without a cost",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+		"    капитал:лот      2 VOO     {1.00 USD}",
+		"    資産:brokerage  12.5 AAPL  @    150.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// A lot annotation's date and label are part of it, so a long one moves the
+// signs and costs of its transaction right.
+func TestFormatDocument_LinesUpLongLotAnnotations(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-06-22 * Long annotation",
+		"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+		"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+		"    капитал:лот  2 VOO {1.00 USD} [2026-01-15] (транш A) @ 2.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-06-22 * Long annotation",
+		"    資産:brokerage  -3.000 VOO                                   @@ 2,064.75 USD",
+		"    資産:brokerage  12.5 AAPL                                    @    150.00 USD",
+		"    капитал:лот      2 VOO     {1.00 USD} [2026-01-15] (транш A) @      2.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// A lot annotation without a number, an empty `{}` or only a date, starts where
+// the lot column does.
+func TestFormatDocument_LotAnnotationsWithoutANumber(t *testing.T) {
+	input := strings.Join([]string{
+		"2026-06-23 * Annotations without a number",
+		"    資産:lots  2 VOO {} @ 2.00 USD",
+		"    資産:lots  3 VOO [2026-01-15] @ 3.00 USD",
+		"    капитал:лот  4 VOO {10.00 USD} @ 4.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"2026-06-23 * Annotations without a number",
+		"    資産:lots    2 VOO {}           @ 2.00 USD",
+		"    資産:lots    3 VOO [2026-01-15] @ 3.00 USD",
+		"    капитал:лот  4 VOO {10.00 USD}  @ 4.00 USD",
+		"    assets:cash",
+		"",
+	}, "\n")
+
+	assertFormatsTo(t, input, want)
+}
+
+// Lining up assertions, costs and lot prices changes only the layout: hledger
+// reads the same amounts, costs, lot annotations and assertions before and after
+// formatting.
+func TestOracle_AssertionCostAndLotAlignmentKeepHledgerMeaning(t *testing.T) {
 	hledgerPath := testutil.RequireHledger(t)
 
 	journals := map[string]string{
@@ -172,6 +290,39 @@ func TestOracle_AssertionAndCostAlignmentKeepHledgerMeaning(t *testing.T) {
 			"2026-06-19 * Rebalance",
 			"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD = -3.000 VOO",
 			"    капитал:акции  12.5 AAPL @ 150.00 USD == 12.5 AAPL",
+			"    assets:cash",
+			"",
+		}, "\n"),
+		"lot prices": strings.Join([]string{
+			"2026-06-19 * Lot price beside plain costs",
+			"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+			"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+			"    капитал:лот  2 VOO {1.00 USD} @ 2.00 USD",
+			"    assets:cash",
+			"",
+			"2026-06-20 * Unit, total and fixed lot prices",
+			"    資産:lots  10 VOO {100.00 USD} @ 120.00 USD",
+			"    資産:lots  5 VOO {{550.00 USD}} @@ 600.00 USD",
+			"    капитал:лот  -2 VOO {=200.00 USD} @ 130.00 USD",
+			"    資産:lots  3 VOO {1.00 USD} @ 2.00 USD",
+			"    income:gains",
+			"",
+			"2026-06-21 * Lot price without a cost",
+			"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+			"    капитал:лот  2 VOO {1.00 USD}",
+			"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+			"    assets:cash",
+			"",
+			"2026-06-22 * Long annotation",
+			"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+			"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+			"    капитал:лот  2 VOO {1.00 USD} [2026-01-15] (транш A) @ 2.00 USD",
+			"    assets:cash",
+			"",
+			"2026-06-23 * Annotations without a number",
+			"    資産:lots  2 VOO {} @ 2.00 USD",
+			"    資産:lots  3 VOO [2026-01-15] @ 3.00 USD",
+			"    капитал:лот  4 VOO {10.00 USD} @ 4.00 USD",
 			"    assets:cash",
 			"",
 		}, "\n"),
