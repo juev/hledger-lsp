@@ -31,7 +31,7 @@ A Language Server Protocol (LSP) implementation for [hledger](https://hledger.or
 - `hledger.diagnostics.accountCheck` mirrors `hledger --strict` when you want declaration checks
 
 ### Other
-- **Formatting** — Automatic alignment of amounts (left-, right-, or decimal-point aligned), with hand-aligned inline comment columns preserved and periodic (`~`) and auto (`=`) rule blocks formatted too
+- **Formatting** — Automatic alignment of amounts (left-, right-, or decimal-point aligned), balance assertions lined up on their decimal points within a transaction, the `@`/`@@` of a transaction's costs and its lot prices each in one column, hand-aligned inline comment columns preserved, and periodic (`~`) and auto (`=`) rule blocks formatted too
 - **Hover** — Account balances on hover
 - **Semantic Tokens** — Syntax highlighting with delta support
 - **Document Symbols** — Outline navigation

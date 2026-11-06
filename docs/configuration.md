@@ -207,6 +207,16 @@ A posting with cost notation has two amounts (`2.36 EUR @@ 3.12 USD`). `amountAl
     assets:cash                    -3.12 USD
 ```
 
+When a transaction has two or more postings with a cost or a lot annotation, and at least one has a cost, they are lined up together. The amounts line up on their decimal points, the lot annotations (`{...}`, `{{...}}`, `{=...}` with any `[date]` and `(label)`) start in one column with their numbers lined up, and the `@`/`@@` share a column before the costs. A lot annotation on a posting without a cost does not move the `@`/`@@`:
+
+```text
+2026-06-19 * Rebalance
+    assets:brokerage  -3.000 VOO            @@ 2,064.75 USD
+    assets:brokerage  12.5 AAPL             @    150.00 USD
+    assets:lots        2 VOO     {1.00 USD} @      2.00 USD
+    assets:cash
+```
+
 With `"posting"`, the posting (first) amount is aligned and the cost annotation trails freely (matches hledger 2.x `print`):
 
 ```json

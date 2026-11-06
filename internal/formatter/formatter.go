@@ -116,6 +116,22 @@ type AlignmentInfo struct {
 	// and every amount in the document has a right-side commodity (issue
 	// #25). Zero disables end-column alignment.
 	AmountEndCol int
+	// AssertionPadding holds the spaces written after the operator of a balance
+	// assertion, by the offset its posting starts at, so that the decimal points
+	// of the assertions written after an amount line up within a transaction.
+	AssertionPadding map[int]int
+	// CostLayout places the amounts, lot annotations and `@`/`@@` of the
+	// postings with a cost or a lot annotation, by the offset each posting
+	// starts at, so that within a transaction the amounts, the lot annotations
+	// and the signs each share a column.
+	CostLayout map[int]CostPlacement
+}
+
+// CostPlacement is where a posting in a cost group writes its parts: the spaces
+// between account and amount, between amount and lot annotation, between what
+// comes before the `@`/`@@` and the sign, and between the sign and the cost.
+type CostPlacement struct {
+	AmountGap, BeforeLot, BeforeSign, AfterSign int
 }
 
 func FormatDocument(journal *ast.Journal, content string) []protocol.TextEdit {
@@ -218,6 +234,10 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	}
 
 	target := normalizeAlignTarget(opts.AmountAlignmentTarget)
+	// The columns are detected from where amounts are written, which for the
+	// postings of a lined-up cost group is where the group put them, not the
+	// document's columns, so they would move the columns on every pass.
+	detectable := outsideCostGroups(journal, postings, target)
 
 	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(postings, indentSize)
 	globalAccountCol := naturalAccountCol
@@ -236,7 +256,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 			globalDecimalCol = CalculateGlobalDecimalCol(postings, commodityFormats, globalAccountCol, target)
 			rule.naturalDecimalCol = globalDecimalCol
 			rule.settleDecimal = true
-			if detected := detectExistingDecimalColumn(lines, postings, commodityFormats, target); detected > globalDecimalCol {
+			if detected := detectExistingDecimalColumn(lines, detectable, commodityFormats, target); detected > globalDecimalCol {
 				globalDecimalCol = detected
 			}
 		}
@@ -245,7 +265,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 			globalAccountCol = opts.AmountAlignmentColumn
 		} else {
 			rule.settleAccount = true
-			if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
+			if detected := detectExistingAmountColumn(lines, detectable); detected > globalAccountCol {
 				globalAccountCol = detected
 			}
 		}
@@ -254,7 +274,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// Smart detection: if the file already has hand-aligned
 		// amounts, use the most common existing start column as the
 		// base. Decimal mode uses decimal-target detection instead.
-		if detected := detectExistingAmountColumn(lines, postings); detected > globalAccountCol {
+		if detected := detectExistingAmountColumn(lines, detectable); detected > globalAccountCol {
 			globalAccountCol = detected
 		}
 		if opts.AmountAlignmentColumn > 0 && allAmountsCommodityRight(postings, commodityFormats) {
@@ -270,7 +290,9 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		// that setting is a start-column constraint by definition
 		// and takes priority over automatic end-column anchoring.
 		if opts.MinAlignmentColumn <= 0 && allAmountsCommodityRight(postings, commodityFormats) {
-			if endCol := detectExistingAmountEndColumn(lines, postings, commodityFormats, target); endCol > 0 {
+			// Detection finds nothing when every amount is in a cost group,
+			// which still lines up by its end column.
+			if endCol := detectExistingAmountEndColumn(lines, detectable, commodityFormats, target); endCol > 0 || len(detectable) < len(postings) {
 				rule.naturalEndCol = naturalAccountCol + calculateGlobalAlignmentTargetLen(postings, commodityFormats, target)
 				rule.settleEnd = true
 				globalAmountEndCol = max(rule.naturalEndCol, endCol)
@@ -283,8 +305,10 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 		DecimalCol:   globalDecimalCol,
 		AmountEndCol: globalAmountEndCol,
 	}
-	alignment = settleAlignment(lines, postings, alignment, rule, commodityFormats, opts, target)
+	alignment = settleAlignment(lines, detectable, alignment, rule, commodityFormats, opts, target)
 	if withComments {
+		alignment.CostLayout = costLayout(journal, alignment, commodityFormats, opts, target)
+		alignment.AssertionPadding = assertionPadding(journal, alignment, commodityFormats, opts, target)
 		alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
 	}
 	return alignment
@@ -395,7 +419,8 @@ func settleAlignment(lines []string, postings []ast.Posting, alignment Alignment
 		if rule.settleDecimal {
 			next.DecimalCol = max(rule.naturalDecimalCol, selectModalColumn(decimals))
 		}
-		if next == alignment {
+		if next.AccountCol == alignment.AccountCol && next.DecimalCol == alignment.DecimalCol &&
+			next.AmountEndCol == alignment.AmountEndCol && next.CommentColumn == alignment.CommentColumn {
 			break
 		}
 		alignment = next
@@ -1089,11 +1114,298 @@ func amountGap(posting *ast.Posting, alignment AlignmentInfo, commodityFormats m
 }
 
 func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string) string {
+	text, _ := renderPosting(posting, alignment, commodityFormats, indent, alignAmounts, target, alignment.AssertionPadding[posting.Range.Start.Offset])
+	return text
+}
+
+// outsideCostGroups returns the postings that are not in a lined-up cost group
+// (see costGroup). costLayout places those, so where they are written says
+// nothing about the document's columns.
+func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target string) []ast.Posting {
+	if normalizeAlignTarget(target) != AlignTargetCost {
+		return postings
+	}
+	grouped := make(map[int]bool)
+	mark := func(postings []ast.Posting) {
+		for _, posting := range costGroup(postings) {
+			grouped[posting.Range.Start.Offset] = true
+		}
+	}
+	for i := range journal.Transactions {
+		mark(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		mark(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		mark(journal.AutoPostingRules[i].Postings)
+	}
+	if len(grouped) == 0 {
+		return postings
+	}
+	rest := make([]ast.Posting, 0, len(postings)-len(grouped))
+	for i := range postings {
+		if !grouped[postings[i].Range.Start.Offset] {
+			rest = append(rest, postings[i])
+		}
+	}
+	return rest
+}
+
+// costGroup returns the postings of a transaction that line up their costs and
+// lot annotations: the postings with a cost or a lot annotation after an
+// amount, when there are two or more and at least one has a cost.
+func costGroup(postings []ast.Posting) []*ast.Posting {
+	var group []*ast.Posting
+	costs := 0
+	for i := range postings {
+		posting := &postings[i]
+		if posting.Amount == nil || (posting.Cost == nil && posting.LotPrice == nil) || posting.Multiplier ||
+			posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
+			continue
+		}
+		group = append(group, posting)
+		if posting.Cost != nil {
+			costs++
+		}
+	}
+	if len(group) < 2 || costs == 0 {
+		return nil
+	}
+	return group
+}
+
+// costLayout returns the placement of the amounts, lot annotations and cost
+// signs of each transaction's cost group (see costGroup). The costs stay where
+// the alignment puts them, lined up with the other amounts; the signs move to
+// the rightmost column every cost still fits after. The lot annotations of the
+// postings with a cost end a space before the signs, starting in one column
+// with the numbers in them lined up on their decimal points, and the amounts
+// before them line up on their decimal points, ending a space before the
+// annotations. A lot annotation on a posting without a cost takes the same
+// column but does not move the signs. When the amounts would then come closer
+// to their accounts than the gap allows, as a wide amount with a narrow cost
+// beside a narrow amount with a wide one can, the transaction's columns move
+// right together to make room.
+func costLayout(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]CostPlacement {
+	if normalizeAlignTarget(target) != AlignTargetCost {
+		return nil
+	}
+	indent := strings.Repeat(" ", opts.IndentSize)
+	layout := make(map[int]CostPlacement)
+	lineUp := func(postings []ast.Posting) {
+		type member struct {
+			offset         int
+			head           int
+			integer, width int
+			// The cost's column and its sign's width, 0 without a cost.
+			cost, sign int
+			// The lot annotation's width, 0 without one, and the width before
+			// the decimal point of its number, -1 without one.
+			lot, lotInteger int
+		}
+		group := costGroup(postings)
+		if group == nil {
+			return
+		}
+		members := make([]member, 0, len(group))
+		for _, posting := range group {
+			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			m := member{
+				offset:     posting.Range.Start.Offset,
+				head:       columns.head,
+				integer:    calculateSingleAmountDecimalPrefix(posting.Amount, commodityFormats),
+				width:      displayWidth(FormatAmount(posting.Amount, commodityFormats)),
+				lotInteger: -1,
+			}
+			if posting.LotPrice != nil {
+				m.lot = displayWidth(lotAnnotation(posting.LotPrice, commodityFormats))
+				m.lotInteger = lotDecimalPrefix(posting.LotPrice, commodityFormats)
+			}
+			if posting.Cost != nil {
+				m.sign = 1
+				if posting.Cost.IsTotal {
+					m.sign = 2
+				}
+				// The alignment leaves the lot annotation out, so it pushes the
+				// cost right by its width and the space before it.
+				m.cost = columns.cost
+				if m.lot > 0 {
+					m.cost -= m.lot + 1
+				}
+			}
+			members = append(members, m)
+		}
+
+		// The sign column, and the column the lot annotations' decimal points
+		// sit after their start.
+		signAt, lotInteger := 0, 0
+		for _, m := range members {
+			if m.cost > 0 && (signAt == 0 || m.cost-m.sign-1 < signAt) {
+				signAt = m.cost - m.sign - 1
+			}
+			lotInteger = max(lotInteger, m.lotInteger)
+		}
+		// lotEnd is where a lot annotation ends after the annotations' column.
+		lotEnd := func(m member) int {
+			if m.lotInteger < 0 {
+				return m.lot
+			}
+			return lotInteger - m.lotInteger + m.lot
+		}
+		// The end of the amounts: a space before the signs, or before the
+		// annotations of the postings with a cost.
+		amountEnd := signAt - 1
+		for _, m := range members {
+			if m.cost > 0 && m.lot > 0 {
+				amountEnd = min(amountEnd, signAt-2-lotEnd(m))
+			}
+		}
+		fraction := 0
+		for _, m := range members {
+			fraction = max(fraction, m.width-m.integer)
+		}
+		decimal := amountEnd - fraction
+		shift := 0
+		for _, m := range members {
+			shift = max(shift, m.head+minSpaces-(decimal-m.integer))
+		}
+		decimal += shift
+		signAt += shift
+		lots := decimal + fraction + 1
+		for _, m := range members {
+			amountStart := decimal - m.integer
+			placement := CostPlacement{AmountGap: amountStart - m.head}
+			end := amountStart + m.width
+			if m.lot > 0 {
+				lotStart := lots + lotEnd(m) - m.lot
+				placement.BeforeLot = lotStart - end
+				end = lotStart + m.lot
+			}
+			if m.cost > 0 {
+				placement.BeforeSign = signAt - end
+				placement.AfterSign = m.cost + shift - (signAt + m.sign) - 1
+			}
+			layout[m.offset] = placement
+		}
+	}
+	for i := range journal.Transactions {
+		lineUp(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		lineUp(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		lineUp(journal.AutoPostingRules[i].Postings)
+	}
+	if len(layout) == 0 {
+		return nil
+	}
+	return layout
+}
+
+// lotAnnotation renders a lot annotation without the space before it.
+func lotAnnotation(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) string {
 	var sb strings.Builder
+	writeLotPrice(&sb, lot, commodityFormats)
+	return strings.TrimPrefix(sb.String(), " ")
+}
+
+// lotDecimalPrefix returns the width of a lot annotation before the decimal
+// point of its number, or -1 when it has no number.
+func lotDecimalPrefix(lot *ast.LotPrice, commodityFormats map[string]CommodityFormat) int {
+	if lot.Cost == nil {
+		return -1
+	}
+	open := 1
+	if lot.IsTotal {
+		open = 2
+	}
+	if lot.Fixed {
+		open++
+	}
+	return open + calculateSingleAmountDecimalPrefix(lot.Cost, commodityFormats)
+}
+
+// assertionPadding returns the spaces each balance assertion written after an
+// amount takes after its operator, so that within a transaction the decimal
+// points of the assertions whose operators start in one column line up, the way
+// the amounts before them do, whichever of `=`, `==`, `=*` and `==*` they use.
+// Assertions whose operators land in different columns, after amounts of
+// different widths or a lot price, are left alone rather than opening wide gaps.
+// An assignment, with no amount, keeps its `=` in the amount column and takes no
+// part.
+func assertionPadding(journal *ast.Journal, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, opts Options, target string) map[int]int {
+	indent := strings.Repeat(" ", opts.IndentSize)
+	padding := make(map[int]int)
+	lineUp := func(postings []ast.Posting) {
+		type asserted struct {
+			offset, decimal int
+		}
+		// The asserted amounts by the column their operator starts at.
+		groups := make(map[int][]asserted)
+		for i := range postings {
+			posting := &postings[i]
+			if posting.Amount == nil || posting.BalanceAssertion == nil || posting.UnparsedTail.End.Offset > posting.UnparsedTail.Start.Offset {
+				continue
+			}
+			_, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, opts.AlignAmounts, target, 0)
+			groups[columns.operator] = append(groups[columns.operator], asserted{posting.Range.Start.Offset, columns.assertion + calculateSingleAmountDecimalPrefix(&posting.BalanceAssertion.Amount, commodityFormats)})
+		}
+		for _, group := range groups {
+			column := 0
+			for _, a := range group {
+				column = max(column, a.decimal)
+			}
+			for _, a := range group {
+				if column > a.decimal {
+					padding[a.offset] = column - a.decimal
+				}
+			}
+		}
+	}
+	for i := range journal.Transactions {
+		lineUp(journal.Transactions[i].Postings)
+	}
+	for i := range journal.PeriodicTransactions {
+		lineUp(journal.PeriodicTransactions[i].Postings)
+	}
+	for i := range journal.AutoPostingRules {
+		lineUp(journal.AutoPostingRules[i].Postings)
+	}
+	if len(padding) == 0 {
+		return nil
+	}
+	return padding
+}
+
+// renderPosting renders a posting without its comment, with assertionPad spaces
+// after the `=` of its balance assertion. It also returns the display column the
+// asserted amount starts at, or 0 without an assertion.
+func renderPosting(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string, assertionPad int) (string, int) {
+	text, columns := renderPostingColumns(posting, alignment, commodityFormats, indent, alignAmounts, target, assertionPad)
+	return text, columns.assertion
+}
+
+// postingColumns are the display columns where the parts of a rendered posting
+// start; 0 for a part it does not have.
+type postingColumns struct {
+	head, cost, operator, assertion int
+}
+
+// renderPostingColumns is renderPosting with the columns of every part.
+func renderPostingColumns(posting *ast.Posting, alignment AlignmentInfo, commodityFormats map[string]CommodityFormat, indent string, alignAmounts bool, target string, assertionPad int) (string, postingColumns) {
+	var sb strings.Builder
+	var columns postingColumns
 	writePostingHead(&sb, posting, indent)
+	columns.head = displayWidth(sb.String())
+	placement, placed := alignment.CostLayout[posting.Range.Start.Offset]
 
 	if posting.Amount != nil {
 		spaces := amountGap(posting, alignment, commodityFormats, alignAmounts, target, displayWidth(sb.String()))
+		if placed {
+			spaces = placement.AmountGap
+		}
 		sb.WriteString(strings.Repeat(" ", spaces))
 
 		if posting.Multiplier {
@@ -1111,15 +1423,27 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 	}
 
 	if posting.LotPrice != nil {
-		writeLotPrice(&sb, posting.LotPrice, commodityFormats)
+		if placed {
+			sb.WriteString(strings.Repeat(" ", placement.BeforeLot))
+			sb.WriteString(lotAnnotation(posting.LotPrice, commodityFormats))
+		} else {
+			writeLotPrice(&sb, posting.LotPrice, commodityFormats)
+		}
 	}
 
 	if posting.Cost != nil {
-		if posting.Cost.IsTotal {
-			sb.WriteString(" @@ ")
-		} else {
-			sb.WriteString(" @ ")
+		before, after := 1, 0
+		if placed {
+			before, after = placement.BeforeSign, placement.AfterSign
 		}
+		sb.WriteString(strings.Repeat(" ", before))
+		if posting.Cost.IsTotal {
+			sb.WriteString("@@ ")
+		} else {
+			sb.WriteString("@ ")
+		}
+		sb.WriteString(strings.Repeat(" ", after))
+		columns.cost = displayWidth(sb.String())
 		writeAmountWithSign(&sb, &posting.Cost.Amount, commodityFormats)
 	}
 
@@ -1133,6 +1457,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 			}
 		}
 		sb.WriteString(strings.Repeat(" ", spaces))
+		columns.operator = displayWidth(sb.String())
 
 		switch {
 		case posting.BalanceAssertion.IsStrict && posting.BalanceAssertion.IsInclusive:
@@ -1144,6 +1469,8 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		default:
 			sb.WriteString("= ")
 		}
+		sb.WriteString(strings.Repeat(" ", assertionPad))
+		columns.assertion = displayWidth(sb.String())
 		writeAmountWithSign(&sb, &posting.BalanceAssertion.Amount, commodityFormats)
 		if posting.BalanceAssertion.Cost != nil {
 			if posting.BalanceAssertion.Cost.IsTotal {
@@ -1155,7 +1482,7 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 		}
 	}
 
-	return sb.String()
+	return sb.String(), columns
 }
 
 // formatPostingBody renders a posting without its inline comment, so the caller
