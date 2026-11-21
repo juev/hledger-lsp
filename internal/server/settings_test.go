@@ -349,6 +349,53 @@ func TestParseSettingsFromRaw_Formatting_AmountAlignmentTarget(t *testing.T) {
 	})
 }
 
+func TestParseSettingsFromRaw_Formatting_AlignmentOptOuts(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		settings := defaultServerSettings()
+		assert.True(t, settings.Formatting.AlignBalanceAssertions)
+		assert.True(t, settings.Formatting.AlignCostPostings)
+	})
+
+	t.Run("nested", func(t *testing.T) {
+		settings := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+			"formatting": map[string]interface{}{
+				"alignBalanceAssertions": false,
+				"alignCostPostings":      false,
+			},
+		})
+		assert.False(t, settings.Formatting.AlignBalanceAssertions)
+		assert.False(t, settings.Formatting.AlignCostPostings)
+		opts := formatterOptionsFrom(settings.Formatting)
+		assert.True(t, opts.DisableBalanceAssertionAlignment)
+		assert.True(t, opts.DisableCostPostingAlignment)
+	})
+
+	t.Run("flat", func(t *testing.T) {
+		settings := parseSettingsFromRaw(defaultServerSettings(), map[string]interface{}{
+			"formatting.alignBalanceAssertions": false,
+			"formatting.alignCostPostings":      false,
+		})
+		assert.False(t, settings.Formatting.AlignBalanceAssertions)
+		assert.False(t, settings.Formatting.AlignCostPostings)
+	})
+}
+
+func TestServer_SetSettings_ClearsAlignmentCacheOnAlignmentOptOutChange(t *testing.T) {
+	for _, change := range []func(*formattingSettings){
+		func(f *formattingSettings) { f.AlignBalanceAssertions = false },
+		func(f *formattingSettings) { f.AlignCostPostings = false },
+	} {
+		srv := NewServer()
+		uri := "file:///test.journal"
+		srv.alignmentCache.Store(uri, 42)
+		settings := srv.getSettings()
+		change(&settings.Formatting)
+		srv.setSettings(settings)
+		_, loaded := srv.alignmentCache.Load(uri)
+		assert.False(t, loaded)
+	}
+}
+
 func TestParseSettingsFromRaw_CLI(t *testing.T) {
 	base := defaultServerSettings()
 

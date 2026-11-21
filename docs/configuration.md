@@ -118,6 +118,8 @@ Values the server cannot use (an unknown enum value, a non-positive number) are 
 |---------|---------|-------------|
 | `hledger.formatting.indentSize` | `4` | Number of spaces for posting indent |
 | `hledger.formatting.alignAmounts` | `true` | Align amounts across postings |
+| `hledger.formatting.alignBalanceAssertions` | `true` | Align balance assertions on their decimal points within each transaction. `false` keeps one space after the assertion operator. |
+| `hledger.formatting.alignCostPostings` | `true` | Align cost signs, the amounts before them, and lot annotations within each transaction. `false` keeps the cost or lot annotation next to its amount. |
 | `hledger.formatting.minAlignmentColumn` | `0` | Minimum column floor for amount alignment. `0` = auto from file content (`indent + longest account + 2 spaces`). Set to a positive integer to enforce a minimum column for visual consistency across files. |
 | `hledger.formatting.amountAlignmentColumn` | `0` | Fixed mode-specific alignment target. In `"left"` mode this is the amount start column; in `"right"` mode this is the amount end column; in `"decimal"` mode this is the decimal-point column. `0` disables the fixed target. |
 | `hledger.formatting.amountAlignmentMode` | `"right"` | Amount alignment mode: `"left"` (align amount starts), `"right"` (right-align amounts), or `"decimal"` (align on decimal point) |
@@ -233,6 +235,8 @@ With `"posting"`, the posting (first) amount is aligned and the cost annotation 
 ```
 
 `"posting"` keeps the anchor short, so amounts still align even when a long account name would otherwise push the cost-anchored amount against the 2-space minimum.
+
+Set `alignCostPostings` to `false` to leave each cost or lot annotation next to its amount instead of lining up the transaction's annotations and signs. Unlike `amountAlignmentTarget: "posting"`, this keeps the cost amount as the alignment anchor. Set `alignBalanceAssertions` to `false` to keep one space between a balance assertion's operator and its amount. Both settings apply only when `alignAmounts` is enabled.
 
 The same alignment settings are used by document/range formatting, format-on-type for Enter after a
 posting line, and inline completion ghost text when amount data is available.
@@ -354,6 +358,8 @@ inputs: the server never runs `import`, `add` or `--new`.
   "hledger.diagnostics.unbalancedTransactions": true,
   "hledger.formatting.indentSize": 4,
   "hledger.formatting.alignAmounts": true,
+  "hledger.formatting.alignBalanceAssertions": true,
+  "hledger.formatting.alignCostPostings": true,
   "hledger.formatting.minAlignmentColumn": 0,
   "hledger.formatting.amountAlignmentColumn": 0,
   "hledger.formatting.amountAlignmentMode": "right",
@@ -405,6 +411,8 @@ lspconfig.hledger_lsp.setup({
       formatting = {
         indentSize = 4,
         alignAmounts = true,
+        alignBalanceAssertions = true,
+        alignCostPostings = true,
         minAlignmentColumn = 0,
         amountAlignmentColumn = 0,
         amountAlignmentMode = "right",
@@ -437,7 +445,9 @@ lspconfig.hledger_lsp.setup({
      :completion (:maxResults 100 :fuzzyMatching t :showCounts t :includeNotes t)
      :diagnostics (:undeclaredAccounts t :undeclaredCommodities t
                    :unbalancedTransactions t)
-     :formatting (:indentSize 4 :alignAmounts t :minAlignmentColumn 0
+     :formatting (:indentSize 4 :alignAmounts t
+                  :alignBalanceAssertions t :alignCostPostings t
+                  :minAlignmentColumn 0
                   :amountAlignmentColumn 0
                   :amountAlignmentMode "right"
                   :amountAlignmentTarget "cost")

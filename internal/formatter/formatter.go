@@ -97,6 +97,10 @@ type Options struct {
 	// postings: "" / "cost" (default) anchor on the cost amount; "posting"
 	// anchors on the posting amount. Normalized via normalizeAlignTarget.
 	AmountAlignmentTarget string
+	// The Disable fields preserve the default behavior in an Options literal.
+	// The corresponding client settings are positive booleans defaulting to true.
+	DisableBalanceAssertionAlignment bool
+	DisableCostPostingAlignment      bool
 }
 
 func DefaultOptions() Options {
@@ -237,7 +241,7 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	// The columns are detected from where amounts are written, which for the
 	// postings of a lined-up cost group is where the group put them, not the
 	// document's columns, so they would move the columns on every pass.
-	detectable := outsideCostGroups(journal, postings, target)
+	detectable := outsideCostGroups(journal, postings, target, opts.DisableCostPostingAlignment)
 
 	naturalAccountCol := CalculateGlobalAlignmentColumnWithIndent(postings, indentSize)
 	globalAccountCol := naturalAccountCol
@@ -307,8 +311,12 @@ func computeAlignment(journal *ast.Journal, content string, commodityFormats map
 	}
 	alignment = settleAlignment(lines, detectable, alignment, rule, commodityFormats, opts, target)
 	if withComments {
-		alignment.CostLayout = costLayout(journal, alignment, commodityFormats, opts, target)
-		alignment.AssertionPadding = assertionPadding(journal, alignment, commodityFormats, opts, target)
+		if !opts.DisableCostPostingAlignment {
+			alignment.CostLayout = costLayout(journal, alignment, commodityFormats, opts, target)
+		}
+		if !opts.DisableBalanceAssertionAlignment {
+			alignment.AssertionPadding = assertionPadding(journal, alignment, commodityFormats, opts, target)
+		}
 		alignment.CommentColumn = commentColumn(lines, postings, alignment, commodityFormats, opts, target)
 	}
 	return alignment
@@ -1121,8 +1129,8 @@ func formatPostingWithOpts(posting *ast.Posting, alignment AlignmentInfo, commod
 // outsideCostGroups returns the postings that are not in a lined-up cost group
 // (see costGroup). costLayout places those, so where they are written says
 // nothing about the document's columns.
-func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target string) []ast.Posting {
-	if normalizeAlignTarget(target) != AlignTargetCost {
+func outsideCostGroups(journal *ast.Journal, postings []ast.Posting, target string, disabled bool) []ast.Posting {
+	if disabled || normalizeAlignTarget(target) != AlignTargetCost {
 		return postings
 	}
 	grouped := make(map[int]bool)
