@@ -72,12 +72,14 @@ type diagnosticsSettings struct {
 }
 
 type formattingSettings struct {
-	IndentSize            int
-	AlignAmounts          bool
-	MinAlignmentColumn    int
-	AmountAlignmentColumn int
-	AmountAlignmentMode   string
-	AmountAlignmentTarget string
+	IndentSize             int
+	AlignAmounts           bool
+	AlignBalanceAssertions bool
+	AlignCostPostings      bool
+	MinAlignmentColumn     int
+	AmountAlignmentColumn  int
+	AmountAlignmentMode    string
+	AmountAlignmentTarget  string
 }
 
 type cliSettings struct {
@@ -142,10 +144,12 @@ func defaultServerSettings() serverSettings {
 			DebounceMs:             100,
 		},
 		Formatting: formattingSettings{
-			IndentSize:          4,
-			AlignAmounts:        true,
-			MinAlignmentColumn:  0,
-			AmountAlignmentMode: "right",
+			IndentSize:             4,
+			AlignAmounts:           true,
+			AlignBalanceAssertions: true,
+			AlignCostPostings:      true,
+			MinAlignmentColumn:     0,
+			AmountAlignmentMode:    "right",
 		},
 		CLI: cliSettings{
 			Enabled: true,
@@ -282,6 +286,8 @@ func (s *Server) setSettingsLocked(settings serverSettings) {
 		s.republishDiagnostics()
 	}
 	if oldSettings.Formatting.IndentSize != settings.Formatting.IndentSize ||
+		oldSettings.Formatting.AlignBalanceAssertions != settings.Formatting.AlignBalanceAssertions ||
+		oldSettings.Formatting.AlignCostPostings != settings.Formatting.AlignCostPostings ||
 		oldSettings.Formatting.MinAlignmentColumn != settings.Formatting.MinAlignmentColumn ||
 		oldSettings.Formatting.AmountAlignmentColumn != settings.Formatting.AmountAlignmentColumn ||
 		oldSettings.Formatting.AmountAlignmentMode != settings.Formatting.AmountAlignmentMode {
@@ -642,6 +648,12 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 		if value, ok := toBool(formattingRaw["alignAmounts"]); ok {
 			settings.Formatting.AlignAmounts = value
 		}
+		if value, ok := toBool(formattingRaw["alignBalanceAssertions"]); ok {
+			settings.Formatting.AlignBalanceAssertions = value
+		}
+		if value, ok := toBool(formattingRaw["alignCostPostings"]); ok {
+			settings.Formatting.AlignCostPostings = value
+		}
 		if value, ok := toInt(formattingRaw["minAlignmentColumn"]); ok {
 			settings.Formatting.MinAlignmentColumn = value
 		}
@@ -660,6 +672,12 @@ func applySettingsMap(settings serverSettings, raw map[string]interface{}) serve
 	}
 	if value, ok := toBool(raw["formatting.alignAmounts"]); ok {
 		settings.Formatting.AlignAmounts = value
+	}
+	if value, ok := toBool(raw["formatting.alignBalanceAssertions"]); ok {
+		settings.Formatting.AlignBalanceAssertions = value
+	}
+	if value, ok := toBool(raw["formatting.alignCostPostings"]); ok {
+		settings.Formatting.AlignCostPostings = value
 	}
 	if value, ok := toInt(raw["formatting.minAlignmentColumn"]); ok {
 		settings.Formatting.MinAlignmentColumn = value

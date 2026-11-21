@@ -265,6 +265,83 @@ func TestFormatDocument_LotAnnotationsWithoutANumber(t *testing.T) {
 	assertFormatsTo(t, input, want)
 }
 
+// Each additional alignment can be disabled independently. The formatter then
+// keeps the pre-alignment spacing without disabling ordinary amount alignment.
+func TestFormatDocument_AlignmentOptOuts(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+		opts  Options
+	}{
+		{
+			name: "balance assertions",
+			input: strings.Join([]string{
+				"2026-01-01 * Mixed",
+				"    資産:a  1.00 USD = 1.00 USD",
+				"    капитал:b  100.00 USD == 100.00 USD",
+				"    c  10.00 USD =* 10.00 USD",
+				"    d  -111.00 USD ==* -111.00 USD",
+				"",
+			}, "\n"),
+			want: strings.Join([]string{
+				"2026-01-01 * Mixed",
+				"    資産:a        1.00 USD = 1.00 USD",
+				"    капитал:b   100.00 USD == 100.00 USD",
+				"    c            10.00 USD =* 10.00 USD",
+				"    d          -111.00 USD ==* -111.00 USD",
+				"",
+			}, "\n"),
+			opts: Options{IndentSize: 4, AlignAmounts: true, DisableBalanceAssertionAlignment: true},
+		},
+		{
+			name: "cost postings",
+			input: strings.Join([]string{
+				"commodity 1,000.00 USD",
+				"commodity 1,000.000 VOO",
+				"",
+				"2026-06-19 * Rebalance",
+				"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+				"    資産:brokerage  12.5 AAPL @ 150.00 USD",
+				"    капитал:перевод  1,000 VOO @@ 3.00 USD",
+				"    assets:cash",
+				"",
+				"2026-06-20 * Single",
+				"    資産:brokerage  -3.000 VOO @@ 2,064.75 USD",
+				"    assets:cash",
+				"",
+			}, "\n"),
+			want: strings.Join([]string{
+				"commodity 1,000.00 USD",
+				"commodity 1,000.000 VOO",
+				"",
+				"2026-06-19 * Rebalance",
+				"    資産:brokerage   -3.000 VOO @@ 2,064.75 USD",
+				"    資産:brokerage       12.5 AAPL @ 150.00 USD",
+				"    капитал:перевод   1,000.000 VOO @@ 3.00 USD",
+				"    assets:cash",
+				"",
+				"2026-06-20 * Single",
+				"    資産:brokerage   -3.000 VOO @@ 2,064.75 USD",
+				"    assets:cash",
+				"",
+			}, "\n"),
+			opts: Options{IndentSize: 4, AlignAmounts: true, DisableCostPostingAlignment: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			once := formatSideCase(t, tt.input, tt.opts)
+			assert.Equal(t, tt.want, once)
+			assert.Equal(t, once, formatSideCase(t, once, tt.opts), "formatting must be idempotent")
+
+			crlf := strings.ReplaceAll(tt.input, "\n", "\r\n")
+			assert.Equal(t, once, formatSideCase(t, textutil.NormalizeLineEndings(crlf), tt.opts))
+		})
+	}
+}
+
 // Lining up assertions, costs and lot prices changes only the layout: hledger
 // reads the same amounts, costs, lot annotations and assertions before and after
 // formatting.

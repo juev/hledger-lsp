@@ -1030,12 +1030,14 @@ func (s *Server) commodityFormatsForDocument(docURI uri.URI) map[string]formatte
 // OnTypeFormatting, and InlineCompletion (ghost text alignment).
 func formatterOptionsFrom(f formattingSettings) formatter.Options {
 	return formatter.Options{
-		IndentSize:            f.IndentSize,
-		AlignAmounts:          f.AlignAmounts,
-		MinAlignmentColumn:    f.MinAlignmentColumn,
-		AmountAlignmentColumn: f.AmountAlignmentColumn,
-		AmountAlignmentMode:   f.AmountAlignmentMode,
-		AmountAlignmentTarget: f.AmountAlignmentTarget,
+		IndentSize:                       f.IndentSize,
+		AlignAmounts:                     f.AlignAmounts,
+		MinAlignmentColumn:               f.MinAlignmentColumn,
+		AmountAlignmentColumn:            f.AmountAlignmentColumn,
+		AmountAlignmentMode:              f.AmountAlignmentMode,
+		AmountAlignmentTarget:            f.AmountAlignmentTarget,
+		DisableBalanceAssertionAlignment: !f.AlignBalanceAssertions,
+		DisableCostPostingAlignment:      !f.AlignCostPostings,
 	}
 }
 
